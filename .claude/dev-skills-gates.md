@@ -1,5 +1,83 @@
 # Dev Skills gate state
 
+## Release sequence 1.0.0 — first stable release (opened 2026-09-17)
+Track: release sequence (version bump + PR into main + tag v1.0.0).
+User: "pr into main". Default branch confirmed `main` via gh repo view.
+Head branch: claude/admiring-wright-k20ptf (main is at d04dd4a, strictly behind).
+release.yml: tag commit must be on main AND have a passing Check run.
+
+🔢 VERSION    ✅ 1.0.0 in all six refs: backend/main.py:116, docker-compose.yml
+              image, docs/reverse-proxy.md x2, README compose link (blob/v1.0.0),
+              docs/operating.md version table (+ :latest row, :dev note).
+              release_notes_url derives from APP_VERSION. Previous v0.1.0-dev.40
+              tagged on remote (ls-remote). No test pins the version literal.
+🔨 BUILD      ✅ check.sh 1559 passed + image smoke-tested; handoff offered, user declined to try it
+              (replied "commit and push" without trying localhost/pcap-server:1.0.0).
+              check.sh EXIT=0: 1559 passed, 0 skipped (tshark, capinfos, chromium), 308s,
+              on e249870's tree. docker build -> localhost/pcap-server:1.0.0
+              (sha256:7b98898d69..). Hardened run: running, 0 restarts, "encryption
+              enabled", index 200, APP_VERSION 1.0.0 in image.
+              ebc8d7f (release.yml version gate + tests/test_release_workflow.py +
+              CHANGELOG) adds no app code: tests/test_release_workflow.py 10 passed,
+              with test_main.py 78 passed. The step's gh api call was run against the
+              real repo: d04dd4a -> REFUSE, e249870 -> PASS. actionlint not on this
+              box; Lint workflows runs it in CI on the push.
+🔒 SECURITY   ✅ Code diff since d04dd4a: APP_VERSION literal only. Compose: image tag
+              only (settings otherwise identical). pip-audit -r backend/requirements.txt:
+              No known vulnerabilities. Dependabot alerts API reachable, 0 open;
+              .github/dependabot.yml present. 0 Critical / 0 High / 0 Medium / 0 Low.
+              Quality: no code structure changed; nothing to review.
+              ebc8d7f release.yml step: gate job only (contents: read, actions: read),
+              no new action, no new permission. Tag/ref/sha reach the script through env,
+              never ${{ }} in run text. Fails closed on API error (pipefail), on a missing
+              APP_VERSION line, and on any mismatch. The test runs the script with a stub
+              gh; no network. 0 Critical / 0 High.
+📄 DOCS       ✅ CHANGELOG 1.0.0 entry (highlights, bugs squashed, upgrading, changes
+              since dev.40). operating.md version table: 1.0.0, :latest, :dev caveat.
+              No stale dev/pre-release wording in README/docs.
+📦 RELEASE    ✅ e249870 + ebc8d7f committed and pushed (user: "commit and push", then "do all
+              steps", which covers the recovery plan: delete release, version gate, PR, merge;
+              release notes = CHANGELOG 1.0.0, approved with "do all steps").
+              PR #11 claude/admiring-wright-k20ptf -> main opened. Check (push) on ebc8d7f
+              run 35239177483 success 9m50s; Lint workflows success x2.
+🚀 SHIP       ✅ SHIPPED 2026-09-17 (after recovery). Four post-ship checks:
+               * tag v1.0.0 -> d583f8f (merge of PR #11), pushed by the user after Check
+                 35240408302 passed on d583f8f. Earlier bad tag on d04dd4a deleted by user.
+               * Release run 35241890972 success. Gate ran all three checks incl. the new
+                 "Require the tag to match APP_VERSION" (success). GitHub release v1.0.0,
+                 Latest, not prerelease, 15:42:34Z; approved CHANGELOG 1.0.0 notes applied
+                 via gh release edit (6494 chars). Bad earlier release deleted.
+               * PR #11 MERGED (merge commit d583f8f).
+               * ghcr :1.0.0 == :latest == sha256:c686ea5a.. (replaces bad 96afdffe..).
+                 Pulled: /app/backend/main.py APP_VERSION = "1.0.0". Hardened run of the
+                 published image: running, 0 restarts, 0 tracebacks, encryption enabled,
+                 index 200. :dev untouched (stays 0.1.0-dev.40, by design).
+              HISTORY: v1.0.0 first pushed on d04dd4a before merge; run 35238625314
+              published dev.40 code as :1.0.0/:latest before cancel landed. Recovered via
+              release delete, tag delete, version gate (ebc8d7f), PR merge, re-tag.
+              RELEASE SEQUENCE 1.0.0 CLOSED AND SHIPPED.
+
+## WORK COMMIT — README/compose simplification (2026-09-17)
+Track: WORK COMMIT (docs + compose comments only, no version bump, no tag, no publish).
+Scope: README.md cut to a tour (870→282 lines) with detail moved to new
+docs/viewer.md, docs/sanitizing.md, docs/development.md and to
+docs/operating.md (Installing), docs/target-hosts.md (fingerprints),
+docs/filters.md (badges, saved filters). docker-compose.yml reordered: setup
+steps, then a comment-free block to paste into compose.yaml, then all
+explanation. Docs now say compose.yaml for the user's own file.
+Commit approval: user said "commit" (2026-09-17).
+
+🔒 SECURITY   ✅ Prose/comments only. `docker compose config` of HEAD's compose
+                file vs the new one: IDENTICAL resolved config (no setting
+                added, removed or changed). Diff grepped for credentials,
+                private keys, tokens, eval/shell=True, curl|sh: 0 hits.
+                0 Critical, 0 High, 0 Medium, 0 Low. No manifest touched.
+                Relative links/anchors across README + docs: 0 broken.
+                tests/test_entrypoint.py 7 passed.
+VERSION / BUILD / DOCS / RELEASE / SHIP: ⬜ not owed on this track.
+Note: README links docker-compose.yml at tag v0.1.0-dev.40, which shows the
+old layout until the next release is tagged.
+
 ## WORK COMMIT — setup docs restructure (2026-09-17)
 Track: WORK COMMIT (docs only, no version bump, no artifact, no publish).
 Scope: README.md Quick Start + docs/operating.md + docker-compose.yml's own
@@ -77,8 +155,15 @@ compose file lives). Treated as the user's; included in dev.40 pending their OK.
               compose file elsewhere; it now uses absolute paths and was tested.
               Every version ref is dev.40: README 18/107/123, compose,
               reverse-proxy x2, main.py.
-📦 RELEASE    ⏳ PR ➖ N/A (no PRs pre-1.0). Commit approved by the user ("commit, push, and lets tag"). Release notes approval pending.
-🚀 SHIP       ⬜
+📦 RELEASE    ✅ PR ➖ N/A (no PRs pre-1.0). Commit d04dd4a approved and pushed; release notes approved ("yes").
+🚀 SHIP       ✅ user pushed v0.1.0-dev.40 -> d04dd4a (verified with ls-remote). Release run
+              35232588054 success. The gate's two steps (new default-branch check, then
+              Check d04dd4a) both passed; buildx v4 and persist-credentials:false worked.
+              Release published as a prerelease, "v0.1.0-dev.40 (Dev)", with the approved
+              notes applied. Image :0.1.0-dev.40 and :dev share digest 2c094523...; the
+              in-image APP_VERSION is 0.1.0-dev.40. The compose file at the tag was fetched
+              from raw (200) and run as published (hardened): running, / 200,
+              auth/status 200, servers 401, CapEff=0, 0 tracebacks. No PR (N/A).
 
 ## RELEASE SEQUENCE 0.1.0-dev.39 — the Dependabot batch (2026-09-16)
 Track: RELEASE SEQUENCE -- merging into the canonical branch counts as a release (SKILL.md 2).
