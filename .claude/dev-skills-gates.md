@@ -27,8 +27,15 @@ than dropped); docs/viewer.md + docs/operating.md + README.md (beta-announce
 block, explicitly self-deleting on the next stable release -- see the HTML
 comment in README.md above it).
 
-🔨 BUILD      ✅ full suite: 1581 passed (up from 1575: 7 new browser tests,
-              net +6 after one rename), 322.10s, real tshark/chromium.
+🔨 BUILD      ✅ handoff offered, user declined to try it -- full suite: 1581
+              passed (up from 1575: 7 new browser tests, net +6 after one
+              rename), 322.10s, real tshark/chromium. docker build ->
+              localhost/pcap-server:traffic-diagram-followups; smoke-run
+              (scratch /tmp/pcap-smoke, MASTER_KEY_FILE set): encryption
+              enabled, 0 tracebacks, / 200, /js/diagrams.js 200 (served
+              content confirmed to carry EDGE_HEAT_CAP/SEQUENCE_LANE_CAP),
+              /api/auth/status 200. Left running on :18080; user said "go
+              ahead" -- container and scratch dir cleaned up after.
 🔒 SECURITY   ✅ 0 Critical, 0 High. resolve_names reuses the already-reviewed
               _name_resolution_args opt-in (no new resolver behavior, same
               off-by-default privacy stance). Directional filter field comes
@@ -38,7 +45,15 @@ comment in README.md above it).
 📄 DOCS       ✅ docs/viewer.md updated (confirm dialog, trace speed, edge
               heat, resolve-names timing, lane cap); README's beta block
               added with its own removal instruction inline.
-📦 RELEASE    ⬜ not requested yet for this batch
+📦 RELEASE    ⏳ Committed eb7b44b and pushed to new branch
+              `traffic-diagram-followups` -- `main` had no branch left on it
+              (PR #12's --delete-branch removed `claude/admiring-wright-k20ptf`),
+              and the working tree was sitting directly on `main`'s checkout,
+              so a branch was created first rather than committing to main
+              directly. PR #13 open: traffic-diagram-followups -> main
+              (https://github.com/darthrater78/pcap-server/pull/13). No
+              version bump / release notes approval requested yet for this
+              batch -- user asked to "open" the PR, not to ship it.
 🚀 SHIP       ⬜ not requested yet for this batch
 
 ## Release sequence: 1.1.0-beta.1 (2026-09-17)
