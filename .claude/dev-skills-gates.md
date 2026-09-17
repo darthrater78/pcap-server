@@ -1,5 +1,103 @@
 # Dev Skills gate state
 
+## Release sequence: 1.1.0-beta.1 (2026-09-17)
+Track changed mid-session: work commit -> release sequence. User wants this
+shipped as a beta image on GHCR. release.yml only builds/publishes on a tag
+push (on: push: tags: 'v*') and its gate job hard-requires the tagged commit
+to be on main (compare/<sha>...main) -- so "no tag" and "stay off main" were
+both raised and both resolved: tag it (release.yml already treats any
+-beta/-rc suffix as a prerelease -- no :latest/:dev movement, all existing
+safety checks still apply), and merge to main via PR first, then tag.
+Previous track's SECURITY/BUILD work below still stands; this section covers
+the version bump and the rest of the release gates.
+
+🔢 VERSION    ✅ 1.1.0-beta.1 (minor bump: new feature, non-breaking; beta.1:
+              first beta). backend/main.py APP_VERSION (source of truth --
+              release_notes_url derives from it), docker-compose.yml image tag,
+              CHANGELOG.md entry. Deliberately NOT bumped: README's Quick Start
+              link and docs/reverse-proxy.md's example image tags, both pinned
+              to v1.0.0 on purpose -- a beta must not become the default path
+              for new/general users, matching release.yml's own choice not to
+              move :latest for a -beta tag. docs/operating.md's version table
+              gained a row explaining -beta/-rc tags carry no floating tag
+              (first time this project has cut one). Previous version (1.0.0)
+              confirmed tagged on remote -- not blocked.
+📄 DOCS       ✅ CHANGELOG entry added; README (features bullet + viewer.md
+              pointer) and docs/viewer.md (new "Traffic Diagram and Sequence
+              Diagram" section, cap policy stated) updated for the new views;
+              docs/operating.md's tag table covers the new -beta case.
+🔨 BUILD      ✅ re-ran full suite post version-bump: `scripts/check.sh` (all
+              tests) — 1575 passed, 0 failed, 337.90s, real tshark/capinfos/
+              chromium. Confirms nothing hardcodes the old version string.
+📦 RELEASE    ⬜ next: commit approval, then PR into main
+🚀 SHIP       ⬜ tag v1.1.0-beta.1 after merge (user's own machine — tag pushes
+              always go to the user, never executed by Claude)
+
+## Work commit: Traffic Diagram + Sequence Diagram (2026-09-17)
+Track: work commit (frontend-only feature, no version bump, no backend change).
+Plan approved via plan mode: /home/serveradmin/.claude-steve/plans/shimmering-gathering-quilt.md.
+
+New: frontend/js/diagrams.js (topology force-graph + sequence swimlanes, vanilla
+JS/SVG/Canvas, no new dependency), tests/browser/test_diagrams_ui.py (6 new
+Playwright tests). Edited: frontend/index.html (2 buttons + 2 dialogs + script
+tag), frontend/css/style.css (--diagram-cat-1/2/3 + --diagram-other palette
+slots, .stats-dialog--large, diagram/legend/lane styling). No backend changes
+— both diagrams reuse the existing /conversations and /packets routes.
+
+🔢 VERSION    ⬜ not owed — work commit, no release
+🔨 BUILD      ✅ `scripts/check.sh tests/browser/ tests/test_browser_suite_hygiene.py`
+              — 182 passed (incl. the 6 new diagram tests), 304.84s, real
+              chromium. Manual click-through against a real capture NOT done
+              this session (would need the full docker/encryption/auth setup);
+              flagged to the user rather than skipped silently.
+🔒 SECURITY   ✅ 0 Critical, 0 High. All rendered text via escHtml/.textContent
+              (no innerHTML of unescaped data); no new endpoints, no new
+              dependency, no CSP change; node/packet volume capped (200 hosts /
+              5000 packets) and blocking rather than truncating, so no new DoS
+              surface; filter-building reuses existing sanitized
+              buildFieldFilter/addressField. Quality: no deep nesting, no
+              N+1s; force layout is O(n^2) per iteration but n<=200 by the cap.
+📄 DOCS       ⬜ not owed — work commit
+📦 RELEASE    ⬜ not owed — work commit
+🚀 SHIP       ⬜ not owed — work commit
+
+Next: commit approval (Section 1) — not yet requested/granted as of this write.
+
+## Session opened 2026-09-17 (dev-skills v2.24.0, local — user confirmed)
+Track: none yet — no work started this session.
+Environment corrected from prior session's "remote container" note: user
+confirmed this is a persistent local box (hostname dev-server), same clone as
+their terminal. Git commands will be presented for the user to run, not
+executed directly, going forward. Shell: Linux Terminal (bash/zsh).
+Branch claude/admiring-wright-k20ptf still 1 commit ahead of origin (2a66f86,
+unpushed). All release tags present on remote through v1.0.0 (verified via
+ls-remote). PR #11 merged. No unfinished release detected.
+Note: .claude/dev-skills-gates.md is tracked in git (not gitignored) from the
+prior remote-container session's convention — flagged for the user, not
+changed unilaterally.
+
+🔢 VERSION    ⬜
+🔨 BUILD      ⬜
+🔒 SECURITY   ⬜
+📄 DOCS       ⬜
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜
+
+## Session opened 2026-09-17 (dev-skills v2.22.0, remote container)
+Track: none yet — no work started this session.
+Prior session closed clean: release 1.0.0 shipped and verified, README/compose
+work commit done, HEAD = 2a66f86 (1 commit ahead of origin/main: the gate-file
+handoff record; origin/main has the PR #11 merge commit d583f8f which isn't in
+this branch's ancestry — expected, not a gap). All release tags present on
+remote through v1.0.0. No unfinished release detected.
+
+🔢 VERSION    ⬜
+🔨 BUILD      ⬜
+🔒 SECURITY   ⬜
+📄 DOCS       ⬜
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜
+
 ## Release sequence 1.0.0 — first stable release (opened 2026-09-17)
 Track: release sequence (version bump + PR into main + tag v1.0.0).
 User: "pr into main". Default branch confirmed `main` via gh repo view.

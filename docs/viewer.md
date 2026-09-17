@@ -109,6 +109,29 @@ either table's rows offer a one-click filter onto them. Both read the current
 display filter's slice of the capture when one is set, and the whole thing
 otherwise.
 
+## Traffic Diagram and Sequence Diagram
+
+Two more toolbar buttons, for when a table is the wrong shape to see it in.
+
+**Traffic Diagram** draws Conversations as a graph instead of a table: a node
+per host, sized by bytes, and an edge per pair, weighted by how much they
+exchanged. Drag a node to untangle a busy layout; click a node or an edge to
+filter onto it, same as a Conversations row. **Play** fetches the capture's
+actual packet order and animates it — a dot per packet, moving from source to
+destination, colored by protocol — so the diagram shows not just who talked to
+whom but the order and rhythm of it.
+
+**Sequence Diagram** is closer to Wireshark's own Flow Graph: one lane per
+host, and every packet drawn as a time-ordered arrow between two lanes,
+colored by protocol. Click an arrow to jump straight to that packet's detail.
+Rows are spaced evenly rather than by real elapsed time, since a burst of
+packets a millisecond apart would otherwise collapse into an unreadable stack.
+
+Both read the current display filter the same way Conversations does, and both
+cap how much they will draw at once (200 hosts for the diagram, 5,000 packets
+for either) — above that they ask for a narrower filter rather than drawing a
+misleading or unusably dense picture.
+
 ## Saved views
 
 A display filter you will want again is worth keeping. **Save view** turns

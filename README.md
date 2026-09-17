@@ -94,9 +94,9 @@ you are hunting (Kerberos, SMB, LDAP, DNS, database ports, TCP flags).
 
 **Read it.** A Wireshark-style packet list with protocol colouring, a decoded
 protocol tree and a hex dump. Full display-filter syntax with autocomplete,
-right-click to filter, **Follow TCP/UDP Stream**, **Protocol Hierarchy** and
-**Conversations**, custom columns, and saved views you can download as their own
-pcap.
+right-click to filter, **Follow TCP/UDP Stream**, **Protocol Hierarchy**,
+**Conversations**, a **Traffic Diagram** (with playback) and a **Sequence
+Diagram**, custom columns, and saved views you can download as their own pcap.
 
 **Share it.** **Sanitize** downloads a copy with credentials masked and
 addresses, hostnames and usernames replaced by consistent stand-ins.
@@ -202,8 +202,8 @@ it, follow a stream, or add it as a column. Save a filter as a named view and
 download just those packets.
 
 **[docs/viewer.md](docs/viewer.md)** covers columns, the interface column on
-`any` captures, Follow Stream, Protocol Hierarchy, Conversations and saved
-views.
+`any` captures, Follow Stream, Protocol Hierarchy, Conversations, the Traffic
+and Sequence diagrams, and saved views.
 
 ### Sanitizing a capture
 
