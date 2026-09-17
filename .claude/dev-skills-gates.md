@@ -1,5 +1,46 @@
 # Dev Skills gate state
 
+## Work commit: Traffic Diagram follow-ups (2026-09-17, after 1.1.0-beta.1 shipped)
+Track: work commit -- no version bump requested yet for this batch.
+
+User requests, in order: much slower playback + a "trace" of traffic as it
+moves + DNS resolution as an option; separately, source/destination right-click
+filter should offer the directional (src/dst) field, not just ip.addr; edges
+should brighten/widen the more a link is crossed, capped; DNS resolution must
+be a toggle decided before a diagram loads, not mid-view; a guard for the
+Sequence Diagram's own wrong-shape case (too many hosts); node clicks need a
+confirm before navigating away; README needs a beta-announcement convention.
+
+Changes: backend/packet_parser.py + main.py (resolve_names on
+GET .../conversations, mirrors the existing get_packet_list opt-in via the
+same _name_resolution_args); frontend/js/diagrams.js (EDGE_HEAT_CAP=12
+cumulative per-link brighten/widen during playback, recomputed from scratch
+each frame rather than tracked incrementally so scrubbing backward stays
+correct; SEQUENCE_LANE_CAP=40 host guard, same block-not-truncate treatment as
+the existing caps; speed control extended to 0.02x; resolve_names read once
+from the page's existing #resolve-names toggle, not a new control, since it
+must be set before either diagram's fetch runs; confirm() before a node click
+navigates, matching tls.js's removeCertificate precedent); frontend/index.html
+(speed <option>s); frontend/js/app.js (col-src/col-dst right-click now offers
+the directional field first, generic ip.addr kept as a second option rather
+than dropped); docs/viewer.md + docs/operating.md + README.md (beta-announce
+block, explicitly self-deleting on the next stable release -- see the HTML
+comment in README.md above it).
+
+🔨 BUILD      ✅ full suite: 1581 passed (up from 1575: 7 new browser tests,
+              net +6 after one rename), 322.10s, real tshark/chromium.
+🔒 SECURITY   ✅ 0 Critical, 0 High. resolve_names reuses the already-reviewed
+              _name_resolution_args opt-in (no new resolver behavior, same
+              off-by-default privacy stance). Directional filter field comes
+              from a fixed 3-value set (addressField's return), never from raw
+              user text as a field name. confirm() shows plain text, no HTML
+              rendering, no injection surface. No new dependency.
+📄 DOCS       ✅ docs/viewer.md updated (confirm dialog, trace speed, edge
+              heat, resolve-names timing, lane cap); README's beta block
+              added with its own removal instruction inline.
+📦 RELEASE    ⬜ not requested yet for this batch
+🚀 SHIP       ⬜ not requested yet for this batch
+
 ## Release sequence: 1.1.0-beta.1 (2026-09-17)
 Track changed mid-session: work commit -> release sequence. User wants this
 shipped as a beta image on GHCR. release.yml only builds/publishes on a tag
@@ -30,8 +71,15 @@ the version bump and the rest of the release gates.
               tests) — 1575 passed, 0 failed, 337.90s, real tshark/capinfos/
               chromium. Confirms nothing hardcodes the old version string.
 📦 RELEASE    ⬜ next: commit approval, then PR into main
-🚀 SHIP       ⬜ tag v1.1.0-beta.1 after merge (user's own machine — tag pushes
-              always go to the user, never executed by Claude)
+🚀 SHIP       ✅ tag v1.1.0-beta.1 pushed (user's own machine), points at
+              ed4ba63 (matches merge commit). release.yml run 35259858102:
+              success. Verified: tag on remote ✅ | image published ✅
+              (ghcr.io/darthrater78/pcap-server:1.1.0-beta.1, confirmed from
+              the run's own build-push log, no GitHub Release step needed
+              beyond what release.yml does automatically for a tag push) |
+              PR #12 merged ✅. User's first pull attempt used the git tag's
+              `v` prefix on the image name by mistake (image tags strip it,
+              same as 1.0.0) -- corrected, not a publish problem.
 
 ## Work commit: Traffic Diagram + Sequence Diagram (2026-09-17)
 Track: work commit (frontend-only feature, no version bump, no backend change).

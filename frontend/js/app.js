@@ -5187,6 +5187,22 @@ function onPacketRowContextMenu(ev) {
         // carries the field it was drawn from, so the filter is exact instead
         // of being guessed back out of the value's shape.
         items.push(...filterMenuItems(buildFieldFilter(cell.dataset.field, text), text));
+    } else if ((cell.classList.contains("col-src") || cell.classList.contains("col-dst")) && text) {
+        // Source and Destination are synthesized display columns (an address
+        // can arrive as ip, ipv6 or eth depending on the frame), so there is
+        // no dataset.field to read the way the MAC columns have -- the field
+        // has to be recovered from the value's shape, same as addressField
+        // does below, but pointed at this specific side of the packet
+        // (ip.src, not just ip.addr) so "as source" is actually offered.
+        const base = addressField(text);
+        if (base) {
+            const directional = base.replace("addr", cell.classList.contains("col-src") ? "src" : "dst");
+            items.push(...filterMenuItems(buildFieldFilter(directional, text), text));
+            items.push({ separator: true });
+            // Either direction still has its place -- kept as a second,
+            // clearly separate option rather than dropped.
+            items.push(...filterMenuItems(buildFieldFilter(base, text), text));
+        }
     } else {
         const field = addressField(text);
         if (field) items.push(...filterMenuItems(buildFieldFilter(field, text), text));

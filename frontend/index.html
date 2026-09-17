@@ -844,7 +844,11 @@
             <div id="topology-legend" class="diagram-legend"></div>
             <div class="diagram-playback">
                 <button type="button" id="btn-topology-play" class="btn btn-sm btn-secondary" disabled>Play</button>
-                <select id="topology-speed" class="diagram-speed" disabled>
+                <select id="topology-speed" class="diagram-speed" disabled title="Playback speed -- slow it down to trace individual packets">
+                    <option value="0.02">0.02x (trace)</option>
+                    <option value="0.05">0.05x</option>
+                    <option value="0.1">0.1x</option>
+                    <option value="0.25">0.25x</option>
                     <option value="0.5">0.5x</option>
                     <option value="1" selected>1x</option>
                     <option value="2">2x</option>

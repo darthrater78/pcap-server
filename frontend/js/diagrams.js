@@ -21,8 +21,14 @@
 // folded into one neutral --diagram-other, always paired with a label.
 
 const TOPOLOGY_NODE_CAP = 200;
+const SEQUENCE_LANE_CAP = 40;
 const PACKET_DIAGRAM_CAP = 5000;
 const TOPOLOGY_PACKETS_PER_SECOND_AT_1X = 40;
+// How many times a link can be crossed before its "heat" (opacity/width
+// boost during playback) stops climbing -- a link that carries most of the
+// capture should read as busy, not turn into a solid bar that drowns out
+// everything around it.
+const EDGE_HEAT_CAP = 12;
 
 function clamp(min, v, max) {
     return Math.max(min, Math.min(max, v));
@@ -89,7 +95,15 @@ function renderLegend(el, ranked, colorOf) {
 // partial result.
 async function fetchPacketsCapped(captureId, filter, cap = PACKET_DIAGRAM_CAP) {
     const pageSize = 1000;
-    const params = (offset) => new URLSearchParams({ display_filter: filter, offset, limit: pageSize });
+    // Reads the same page-level "Resolve hostnames" toggle the packet list
+    // uses (frontend/index.html's #resolve-names) -- one setting, not a
+    // second copy of it in every dialog that fetches packets. It has to be
+    // decided before a diagram loads: a reverse-DNS query per address is not
+    // something to fire off mid-animation because someone flipped a switch.
+    const resolveNames = resolveNamesEnabled();
+    const params = (offset) => new URLSearchParams({
+        display_filter: filter, offset, limit: pageSize, resolve_names: resolveNames ? "true" : "false",
+    });
     const first = await api(`/api/captures/${captureId}/packets?${params(0)}`);
     if (first.total > cap) return { overCap: true, total: first.total };
     const packets = first.packets.slice();
@@ -100,9 +114,8 @@ async function fetchPacketsCapped(captureId, filter, cap = PACKET_DIAGRAM_CAP) {
     return { overCap: false, total: first.total, packets };
 }
 
-function showDiagramCapWarning(kind, total, cap, filter) {
+function showDiagramCapWarning(kind, total, cap, filter, what = kind === "topology" ? "hosts" : "packets") {
     const box = $(`${kind}-cap-warning`);
-    const what = kind === "topology" ? "hosts" : "packets";
     box.textContent = `${total.toLocaleString()} ${what} match ` +
         `${filter ? `"${filter}"` : "the whole capture"} -- above the ${cap.toLocaleString()} this diagram ` +
         "can render. Narrow the display filter, or open a saved view, and try again.";
@@ -279,7 +292,7 @@ function renderTopologySVG(svg, nodes, byId, edges, onNodeClick, onEdgeClick) {
         const line = svgEl("line", {
             class: "diagram-edge", x1: a.x, y1: a.y, x2: b.x, y2: b.y, "stroke-width": e.width,
         });
-        line.dataset.a = e.a; line.dataset.b = e.b;
+        line.dataset.a = e.a; line.dataset.b = e.b; line.dataset.baseWidth = e.width;
         line.addEventListener("click", () => onEdgeClick(e));
         const title = svgEl("title");
         title.textContent = `${e.a} <-> ${e.b}: ${formatBytes(e.totalBytes)}, ` +
@@ -307,6 +320,11 @@ function renderTopologySVG(svg, nodes, byId, edges, onNodeClick, onEdgeClick) {
 function onTopologyNodeClick(n) {
     const field = addressField(n.id);
     if (!field) return;
+    // A node click leaves the diagram -- filters the packet list and closes
+    // this dialog -- so it gets the same confirm-before-navigating treatment
+    // as tls.js's removeCertificate, rather than firing on a stray click
+    // while the user was really trying to drag.
+    if (!confirm(`View the conversation for ${n.id}?\n\nThis filters the packet list to this host and closes the diagram.`)) return;
     applyBuiltFilter(buildFieldFilter(field, n.id), "selected");
     $("topology-dialog").close();
 }
@@ -349,7 +367,9 @@ async function openTopologyDialog() {
     dialog.showModal();
     try {
         const data = await api(
-            `/api/captures/${viewingCaptureId}/conversations?${new URLSearchParams({ display_filter: filter })}`
+            `/api/captures/${viewingCaptureId}/conversations?${new URLSearchParams({
+                display_filter: filter, resolve_names: resolveNamesEnabled() ? "true" : "false",
+            })}`
         );
         if (data.endpoints.length > TOPOLOGY_NODE_CAP) {
             showDiagramCapWarning("topology", data.endpoints.length, TOPOLOGY_NODE_CAP, filter);
@@ -402,9 +422,40 @@ async function onTopologyPlayClick() {
     if (topologyPlayback.playing) startTopologyAnimation();
 }
 
+// Cumulative, not decaying: how many times each link has been crossed by
+// the time playback has reached idx. Recomputed from scratch on every call
+// rather than tracked incrementally, so scrubbing backwards is exactly as
+// correct as playing forwards -- a few thousand additions is nothing for a
+// browser to redo every frame.
+function computeEdgeHeat(packets, idx) {
+    const heat = new Map();
+    for (let i = 0; i <= idx && i < packets.length; i++) {
+        const p = packets[i];
+        const key = p.source <= p.destination ? `${p.source}|${p.destination}` : `${p.destination}|${p.source}`;
+        heat.set(key, (heat.get(key) || 0) + 1);
+    }
+    return heat;
+}
+
+// The more a link has carried, the brighter and wider it draws -- capped at
+// EDGE_HEAT_CAP so the busiest link in a capture reads as "busy", not as a
+// single dark bar that has swallowed the rest of the graph.
+function applyEdgeHeat(edgeLayer, heat) {
+    if (!edgeLayer) return;
+    for (const line of edgeLayer.children) {
+        const a = line.dataset.a, b = line.dataset.b;
+        const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+        const t = Math.min(heat.get(key) || 0, EDGE_HEAT_CAP) / EDGE_HEAT_CAP;
+        const base = Number(line.dataset.baseWidth) || 1;
+        line.style.strokeWidth = String(base + t * 4);
+        line.style.strokeOpacity = String(0.35 + t * 0.65);
+    }
+}
+
 function drawTopologyFrame(ctx, canvas, playback) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const idx = Math.floor(playback.progress);
+    applyEdgeHeat(topologyState?.edgeLayer, computeEdgeHeat(playback.packets, idx));
     const trailStart = Math.max(0, idx - 20);
     for (let i = trailStart; i <= idx && i < playback.packets.length; i++) {
         const p = playback.packets[i];
@@ -551,6 +602,16 @@ async function openSequenceDialog() {
         }
         if (!result.packets.length) {
             $("sequence-legend").innerHTML = '<span class="diagram-legend-empty">No packets</span>';
+            return;
+        }
+        // A lane per host is the whole idea of this view -- past a few dozen
+        // it stops being one. Guarded the same way the packet cap is: block
+        // and ask for a narrower filter rather than draw something this
+        // cramped that nobody could actually read.
+        const hosts = new Set();
+        for (const p of result.packets) { hosts.add(p.source); hosts.add(p.destination); }
+        if (hosts.size > SEQUENCE_LANE_CAP) {
+            showDiagramCapWarning("sequence", hosts.size, SEQUENCE_LANE_CAP, filter, "hosts");
             return;
         }
         const { ranked, colorOf } = rankProtocols(result.packets);

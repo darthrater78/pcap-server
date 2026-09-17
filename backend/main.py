@@ -2543,14 +2543,15 @@ async def protocol_hierarchy(
 
 @app.get("/api/captures/{capture_id}/conversations")
 async def conversations(
-    capture_id: str, display_filter: str = Query(""), user: dict = Depends(get_current_user),
+    capture_id: str, display_filter: str = Query(""), resolve_names: bool = Query(False),
+    user: dict = Depends(get_current_user),
 ):
     """Statistics > Conversations and Endpoints, from the same tshark pass."""
     if not packet_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many requests, slow down")
     _info, path = _require_readable_capture(capture_id, user)
     try:
-        convs, endpoints = await get_conversations(vault.source_for(path), display_filter)
+        convs, endpoints = await get_conversations(vault.source_for(path), display_filter, resolve_names)
         return {"conversations": convs, "endpoints": endpoints}
     except DisplayFilterError as exc:
         raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})
