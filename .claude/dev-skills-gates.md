@@ -30,8 +30,17 @@ directly.
               strings + a CHANGELOG/README entry only -- no code change.
 📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry added; README beta block points
               at the new tag.
-📦 RELEASE    ⬜ next: commit approval, PR into main
-🚀 SHIP       ⬜ tag v1.1.0-beta.2 after merge (user's own machine)
+📦 RELEASE    ✅ commit 3157794 pushed to release-1.1.0-beta.2. PR #14 merged
+              -> main (merge commit 88b4b59, confirmed on main).
+🚀 SHIP       ⏳ IN PROGRESS, out of normal order -- see
+              .claude/beta2-handoff.md for the full account. Merge confirmed,
+              but Check on 88b4b59 was still in_progress
+              (run 35265384428) when the user explicitly instructed "yes hand
+              it over" for the tag block, overriding the usual
+              wait-for-green-Check requirement. Tag push handed over; not yet
+              confirmed pushed, not yet confirmed which way Check/the release
+              gate landed. DO NOT mark this ✅ until the handoff's four
+              checks are all done.
 
 ## Work commit: Traffic Diagram follow-ups (2026-09-17, after 1.1.0-beta.1 shipped)
 Track: work commit -- no version bump requested yet for this batch.
