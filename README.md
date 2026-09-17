@@ -8,6 +8,16 @@ Built for the case where the machine you need to capture on is not the machine
 you want to analyse from: a firewall, a hypervisor, a container host, a box you
 only reach over SSH.
 
+<!-- BETA ANNOUNCEMENT -- process note, not just this one release: every beta
+     gets a block like this, naming the exact image tag (no leading "v" --
+     see docs/operating.md#choosing-a-version). Delete the whole block,
+     comment included, the moment the next non-beta release ships. It exists
+     to announce a beta while one is current, not to become a permanent
+     fixture nobody remembers to remove. -->
+> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.1` — see
+> [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
+> or the Quick Start below installs; pin this exact tag if you want to try it.
+
 **Contents** — [Quick start](#quick-start) · [HTTPS](#https) ·
 [Your first capture](#your-first-capture) · [What it does](#what-it-does) ·
 [Requirements](#requirements) · [Using it](#using-it) ·

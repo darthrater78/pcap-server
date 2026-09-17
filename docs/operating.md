@@ -52,12 +52,18 @@ the setup steps. Nothing is lost — there is no data yet.
 
 ### Choosing a version
 
+**The `v` is a git thing, not a Docker thing.** Releases are tagged in git and
+listed on GitHub as `v1.0.0`, `v1.1.0-beta.1`, and so on — but the *image* tag
+on GHCR always drops the `v`: `docker pull ghcr.io/darthrater78/pcap-server:v1.1.0-beta.1`
+does not exist and never will; `:1.1.0-beta.1` does. Every tag below is an
+image tag, spelled the way `docker pull` / `docker-compose.yml` needs it.
+
 | Tag | What it is |
 |---|---|
 | `1.0.0` | A specific release, and what the compose file at tag `v1.0.0` pins its image to. Reproducible: the same tag is the same bytes next month |
 | `:latest` | A floating tag moved to each new stable release. `docker compose pull` will change the running version underneath you without the compose file changing at all |
 | `:dev` | A floating tag moved to each new `-dev` build only. It does not follow stable releases: it stays on the last dev build (0.1.0-dev.40) until another dev build is published |
-| `1.1.0-beta.1` (or any `-beta`/`-rc` version) | A prerelease with no floating tag at all — it is not what `:latest` or `:dev` point to, and pulling either will not get it. Pin the exact version if you want to try one |
+| `1.1.0-beta.1` (or any `-beta`/`-rc` version) | A prerelease with no floating tag at all — it is not what `:latest` or `:dev` point to, and pulling either will not get it. Pin the exact version (no `v`) if you want to try one |
 
 Pin a release unless you specifically want to track. The
 [releases page](https://github.com/darthrater78/pcap-server/releases) lists what

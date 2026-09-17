@@ -116,10 +116,15 @@ Two more toolbar buttons, for when a table is the wrong shape to see it in.
 **Traffic Diagram** draws Conversations as a graph instead of a table: a node
 per host, sized by bytes, and an edge per pair, weighted by how much they
 exchanged. Drag a node to untangle a busy layout; click a node or an edge to
-filter onto it, same as a Conversations row. **Play** fetches the capture's
-actual packet order and animates it — a dot per packet, moving from source to
-destination, colored by protocol — so the diagram shows not just who talked to
-whom but the order and rhythm of it.
+filter onto it, same as a Conversations row — a confirmation dialog checks you
+mean it first, since it also closes the diagram. **Play** fetches the
+capture's actual packet order and animates it — a dot per packet, moving from
+source to destination, colored by protocol — so the diagram shows not just who
+talked to whom but the order and rhythm of it. Slow it right down (the speed
+control goes to 0.02x) to trace one packet at a time, and watch a link get
+visibly brighter and thicker the more traffic crosses it as playback passes
+that point — capped, so one very busy link cannot swallow the rest of the
+graph.
 
 **Sequence Diagram** is closer to Wireshark's own Flow Graph: one lane per
 host, and every packet drawn as a time-ordered arrow between two lanes,
@@ -128,9 +133,17 @@ Rows are spaced evenly rather than by real elapsed time, since a burst of
 packets a millisecond apart would otherwise collapse into an unreadable stack.
 
 Both read the current display filter the same way Conversations does, and both
-cap how much they will draw at once (200 hosts for the diagram, 5,000 packets
-for either) — above that they ask for a narrower filter rather than drawing a
-misleading or unusably dense picture.
+cap how much they will draw at once (200 hosts for the Traffic Diagram, 40 for
+the Sequence Diagram's lanes, 5,000 packets for either) — above that they ask
+for a narrower filter rather than drawing a misleading or unusably dense
+picture.
+
+**Resolve hostnames** (the same toggle the packet list uses, under the view
+flags) applies to both: turn it on *before* opening either diagram, since it
+changes what gets fetched rather than how an already-loaded one is drawn, and
+flipping it mid-view does nothing until you reopen. It sends a reverse-DNS
+query for every address in view, same tradeoff as everywhere else it appears
+in this app.
 
 ## Saved views
 

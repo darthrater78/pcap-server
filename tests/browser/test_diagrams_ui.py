@@ -75,22 +75,41 @@ async def test_topology_renders_nodes_and_edges(app_page):
     assert await app_page.is_disabled("#btn-topology-play") is False
 
 
-async def test_topology_node_click_applies_pair_filter_and_closes(app_page):
+def _click_node(page, address):
+    return page.evaluate(
+        """(address) => {
+            const g = [...document.querySelectorAll('.diagram-node')]
+                .find((n) => n.querySelector('text').textContent === address);
+            g.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        }""",
+        address,
+    )
+
+
+async def test_topology_node_click_confirms_then_applies_pair_filter_and_closes(app_page):
     await _stub_api(app_page, "/conversations", CONVERSATIONS_PAYLOAD)
     await _open_viewer(app_page)
+    app_page.on("dialog", lambda dialog: dialog.accept())
 
     await app_page.click("#btn-topology")
     await app_page.wait_for_selector("#topology-dialog[open]")
-    await app_page.evaluate(
-        """() => {
-            const g = [...document.querySelectorAll('.diagram-node')]
-                .find((n) => n.querySelector('text').textContent === '10.0.0.1');
-            g.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        }"""
-    )
+    await _click_node(app_page, "10.0.0.1")
 
     assert await app_page.input_value("#display-filter") == "ip.addr == 10.0.0.1"
     assert await app_page.locator("#topology-dialog[open]").count() == 0
+
+
+async def test_topology_node_click_declined_leaves_filter_and_dialog_alone(app_page):
+    await _stub_api(app_page, "/conversations", CONVERSATIONS_PAYLOAD)
+    await _open_viewer(app_page)
+    app_page.on("dialog", lambda dialog: dialog.dismiss())
+
+    await app_page.click("#btn-topology")
+    await app_page.wait_for_selector("#topology-dialog[open]")
+    await _click_node(app_page, "10.0.0.1")
+
+    assert await app_page.input_value("#display-filter") == ""
+    assert await app_page.locator("#topology-dialog[open]").count() == 1
 
 
 async def test_topology_cap_warning_when_hosts_exceed_the_limit(app_page):
@@ -151,6 +170,89 @@ async def test_sequence_arrow_click_opens_the_packet_and_closes(app_page):
         "() => document.getElementById('packet-viewer').classList.contains('no-selection')"
     )
     assert no_selection is False
+
+
+async def test_topology_and_play_pass_resolve_names_when_checked(app_page):
+    await app_page.evaluate(
+        """(response) => {
+            window.__calls = [];
+            const real = window.api;
+            window.api = async (path, opts) => {
+                window.__calls.push(path);
+                if (path.includes('/conversations')) return response.conv;
+                if (path.includes('/packets?')) return response.pkts;
+                return real(path, opts);
+            };
+        }""",
+        {
+            "conv": CONVERSATIONS_PAYLOAD,
+            "pkts": {"packets": [_packet(1, "10.0.0.1", "10.0.0.2")], "total": 1},
+        },
+    )
+    await _open_viewer(app_page)
+    # #resolve-names lives inside the capture-flags panel, collapsed by
+    # default in this test's bare viewer state -- setting it directly is
+    # equivalent to a visible click for what's under test here, which is
+    # only whether diagrams.js reads it (resolveNamesEnabled), not the
+    # panel's own disclosure behaviour (covered elsewhere).
+    await app_page.evaluate(
+        """() => {
+            const el = document.getElementById('resolve-names');
+            el.checked = true;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }"""
+    )
+
+    await app_page.click("#btn-topology")
+    await app_page.wait_for_selector("#topology-dialog[open]")
+    await app_page.click("#btn-topology-play")
+    await app_page.wait_for_function("() => !document.getElementById('btn-topology-play').disabled")
+
+    calls = await app_page.evaluate("() => window.__calls")
+    assert any("/conversations" in c and "resolve_names=true" in c for c in calls)
+    assert any("/packets?" in c and "resolve_names=true" in c for c in calls)
+
+
+async def test_sequence_cap_warning_when_hosts_exceed_the_limit(app_page):
+    # 25 packets, each between a distinct pair -- 50 hosts, past the 40-lane cap.
+    payload = {
+        "packets": [_packet(i, f"10.0.0.{i}", f"10.0.1.{i}") for i in range(25)],
+        "total": 25,
+    }
+    await _stub_api(app_page, "/packets?", payload)
+    await _open_viewer(app_page)
+
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-dialog[open]")
+
+    assert await app_page.is_visible("#sequence-cap-warning")
+    assert "hosts" in await app_page.inner_text("#sequence-cap-warning")
+    assert await app_page.is_hidden("#sequence-body")
+
+
+async def test_edge_heat_climbs_with_crossings_and_stays_capped(app_page):
+    # computeEdgeHeat itself is an uncapped count -- the cap is applied only
+    # where it's drawn, in applyEdgeHeat, so a crossing count is never lost.
+    raw_count = await app_page.evaluate(
+        """() => {
+            const packets = Array.from({ length: 30 }, () => ({ source: 'a', destination: 'b' }));
+            return computeEdgeHeat(packets, packets.length - 1).get('a|b');
+        }"""
+    )
+    assert raw_count == 30
+
+    styled = await app_page.evaluate(
+        """() => {
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.dataset.a = 'a'; line.dataset.b = 'b'; line.dataset.baseWidth = '1';
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.appendChild(line);
+            applyEdgeHeat(g, new Map([['a|b', 999]]));
+            return { width: line.style.strokeWidth, opacity: line.style.strokeOpacity };
+        }"""
+    )
+    assert styled["width"] == "5"      # base 1 + the full +4 bonus, never more
+    assert styled["opacity"] == "1"    # 0.35 + the full 0.65 bonus, never more
 
 
 async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):

@@ -542,7 +542,7 @@ async def get_protocol_hierarchy(
 
 
 async def get_conversations(
-    source: PcapSource, display_filter: str = "",
+    source: PcapSource, display_filter: str = "", resolve_names: bool = False,
 ) -> tuple[list[Conversation], list[ConversationEndpoint]]:
     """Wireshark's Conversations and Endpoints tabs, from one tshark pass.
 
@@ -555,8 +555,16 @@ async def get_conversations(
     aggregated in Python from one field-per-packet pass, not by parsing
     tshark's `-z conv,ip` text table, whose column widths are sized to the
     addresses actually present and so are not fixed across calls.
+
+    resolve_names follows the same opt-in as get_packet_list: off by default,
+    since turning it on sends a reverse-DNS query for every address in the
+    capture. -e ip.src/ip.dst resolve to the same names -N mnt would put in
+    _ws.col.Source/Destination -- tshark's per-field resolution follows the
+    field's own type (network address, here), same mechanism either way.
     """
-    cmd = ["tshark", "-r", "-", "-T", "fields",
+    cmd = ["tshark", "-r", "-"]
+    cmd += _name_resolution_args(resolve_names)
+    cmd += ["-T", "fields",
            "-e", "ip.src", "-e", "ip.dst", "-e", "ipv6.src", "-e", "ipv6.dst",
            "-e", "frame.len", "-E", "separator=\t", "-E", "occurrence=f"]
     if display_filter:

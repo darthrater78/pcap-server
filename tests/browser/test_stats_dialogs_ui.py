@@ -183,6 +183,62 @@ async def test_a_tcp_packets_row_offers_follow_stream_from_its_own_menu(app_page
     await app_page.wait_for_selector("#follow-stream-dialog[open]")
 
 
+async def test_source_column_right_click_offers_the_directional_filter_first(app_page):
+    """Source/Destination are synthesized columns with no dataset.field, so
+    their filter used to fall back to the generic, direction-blind ip.addr --
+    "source" never appeared in a filter built from right-clicking it. Now the
+    directional field (ip.src) comes first, with the old ip.addr kept as a
+    second, separated option rather than dropped."""
+    packet = {
+        "number": 1, "timestamp": "0.0", "source": "10.0.0.1", "destination": "10.0.0.2",
+        "protocol": "TCP", "length": 66, "info": "x", "src_mac": "", "dst_mac": "",
+        "interface": "", "ifindex": 0, "direction": "", "tcp_stream": None, "udp_stream": None,
+    }
+    await _open_viewer(app_page)
+    await app_page.evaluate(
+        """(p) => {
+            const cols = packetColumns();
+            document.getElementById("packet-tbody").innerHTML = packetRowHtml(p, cols);
+        }""",
+        packet,
+    )
+
+    await app_page.click('#packet-tbody tr[data-frame="1"] .col-src', button="right")
+    await app_page.wait_for_selector("#filter-menu")
+    labels = await app_page.eval_on_selector_all(
+        "#filter-menu .filter-menu-item", "els => els.map(e => e.textContent.trim())"
+    )
+    assert any("ip.src == 10.0.0.1" in label for label in labels)
+    assert any("ip.addr == 10.0.0.1" in label for label in labels)
+    src_index = next(i for i, label in enumerate(labels) if "ip.src == 10.0.0.1" in label)
+    addr_index = next(i for i, label in enumerate(labels) if "ip.addr == 10.0.0.1" in label)
+    assert src_index < addr_index
+
+    await app_page.click("#filter-menu .filter-menu-item:has-text('ip.src == 10.0.0.1')")
+    assert await app_page.input_value("#display-filter") == "ip.src == 10.0.0.1"
+
+
+async def test_destination_column_right_click_uses_ip_dst(app_page):
+    packet = {
+        "number": 1, "timestamp": "0.0", "source": "10.0.0.1", "destination": "10.0.0.2",
+        "protocol": "TCP", "length": 66, "info": "x", "src_mac": "", "dst_mac": "",
+        "interface": "", "ifindex": 0, "direction": "", "tcp_stream": None, "udp_stream": None,
+    }
+    await _open_viewer(app_page)
+    await app_page.evaluate(
+        """(p) => {
+            const cols = packetColumns();
+            document.getElementById("packet-tbody").innerHTML = packetRowHtml(p, cols);
+        }""",
+        packet,
+    )
+
+    await app_page.click('#packet-tbody tr[data-frame="1"] .col-dst', button="right")
+    await app_page.wait_for_selector("#filter-menu")
+    await app_page.click("#filter-menu .filter-menu-item:has-text('ip.dst == 10.0.0.2')")
+    assert await app_page.input_value("#display-filter") == "ip.dst == 10.0.0.2"
+
+
 async def test_follow_stream_reports_the_servers_own_error(app_page):
     await app_page.evaluate(
         """() => {
