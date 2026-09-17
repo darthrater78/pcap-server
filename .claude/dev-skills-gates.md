@@ -1,5 +1,38 @@
 # Dev Skills gate state
 
+## Release sequence: 1.1.0-beta.2 (2026-09-17)
+Track: release sequence. User: "tag and release this as the next beta" for
+the traffic-diagram-followups batch (PR #13, already merged to main as a
+work commit). Branch: main had no working branch again (same pattern as
+before #13) -- created release-1.1.0-beta.2 rather than committing to main
+directly.
+
+🔢 VERSION    ✅ 1.1.0-beta.2 (patch-level beta bump: follow-ups to the
+              1.1.0-beta.1 feature set already on main, not a new feature).
+              backend/main.py APP_VERSION, docker-compose.yml image tag,
+              README's beta-announcement block (updated in place, per its own
+              inline instruction), CHANGELOG.md entry. docs/operating.md's
+              "1.1.0-beta.1" mentions are illustrative examples of the
+              -beta/no-v convention (like the :dev row's historical
+              "0.1.0-dev.40"), deliberately left as-is. Previous version
+              (1.1.0-beta.1) confirmed tagged on remote (ls-remote -> ed4ba63)
+              -- not blocked.
+🔨 BUILD      ✅ handoff offered, user declined to try it -- full suite: 1581
+              passed, 322.93s, real tshark/chromium. docker build ->
+              localhost/pcap-server:1.1.0-beta.2; smoke-run (scratch
+              /tmp/pcap-smoke2, MASTER_KEY_FILE set): encryption enabled, 0
+              tracebacks, / 200, /api/auth/status 200 (empty version field is
+              expected pre-TOTP, per test_version_is_withheld_from_a_
+              password_only_session), /js/diagrams.js confirmed to carry
+              EDGE_HEAT_CAP/SEQUENCE_LANE_CAP. Left running on :18081; user
+              said "commit/PR/tag" -- container and scratch dir cleaned up.
+🔒 SECURITY   ✅ 0 Critical, 0 High. Diff since PR #13 merged is version
+              strings + a CHANGELOG/README entry only -- no code change.
+📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry added; README beta block points
+              at the new tag.
+📦 RELEASE    ⬜ next: commit approval, PR into main
+🚀 SHIP       ⬜ tag v1.1.0-beta.2 after merge (user's own machine)
+
 ## Work commit: Traffic Diagram follow-ups (2026-09-17, after 1.1.0-beta.1 shipped)
 Track: work commit -- no version bump requested yet for this batch.
 
@@ -45,16 +78,16 @@ comment in README.md above it).
 📄 DOCS       ✅ docs/viewer.md updated (confirm dialog, trace speed, edge
               heat, resolve-names timing, lane cap); README's beta block
               added with its own removal instruction inline.
-📦 RELEASE    ⏳ Committed eb7b44b and pushed to new branch
-              `traffic-diagram-followups` -- `main` had no branch left on it
-              (PR #12's --delete-branch removed `claude/admiring-wright-k20ptf`),
-              and the working tree was sitting directly on `main`'s checkout,
-              so a branch was created first rather than committing to main
-              directly. PR #13 open: traffic-diagram-followups -> main
-              (https://github.com/darthrater78/pcap-server/pull/13). No
-              version bump / release notes approval requested yet for this
-              batch -- user asked to "open" the PR, not to ship it.
-🚀 SHIP       ⬜ not requested yet for this batch
+📦 RELEASE    ✅ Committed eb7b44b + 1701096, pushed to `traffic-diagram-followups`,
+              PR #13 opened and MERGED by the user (merge commit 74b5902,
+              2026-09-17T19:19:17Z). Local main synced to it. No version bump
+              requested for this batch -- work commit, not a release sequence,
+              so tagging/publishing is N/A here.
+🚀 SHIP       ➖ N/A -- work commit (no version bump, no tag, no artifact
+              publish asked for this batch). Check run on 74b5902 was still
+              in_progress when checked; remote branch `traffic-diagram-
+              followups` not yet deleted -- offered to the user, not done
+              unilaterally (ref deletions go to the user per Section 5.8).
 
 ## Release sequence: 1.1.0-beta.1 (2026-09-17)
 Track changed mid-session: work commit -> release sequence. User wants this

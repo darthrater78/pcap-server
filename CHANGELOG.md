@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0-beta.2 — 2026-09-17
+
+Follow-ups to the 1.1.0-beta.1 diagrams, plus one unrelated fix.
+
+- **Traffic Diagram**: playback speed goes down to 0.02x for tracing
+  individual packets; a link brightens and widens the more it's crossed
+  during playback, capped so one very busy link can't drown out the graph.
+  Node clicks now confirm before filtering and closing the diagram.
+- **DNS resolution** is now an option for both diagrams — reuses the packet
+  list's existing "Resolve hostnames" toggle, read once before a diagram
+  loads (`get_conversations` gains the same opt-in `get_packet_list` already
+  had).
+- **Sequence Diagram** gets its own host-count guard (40 lanes), the same
+  block-not-truncate treatment the existing caps use.
+- **Packet list**: right-clicking Source or Destination now offers the
+  directional filter (`ip.src`/`ip.dst`) first, with the old bidirectional
+  `ip.addr` kept as a second option rather than dropped.
+
+Still a prerelease: no floating tag moves for it, and it is not what
+`docker-compose.yml`'s stable pin points at.
+
 ## 1.1.0-beta.1 — 2026-09-17
 
 A beta ahead of 1.1.0: two new statistics views for reading a capture's shape
