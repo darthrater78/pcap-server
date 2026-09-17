@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0-beta.1 — 2026-09-17
+
+A beta ahead of 1.1.0: two new statistics views for reading a capture's shape
+rather than just its rows.
+
+- **Traffic Diagram**: a force-directed graph of who talks to whom, sized by
+  bytes, with an opt-in playback of the actual packet order animated across
+  the edges.
+- **Sequence Diagram**: a time-ordered swimlane per host, colored by protocol
+  — the Wireshark "Flow Graph" idea, built the same way the other statistics
+  views are.
+
+Both are built from the existing Conversations and packet-list routes — no
+backend changes, no new dependency. This is a prerelease: no floating tag
+moves for it, and it is not what `docker-compose.yml`'s stable pin points at.
+
 ## 1.0.0 — 2026-09-17
 
 The first stable release. Forty development builds turned a tcpdump-over-SSH

@@ -52,6 +52,21 @@
     --pkt-udp: #2dd4bf;
     --pkt-tcp: #93a3b8;
     --pkt-tint: 15%;
+
+    /* Diagram protocol identity -- deliberately not --pkt-*, which is tuned
+       for a tint behind a text column and fails the categorical-identity
+       gates on its own (node scripts/validate_palette.js: chroma floor and
+       normal-vision floor both FAIL, not just the labels-required 6-8 CVD
+       band). This is the dataviz skill's validated default palette's first
+       three slots -- the only ones that clear its stricter all-pairs gate,
+       which a node-link diagram and a swimlane need since any two colors can
+       end up adjacent, unlike a stacked bar's fixed order. Past three
+       protocols, --diagram-other (an existing neutral, not a new hue) takes
+       over -- see diagrams.js rankProtocols(). */
+    --diagram-cat-1: #3987e5;
+    --diagram-cat-2: #d95926;
+    --diagram-cat-3: #199e70;
+    --diagram-other: var(--text-muted);
 }
 
 :root[data-theme="light"] {
@@ -81,6 +96,11 @@
     --pkt-udp: #0f766e;
     --pkt-tcp: #475569;
     --pkt-tint: 12%;
+
+    --diagram-cat-1: #2a78d6;
+    --diagram-cat-2: #eb6834;
+    --diagram-cat-3: #1baf7a;
+    --diagram-other: var(--text-muted);
 
     color-scheme: light;
 }
@@ -3237,6 +3257,159 @@ body {
 .stats-table tbody tr:hover { background: var(--bg-hover); }
 
 .stats-table-scroll + .stats-table-scroll { margin-top: 4px; }
+
+/* Traffic Diagram / Sequence Diagram: a graph needs more room than a 720px
+   table dialog ever did. */
+.stats-dialog--large {
+    width: min(1180px, calc(100vw - 32px));
+    height: calc(100vh - 48px);
+}
+
+.diagram-cap-warning {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+}
+
+.diagram-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    gap: 8px;
+}
+
+.diagram-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* Protocol identity, never color alone: every swatch carries its own label. */
+.diagram-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.diagram-legend-empty { color: var(--text-muted); font-style: italic; }
+
+.diagram-legend-item { display: flex; align-items: center; gap: 5px; }
+
+.diagram-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+}
+
+.diagram-playback {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.diagram-speed {
+    padding: 3px 6px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font: inherit;
+}
+
+.diagram-scrubber { width: 180px; }
+
+.diagram-playback-count {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    min-width: 7em;
+}
+
+.diagram-canvas-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    overflow: hidden;
+}
+
+.diagram-canvas-wrap--scroll { overflow: auto; }
+
+.diagram-svg, .diagram-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* The canvas only ever carries the animated packet dots -- it has no
+   interactive targets, so it never needs to catch pointer events, and
+   leaving them to the SVG underneath is what keeps node drag and edge/node
+   click working while playback runs. */
+.diagram-canvas { pointer-events: none; }
+
+.diagram-node { cursor: grab; }
+.diagram-node:active { cursor: grabbing; }
+.diagram-node circle {
+    fill: var(--bg-hover);
+    stroke: var(--accent);
+    stroke-width: 1.5px;
+}
+.diagram-node:hover circle { fill: var(--accent); fill-opacity: 0.35; }
+.diagram-node text {
+    fill: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    pointer-events: none;
+}
+
+.diagram-edge {
+    stroke: var(--accent);
+    stroke-opacity: 0.35;
+    fill: none;
+    cursor: pointer;
+}
+.diagram-edge:hover { stroke-opacity: 0.75; }
+
+.diagram-tooltip {
+    position: absolute;
+    z-index: 1;
+    padding: 6px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    pointer-events: none;
+    max-width: 260px;
+}
+
+/* Sequence diagram: one lane per host, packets as horizontal arrows between
+   lanes, positioned by ordinal order (not real elapsed time -- a burst of
+   packets a millisecond apart would otherwise collapse into an unreadable
+   stack). */
+.seq-lane-line { stroke: var(--border); stroke-width: 1px; }
+.seq-lane-label {
+    fill: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+.seq-arrow { fill: none; cursor: pointer; }
+.seq-arrow:hover { stroke-width: 3px; }
+.seq-arrow-dot { cursor: pointer; }
 
 .follow-stream-dialog .follow-stream-body {
     overflow-y: auto;

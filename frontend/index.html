@@ -437,6 +437,10 @@
                             title="How this capture (or the current filter's slice of it) breaks down by protocol">Protocol Hierarchy</button>
                     <button id="btn-conversations" class="btn btn-sm btn-secondary"
                             title="Traffic totals by address pair and by address">Conversations</button>
+                    <button id="btn-topology" class="btn btn-sm btn-secondary"
+                            title="Who talks to whom, sized by traffic -- with playback of the actual packet order">Traffic Diagram</button>
+                    <button id="btn-sequence" class="btn btn-sm btn-secondary"
+                            title="Time-ordered exchange between hosts, one lane per host">Sequence Diagram</button>
                     <button id="btn-columns" class="btn btn-sm btn-secondary"
                             title="Choose which columns this list shows, and their order. Drag a heading to move it, or right-click one.">Columns</button>
                     <button id="btn-download-capture" class="btn btn-sm btn-secondary">Download .pcap</button>
@@ -825,6 +829,61 @@
     </div>
 </dialog>
 
+<!-- Traffic Diagram: a force-directed graph of who talks to whom, built from
+     the same Conversations totals above -- plus an opt-in playback of the
+     capped packet-level order for the "dynamic" part. No external graphing
+     library: plain SVG for the (interactive, draggable) nodes and edges, a
+     canvas overlay for the animated packet dots, matching the rest of this
+     frontend's zero-dependency approach. -->
+<dialog id="topology-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="topology-title">
+    <h2 id="topology-title" class="sanitize-title">Traffic Diagram</h2>
+    <p id="topology-scope" class="sanitize-target"></p>
+    <div id="topology-cap-warning" class="diagram-cap-warning" hidden></div>
+    <div id="topology-body" class="diagram-body">
+        <div class="diagram-toolbar">
+            <div id="topology-legend" class="diagram-legend"></div>
+            <div class="diagram-playback">
+                <button type="button" id="btn-topology-play" class="btn btn-sm btn-secondary" disabled>Play</button>
+                <select id="topology-speed" class="diagram-speed" disabled>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="2">2x</option>
+                    <option value="4">4x</option>
+                </select>
+                <input type="range" id="topology-scrubber" class="diagram-scrubber" min="0" max="1000" value="0" disabled>
+                <span id="topology-playback-count" class="diagram-playback-count"></span>
+            </div>
+        </div>
+        <div class="diagram-canvas-wrap">
+            <svg id="topology-svg" class="diagram-svg"></svg>
+            <canvas id="topology-canvas" class="diagram-canvas"></canvas>
+        </div>
+    </div>
+    <div class="sanitize-actions">
+        <button type="button" class="btn btn-sm btn-primary" data-close-dialog>Close</button>
+    </div>
+</dialog>
+
+<!-- Sequence Diagram: one vertical lane per host, packets drawn as
+     time-ordered (ordinal, not proportional -- see diagrams.js) arrows
+     between lanes. Wireshark calls the equivalent view "Flow Graph". -->
+<dialog id="sequence-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="sequence-title">
+    <h2 id="sequence-title" class="sanitize-title">Sequence Diagram</h2>
+    <p id="sequence-scope" class="sanitize-target"></p>
+    <div id="sequence-cap-warning" class="diagram-cap-warning" hidden></div>
+    <div id="sequence-body" class="diagram-body">
+        <div class="diagram-toolbar">
+            <div id="sequence-legend" class="diagram-legend"></div>
+        </div>
+        <div class="diagram-canvas-wrap diagram-canvas-wrap--scroll">
+            <svg id="sequence-svg" class="diagram-svg"></svg>
+        </div>
+    </div>
+    <div class="sanitize-actions">
+        <button type="button" class="btn btn-sm btn-primary" data-close-dialog>Close</button>
+    </div>
+</dialog>
+
 <!-- Follow TCP/UDP Stream: one conversation, reassembled in the order it was
      sent, both directions told apart by color the way Wireshark's own dialog
      does. Opened from a packet row or field's right-click menu. -->
@@ -928,5 +987,6 @@
 
 <script src="/js/app.js"></script>
 <script src="/js/tls.js"></script>
+<script src="/js/diagrams.js"></script>
 </body>
 </html>

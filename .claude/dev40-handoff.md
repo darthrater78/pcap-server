@@ -7,6 +7,11 @@ was written.
 
 **Goal:** Finish shipping 0.1.0-dev.40.
 
+> ✅ **UPDATE: dev.40 SHIPPED** (the ship commit is d04dd4a, tag v0.1.0-dev.40, release run
+> 35232588054; image and release verified). Everything below is the pre-ship
+> state, kept for the record. Open: redeploy dev.40 on the live box (the user's
+> action; copy in the compose hardening block).
+
 ## Current state
 **HEAD is `2e458b9`**, pushed to origin. It is the user's own commit, made from a
 separate Sonnet session: "Untangle setup docs". It touched README.md,
