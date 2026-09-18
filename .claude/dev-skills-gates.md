@@ -187,12 +187,31 @@ session on commits containing no code.
 📄 DOCS       ➖ N/A -- CI plumbing, not app CHANGELOG material (repo precedent:
               the dev.33/34 CI commits). The reasoning is in the workflows' own
               comments, as the rest of this repo's CI decisions are.
-📦 RELEASE    ✅ PR #17 open: claude/dev-skills-beta-workflow-cwzvx5 -> main.
+📦 RELEASE    ✅ PR #17 MERGED -> main (merge commit 1040454). Opened as:
               Opened on the user's "commit the record, do the first-parent fix,
               then open the PR". First attempt refused by the gate-preflight
               hook on VERSION ⬜ (see that gate above); settled as N/A with the
               reason stated, then retried. The block was not worked around.
-🚀 SHIP       ⬜ not owed -- no tag, no artifact
+🚀 SHIP       ➖ N/A -- work commit: no tag, no artifact, nothing published.
+
+CLOSED. On the merge, main's new triggers went live and behaved: Lint workflows
+run 29 (9s) and Check run 144 both fired on 1040454, Check because the merge
+touched tests/ which is deliberately NOT in paths-ignore. Run 144 is also the
+first FULL-suite run of the first-parent fix -- only the 29 targeted tests were
+run on that tree locally, since tests/test_release_workflow.py is the only test
+that reads release.yml.
+
+STILL UNPROVEN, carried forward: the release.yml smoke step has never executed
+(no docker in this container). The NEXT TAG is what proves both it and the
+ancestor fallback from PR #16 -- neither has run in anger. A broken smoke step
+fails the release rather than publishing something bad, so it fails safe, but
+that is not the same as having run.
+
+FOR THE NEXT SESSION: if more CI time needs cutting, the lever is pytest-xdist
+or sharding the 186 browser tests, which are very nearly the entire wall clock
+of a 1594-test run. NOT path-based test selection -- scripts/check.sh is one
+entrypoint shared by CI and local dev so the two cannot drift, and splitting by
+path breaks exactly that.
 
 ## Release sequence: release.yml gate fallback -> finish v1.1.0-beta.2 (2026-09-18)
 Track: started as a work commit; became a release sequence when the user
