@@ -12,14 +12,15 @@ done or recorded in the section below).
               APP_VERSION, docker-compose.yml:37, README beta block, CHANGELOG.
               README Quick start + docs/reverse-proxy.md stay on v1.0.0 by the
               beta rule. v1.1.0-beta.2 tagged on remote (8c2e1bf).
-🔨 BUILD      ✅ check.sh EXIT=0, 1647 passed, 337s, on the bumped tree
+🔨 BUILD      ✅ handoff offered, user declined to try it -- replied "Commit"
+              without running the docker run block given for the image.
+              check.sh EXIT=0, 1647 passed, 337s, on the bumped tree
               (unchanged during the run). docker build ->
               localhost/pcap-server:1.1.0-beta.3 (sha256:13bce72f..., 641MB).
               release.yml's own smoke step, extracted verbatim and run against
               it: PASSED -- first real execution of that step anywhere (/ 200,
               auth/status 200, servers 401, in-image APP_VERSION 1.1.0-beta.3,
-              encryption enabled, no traceback). handoff offered, user declined to try it
-              (replied "Commit" without running the image; docker run block given).
+              encryption enabled, no traceback).
 🔒 SECURITY   ✅ 0 Critical, 0 High. Diff since the scanned 5741adb is version
               strings, docs and two deleted .claude handoffs -- no code.
               pip-audit clean (unchanged requirements).
@@ -31,7 +32,9 @@ done or recorded in the section below).
               uploads sealed in flight + "While locked, nothing is written".
               architecture.md settings table gains max_upload_mb /
               rate_limit_uploads_per_min.
-📦 RELEASE    ⬜ next: commit approval, push, PR into main, notes approval
+📦 RELEASE    ⏳ de29e7d committed + pushed (user: "Commit"). PR next. First
+              attempt refused by the preflight hook: the handoff annotation sat
+              on a wrapped line of the BUILD row; moved to its first line.
 🚀 SHIP       ⬜
 
 ## IN PROGRESS: next beta -- upload tests, locked-vault fix, upload fly-out (2026-09-18, local)
