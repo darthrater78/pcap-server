@@ -143,10 +143,28 @@ def test_name_resolution_args_off_by_default():
 def test_name_resolution_args_on_enables_host_lookup_explicitly():
     args = packet_parser._name_resolution_args(True)
     assert args == [
-        "-N", "mnt",
+        "-N", "mntd",
         "-o", "nameres.network_name:TRUE",
         "-o", "nameres.use_external_name_resolver:TRUE",
+        "-o", "nameres.dns_pkt_addr_resolution:TRUE",
     ]
+
+
+def test_name_resolution_asks_for_names_from_the_captures_own_dns():
+    """The `d` in -N, asserted as a property and not just as a literal.
+
+    This test previously pinned `-N mnt`, which is the bug: -N's letters are
+    the COMPLETE set of resolutions tshark will perform, not additions to its
+    defaults, so omitting `d` switched OFF resolution from DNS packets in the
+    capture -- the one source that works with no resolver and no hosts file,
+    and therefore the only one that works at all on a server reading someone
+    else's traffic. Asserted separately from the exact list above so a future
+    reordering of the -o flags cannot quietly drop it.
+    """
+    args = packet_parser._name_resolution_args(True)
+    flags = args[args.index("-N") + 1]
+    assert "d" in flags, "resolution from the capture's own DNS answers is off"
+    assert "nameres.dns_pkt_addr_resolution:TRUE" in args
 
 
 def test_name_resolution_args_returns_a_copy_not_the_module_constant():
@@ -933,6 +951,109 @@ async def test_conversations_splits_bytes_by_direction_not_by_who_is_a():
     assert by_addr["10.0.0.1"].packets == 8
     assert by_addr["10.0.0.2"].packets == 7
     assert by_addr["10.0.0.3"].packets == 1
+
+
+# --- name resolution, end to end ---------------------------------------------
+#
+# The regression these cover is one bug in two halves, and either half alone
+# leaves the Traffic Diagram broken: the -N flags did not ask for resolution
+# from the capture's own DNS answers, and get_conversations read the address
+# fields, which never resolve, rather than the _host fields, which do. With
+# only the first fixed, /packets returns names while /conversations returns
+# addresses and the diagram's playback matches nothing.
+#
+# A capture carrying its own DNS answer is the only resolution source that can
+# be tested (and, on a server reading someone else's traffic, usually the only
+# one that works): no resolver is consulted and no hosts file is involved.
+
+
+def _dns_then_traffic_pcap() -> bytes:
+    """A DNS A answer naming host.example.com, then a TCP frame to it.
+
+    Built with tests/packet_builders.py, so the bytes are from the RFCs and
+    the checksums are computed rather than copied.
+    """
+    from tests.packet_builders import dns_response_a, ethernet, ip4, ipv4, mac, pcap, tcp, udp
+
+    src, dst = ip4("10.0.0.5"), ip4("10.0.0.1")
+    answer = dns_response_a("host.example.com", "10.0.0.9")
+    dns_frame = ethernet(
+        mac("00:11:22:33:44:55"), mac("66:77:88:99:aa:bb"), 0x0800,
+        ipv4(src, dst, 17, udp(src, dst, 53, 40000, answer)),
+    )
+    client, server = ip4("10.0.0.1"), ip4("10.0.0.9")
+    tcp_frame = ethernet(
+        mac("00:11:22:33:44:55"), mac("66:77:88:99:aa:bb"), 0x0800,
+        ipv4(client, server, 6, tcp(client, server, 44444, 443, b"hi")),
+    )
+    return pcap([dns_frame, tcp_frame])
+
+
+@needs_tshark
+async def test_packet_list_resolves_a_name_the_capture_itself_carries():
+    """-N mnt returned the address here; -N mntd returns the name."""
+    packets = await packet_parser.get_packet_list(
+        BytesSource(_dns_then_traffic_pcap()), resolve_names=True,
+    )
+    # Frame 2 is the TCP frame to 10.0.0.9, which frame 1's answer named.
+    assert packets[1].destination == "host.example.com"
+
+
+@needs_tshark
+async def test_packet_list_leaves_addresses_alone_when_resolution_is_off():
+    """The opt-in half: nothing is resolved unless it was asked for, because
+    turning it on is what sends queries about the traffic being examined."""
+    packets = await packet_parser.get_packet_list(
+        BytesSource(_dns_then_traffic_pcap()), resolve_names=False,
+    )
+    assert packets[1].destination == "10.0.0.9"
+
+
+@needs_tshark
+async def test_conversations_resolves_names_too_rather_than_only_claiming_to():
+    convs, endpoints = await packet_parser.get_conversations(
+        BytesSource(_dns_then_traffic_pcap()), resolve_names=True,
+    )
+    addresses = {e.address for e in endpoints}
+    assert "host.example.com" in addresses
+    assert "10.0.0.9" not in addresses
+    # The pair, too -- not just the endpoint list, which is built from the
+    # same fields but aggregated separately.
+    assert any("host.example.com" in (c.a, c.b) for c in convs)
+
+
+@needs_tshark
+async def test_conversations_keeps_addresses_when_resolution_is_off():
+    _convs, endpoints = await packet_parser.get_conversations(
+        BytesSource(_dns_then_traffic_pcap()), resolve_names=False,
+    )
+    assert {"10.0.0.1", "10.0.0.5", "10.0.0.9"} == {e.address for e in endpoints}
+
+
+@needs_tshark
+@pytest.mark.parametrize("resolve", [False, True])
+async def test_conversations_and_packet_list_agree_on_every_host_name(resolve):
+    """THE Traffic Diagram regression, stated as the invariant it depends on.
+
+    diagrams.js builds its nodes from get_conversations and its animated
+    packets from get_packet_list, then looks each packet's source and
+    destination up in the node map BY STRING. So every endpoint name the
+    packet list reports must be one the conversations route also reports --
+    with resolution on and with it off. When that broke, nothing in the
+    diagram moved, and no unit test noticed because each route was correct on
+    its own.
+    """
+    data = _dns_then_traffic_pcap()
+    _convs, endpoints = await packet_parser.get_conversations(
+        BytesSource(data), resolve_names=resolve,
+    )
+    packets = await packet_parser.get_packet_list(BytesSource(data), resolve_names=resolve)
+    nodes = {e.address for e in endpoints}
+    from_packets = {p.source for p in packets} | {p.destination for p in packets}
+    assert from_packets <= nodes, (
+        "the diagram's packet-to-node lookup would miss on: "
+        f"{sorted(from_packets - nodes)}"
+    )
 
 
 @needs_tshark

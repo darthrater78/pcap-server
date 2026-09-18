@@ -26,6 +26,26 @@ packets are coming from — which is the question a packet table cannot answer,
 and matters most when a filter narrower than you remember looks exactly like a
 quiet network.
 
+## Opening a pcap from somewhere else
+
+**Upload a pcap**, beside **Start capture** on the Capture tab, opens a small
+panel for a `.pcap` or `.pcapng` recorded elsewhere — Wireshark on a laptop, a
+tcpdump on a box this server cannot reach. Choose the file and press
+**Upload**; the result (the packet count, or why it was refused) stays in the
+panel, and the capture appears in the list below.
+
+An upload is stored exactly as a capture taken here is: encrypted with the same
+key, under a name the server generates (the file's own name is only its label),
+and read by the same viewer — filters, saved views, sanitizing, download and
+delete all work on it unchanged. It is marked **upload** in the list, and the
+line above the filter box reads *uploaded pcap* instead of naming a server,
+interface and capture filter, because this server recorded none of those.
+
+A file is refused if it is not a pcap or pcapng, if tshark cannot read it, or
+if it is larger than **Max uploaded capture size (MB)** in Admin → Settings
+(512 by default). Uploads need HTTPS, like every other change, and are refused
+while encryption is locked in passphrase mode — unlock first.
+
 ## Choosing the columns
 
 The packet list starts on the columns Wireshark opens with — number, time,
@@ -131,6 +151,15 @@ host, and every packet drawn as a time-ordered arrow between two lanes,
 colored by protocol. Click an arrow to jump straight to that packet's detail.
 Rows are spaced evenly rather than by real elapsed time, since a burst of
 packets a millisecond apart would otherwise collapse into an unreadable stack.
+A host name too long for its lane is shortened in the middle; hover it for the
+full name.
+
+Both color the eight most common protocols in view and group the rest as
+**Other**. Eight is more than can be told apart by colour alone, so three
+colours are combined with three shapes — circle, square, diamond — and, in the
+Sequence Diagram, three line styles: any two protocols differ in colour or in
+shape. The legend draws each protocol's actual mark, so match the shape as well
+as the colour.
 
 Both read the current display filter the same way Conversations does, and both
 cap how much they will draw at once (200 hosts for the Traffic Diagram, 40 for
@@ -141,9 +170,10 @@ picture.
 **Resolve hostnames** (the same toggle the packet list uses, under the view
 flags) applies to both: turn it on *before* opening either diagram, since it
 changes what gets fetched rather than how an already-loaded one is drawn, and
-flipping it mid-view does nothing until you reopen. It sends a reverse-DNS
-query for every address in view, same tradeoff as everywhere else it appears
-in this app.
+flipping it mid-view does nothing until you reopen. Names come from the DNS
+answers inside the capture itself, which works even when this server cannot
+look the addresses up, and for addresses those do not cover, from a reverse-DNS
+query — same tradeoff as everywhere else it appears in this app.
 
 ## Saved views
 

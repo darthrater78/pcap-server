@@ -14,7 +14,7 @@ only reach over SSH.
      comment included, the moment the next non-beta release ships. It exists
      to announce a beta while one is current, not to become a permanent
      fixture nobody remembers to remove. -->
-> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.2` — see
+> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.3` — see
 > [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
 > or the Quick Start below installs; pin this exact tag if you want to try it.
 
@@ -101,6 +101,9 @@ plain HTTP.
 a list read off the machine itself, set a duration, a packet cap and a snap
 length, and give it a BPF filter — or pick one from a library grouped by what
 you are hunting (Kerberos, SMB, LDAP, DNS, database ports, TCP flags).
+
+Or **upload a pcap** recorded somewhere else; it is stored encrypted and read
+exactly like one captured here.
 
 **Read it.** A Wireshark-style packet list with protocol colouring, a decoded
 protocol tree and a hex dump. Full display-filter syntax with autocomplete,

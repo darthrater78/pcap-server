@@ -312,6 +312,31 @@
                     </div>
                 </div>
                 <footer class="capture-card-foot">
+                    <!-- Upload a pcap recorded somewhere else: the other way to
+                         get a capture, so it sits beside Start capture. A
+                         fly-out, closed until asked for, because this card is
+                         already a full form and an upload is the occasional
+                         case. It opens upward over the form, never over the
+                         list it adds to.
+
+                         Deliberately NOT a drag-and-drop target: a drop zone
+                         would sit under the pointer for every click in this
+                         panel, and a mis-drop that uploads the wrong file is
+                         not an action with an undo. -->
+                    <div class="upload-flyout-anchor">
+                        <button type="button" id="btn-upload-toggle" class="btn btn-secondary"
+                                aria-expanded="false" aria-controls="upload-flyout">Upload a pcap</button>
+                        <div id="upload-flyout" class="upload-flyout" role="dialog"
+                             aria-labelledby="upload-flyout-title" hidden>
+                            <h2 id="upload-flyout-title">Upload a capture</h2>
+                            <p class="hint">A .pcap or .pcapng recorded elsewhere. Stored encrypted, exactly like a capture taken here.</p>
+                            <div class="upload-row">
+                                <input type="file" id="upload-file" accept=".pcap,.pcapng,.cap,application/vnd.tcpdump.pcap">
+                                <button id="btn-upload-capture" class="btn btn-secondary" disabled>Upload</button>
+                                <span id="upload-msg" class="hint" role="status" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </div>
                     <button id="btn-start-capture" class="btn btn-primary btn-start">
                         <span class="btn-start-icon" aria-hidden="true"></span>Start capture
                     </button>

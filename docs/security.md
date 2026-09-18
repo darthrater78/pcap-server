@@ -66,12 +66,19 @@ unencrypted is possible but has to be asked for explicitly with
 `ALLOW_UNENCRYPTED_CAPTURES=true`.
 
 **No plaintext pcap ever reaches disk.** A capture is sealed as it arrives over
-SFTP, not written and then encrypted. To read one, it is decrypted in flight and
-streamed to tshark, so the only plaintext that exists is the few kilobytes in
-transit between two processes.
+SFTP, not written and then encrypted, and an uploaded pcap is sealed as its
+request body arrives — never spooled to a temporary file first. To read one, it
+is decrypted in flight and streamed to tshark, so the only plaintext that exists
+is the few kilobytes in transit between two processes.
 
 Uploaded SSH private keys are sealed the same way, and a key uploaded before
 encryption was switched on is sealed in place at the next start.
+
+**While locked, nothing is written.** In passphrase mode the app starts without
+the master key and waits for an admin to enter the passphrase. Until then,
+starting or collecting a capture, uploading a pcap and storing an SSH key are
+all refused rather than written unencrypted. (Before 1.1.0-beta.3 an SSH key or
+a collected capture could land in the clear in that window; see the changelog.)
 
 **A sanitized download is built in flight too**, and is never stored. Its
 address and name mapping is keyed by a key derived from the capture's own data

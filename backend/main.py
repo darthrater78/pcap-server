@@ -39,6 +39,7 @@ from backend.capture import (
     CaptureLimitExceeded,
     CaptureManager,
     InterfaceAlreadyCapturing,
+    UploadRejected,
 )
 from backend.bpf import check_filter
 from backend.crypto import CryptoError
@@ -113,7 +114,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.2"
+APP_VERSION = "1.1.0-beta.3"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -135,6 +136,7 @@ async def _housekeeping() -> None:
             rate_limiter.prune()
             packet_rate_limiter.prune()
             capture_start_rate_limiter.prune()
+            upload_rate_limiter.prune()
             filter_check_rate_limiter.prune()
             host_scan_rate_limiter.prune()
             # Renews under 30 days left, and picks up a certificate renewed from
@@ -246,6 +248,15 @@ packet_rate_limiter = SlidingWindowLimiter(
 )
 capture_start_rate_limiter = SlidingWindowLimiter(
     max_per_minute=db.get_setting_int("rate_limit_captures_per_min"),
+)
+
+# Its own budget, lower than capture starts. An upload costs a write of up to
+# max_upload_mb on the captures volume plus a capinfos run, and unlike a
+# capture start there is no interface conflict or concurrency ceiling in front
+# of it -- this limiter is the whole of what bounds how fast one user can fill
+# the disk.
+upload_rate_limiter = SlidingWindowLimiter(
+    max_per_minute=db.get_setting_int("rate_limit_uploads_per_min"),
 )
 
 # The filter check compiles an expression with tcpdump -- a short-lived
@@ -533,21 +544,39 @@ async def security_headers(request: Request, call_next):
 # once it passes 1 MB. So the limit ran after the cost it exists to prevent,
 # and the cost landed on the same volume the captures are written to.
 #
-# Two caps rather than one, because the shapes are not comparable: every JSON
-# body this API takes is a handful of fields, and the one upload it accepts is
-# a private key.
+# Three caps rather than one, because the shapes are not comparable: every JSON
+# body this API takes is a handful of fields, the key upload is a private key,
+# and a pcap upload is a packet capture.
 #
-# The residual, stated rather than implied: a chunked request carries no
-# Content-Length and cannot be refused up front. Those still reach the
-# per-endpoint checks, which is where every request stood before this. Closing
-# that too means counting bytes off the stream, which is a larger change than
-# the hole justifies while the only upload route is admin-only and HTTPS-only.
+# The residual this comment used to state -- that a chunked request carries no
+# Content-Length and so cannot be refused up front -- still holds for the first
+# two, and is unchanged: they reach their own per-endpoint checks, which is
+# where every request stood before this middleware existed.
+#
+# It does NOT hold for the pcap upload, which is the one route where the hole
+# would actually matter. That route reads the raw body itself and counts the
+# bytes as they arrive (CaptureManager.import_upload), so its limit is enforced
+# on the stream whether a Content-Length was declared, understated, or absent.
+# The check here is the cheap early refusal for an honest client, not the only
+# thing standing in front of the disk.
 _MAX_BODY_BYTES = 64 * 1024
 _MAX_UPLOAD_BYTES = 128 * 1024  # the 64 KB key limit, with room for multipart framing
 
+# Read from settings per request rather than captured at import: an admin who
+# raises max_upload_mb should not have to restart the container for the
+# middleware and the route to agree on the number.
+_UPLOAD_PATH = "/api/captures/upload"
+
 
 def _body_limit(path: str) -> int:
-    return _MAX_UPLOAD_BYTES if path.startswith("/api/admin/ssh-keys") else _MAX_BODY_BYTES
+    if path.startswith("/api/admin/ssh-keys"):
+        return _MAX_UPLOAD_BYTES
+    if path.startswith(_UPLOAD_PATH):
+        # A few KB of slack over the configured ceiling so the refusal comes
+        # from the route, with its own message naming the setting, rather than
+        # from a middleware 413 for a file that is exactly on the line.
+        return db.get_setting_int("max_upload_mb") * 1024 * 1024 + 64 * 1024
+    return _MAX_BODY_BYTES
 
 
 @app.middleware("http")
@@ -889,6 +918,10 @@ async def admin_update_setting(req: SettingUpdate, user: dict = Depends(require_
         packet_rate_limiter.update_config(int_val)
     elif req.key == "rate_limit_captures_per_min":
         capture_start_rate_limiter.update_config(int_val)
+    elif req.key == "rate_limit_uploads_per_min":
+        upload_rate_limiter.update_config(int_val)
+    # max_upload_mb needs no live update: both the middleware's early refusal
+    # and the route's own byte count read it from settings per request.
     return {"ok": True}
 
 
@@ -1795,6 +1828,16 @@ def _store_ssh_key(name: str, content: bytes) -> dict:
     except PrivateKeyRejected as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    # A locked vault has cryptor=None, which the write below would read as
+    # "encryption disabled" and store the private key in the clear. Nothing
+    # re-seals it later in passphrase mode either: key migration only runs at a
+    # startup that already has a key, and passphrase mode never starts with one.
+    if vault.locked:
+        raise HTTPException(
+            503, "encryption is locked, so this key cannot be stored encrypted -- "
+                 "unlock encryption first",
+        )
+
     SSH_KEYS_DIR.mkdir(parents=True, exist_ok=True)
     # Sealed before it ever touches disk when a master key is configured --
     # same as captures, a stored private key never exists as a plaintext file
@@ -2091,6 +2134,8 @@ async def start_capture(req: CaptureRequest, user: dict = Depends(get_current_us
         _refuse_self_target(str(exc), "This capture cannot start")
     except CaptureLimitExceeded as exc:
         raise HTTPException(429, str(exc))
+    except CryptoError as exc:
+        raise HTTPException(503, str(exc))
     except InterfaceAlreadyCapturing as exc:
         # 409, not 429: this is a conflict over one link that waiting will not
         # clear, so retrying the same request is not the remedy.
@@ -2098,6 +2143,71 @@ async def start_capture(req: CaptureRequest, user: dict = Depends(get_current_us
     except Exception:
         logger.exception("failed to start capture")
         raise HTTPException(500, "failed to start capture")
+
+
+# A pcap recorded somewhere else, uploaded to be read here.
+#
+# Declared BEFORE /api/captures/{capture_id} would match "upload" as an id --
+# the same ordering hazard /api/bpf/check was given its own prefix to avoid.
+# This one keeps the /api/captures/ prefix because it genuinely creates a
+# capture record, so the routes are ordered by declaration and this comment is
+# what stops a future reordering breaking it quietly.
+#
+# The body is the raw pcap, not a multipart form. CaptureManager.import_upload
+# says why at length: multipart would spool the plaintext capture to a temp
+# file before anything sealed it, and a multipart file part has no size cap in
+# front of it at all.
+_UPLOAD_NAME_OK = re.compile(r"[A-Za-z0-9 ._()\[\]-]+")
+
+
+def _upload_label(filename: str) -> str:
+    """A display label from a client-supplied filename, or "" for anything odd.
+
+    This string is a LABEL and nothing else -- it never becomes a path, and the
+    file it describes is stored under a server-generated UUID (see
+    CaptureManager.import_upload). So the job here is not path safety, which is
+    structural; it is to keep something unreadable out of the capture list, and
+    to hand the frontend a name it will not have to think hard about escaping.
+    A name that does not fit is dropped rather than rewritten: an empty label
+    shows the capture's own id, which is honest, where a mangled one would look
+    like the file the user chose and not be it.
+    """
+    name = filename.strip()[:120]
+    return name if name and _UPLOAD_NAME_OK.fullmatch(name) else ""
+
+
+@app.post("/api/captures/upload")
+async def upload_capture(
+    request: Request,
+    filename: str = Query("", max_length=255),
+    user: dict = Depends(get_current_user),
+):
+    # The read-only-over-HTTP middleware already refuses every mutating /api/
+    # call on a cleartext connection, so this is the second of two. It is here
+    # deliberately rather than as duplication to trim: this request body is a
+    # packet capture, which is exactly what the download route guards against
+    # putting on a cleartext socket, and neither guard should be the only one.
+    _require_secure_transport(request)
+    if not upload_rate_limiter.allow(user["id"]):
+        raise HTTPException(429, "too many uploads, slow down")
+
+    max_bytes = db.get_setting_int("max_upload_mb") * 1024 * 1024
+    try:
+        return await capture_manager.import_upload(
+            user["id"], _upload_label(filename), request.stream(), max_bytes,
+        )
+    except UploadRejected as exc:
+        # 400, not 500: everything this raises is a statement about the file
+        # the caller sent -- wrong format, too big, empty, unreadable -- and
+        # each message is written to be shown to whoever chose the file.
+        raise HTTPException(400, str(exc))
+    except CryptoError as exc:
+        # The vault is locked, so there is no key to seal with. 503 because
+        # waiting (for an admin to unlock) is the remedy, not a different file.
+        raise HTTPException(503, str(exc))
+    except OSError:
+        logger.exception("failed to store uploaded capture")
+        raise HTTPException(507, "could not write the upload to the captures volume")
 
 
 @app.post("/api/captures/{capture_id}/stop")

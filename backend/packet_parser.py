@@ -237,11 +237,29 @@ class ColumnFieldError(ValueError):
 # reverse-DNS query for every address in the capture. On a tool used to examine
 # suspicious traffic, that tells the resolver what is being investigated -- so
 # it is off unless the operator asks for it, and the UI says what it does.
+#
+# The `d` in the -N flags is what makes resolution work on a stored pcap at all,
+# and it was missing. -N's letters are the COMPLETE set of resolutions tshark
+# will perform -- not additions to the defaults -- so `mnt` silently switched
+# OFF the nameres.dns_pkt_addr_resolution that ships enabled, which is the one
+# source that needs no network: the names in the capture's own DNS answers.
+# Everything else about the flags was right and did nothing, because a pcap
+# server reading someone else's traffic usually has no reverse-DNS for those
+# addresses and often no resolver at all.
+#
+# Measured on a two-frame pcap (a DNS A answer for host.example.com, then a TCP
+# frame to that address): under -N mnt the destination column reads 10.0.0.9,
+# under -N mntd it reads host.example.com.
 _RESOLVE_OFF = ["-n"]
 _RESOLVE_ON = [
-    "-N", "mnt",
+    "-N", "mntd",
     "-o", "nameres.network_name:TRUE",
     "-o", "nameres.use_external_name_resolver:TRUE",
+    # Explicit rather than relying on the shipped default, so the behaviour
+    # -N's `d` asks for cannot be turned off by a profile this container picks
+    # up. The two settings are a pair: `d` selects the resolution, this enables
+    # the source it reads from.
+    "-o", "nameres.dns_pkt_addr_resolution:TRUE",
 ]
 
 
@@ -558,14 +576,30 @@ async def get_conversations(
 
     resolve_names follows the same opt-in as get_packet_list: off by default,
     since turning it on sends a reverse-DNS query for every address in the
-    capture. -e ip.src/ip.dst resolve to the same names -N mnt would put in
-    _ws.col.Source/Destination -- tshark's per-field resolution follows the
-    field's own type (network address, here), same mechanism either way.
+    capture.
+
+    It reads DIFFERENT FIELDS when it is on, which the previous version of this
+    docstring denied: it claimed -e ip.src/ip.dst resolve to whatever
+    _ws.col.Source holds, "same mechanism either way". They do not. ip.src is
+    the address field and prints the address whatever the resolution settings
+    say; the resolved value lives in the separate ip.src_host / ip.dst_host
+    fields (ipv6.src_host / ipv6.dst_host for v6), which is where Wireshark's
+    own Source column gets it from.
+
+    That was not a cosmetic error. The Traffic Diagram builds its nodes from
+    this route and its animated packets from get_packet_list, then matches the
+    two by string. With resolution on, the nodes were addresses and the packets
+    were names, so every lookup missed and the playback drew nothing at all.
+    Reading the _host fields here is what makes the two agree.
     """
     cmd = ["tshark", "-r", "-"]
     cmd += _name_resolution_args(resolve_names)
+    src, dst = ("ip.src_host", "ip.dst_host") if resolve_names else ("ip.src", "ip.dst")
+    v6src, v6dst = (
+        ("ipv6.src_host", "ipv6.dst_host") if resolve_names else ("ipv6.src", "ipv6.dst")
+    )
     cmd += ["-T", "fields",
-           "-e", "ip.src", "-e", "ip.dst", "-e", "ipv6.src", "-e", "ipv6.dst",
+           "-e", src, "-e", dst, "-e", v6src, "-e", v6dst,
            "-e", "frame.len", "-E", "separator=\t", "-E", "occurrence=f"]
     if display_filter:
         _validate_display_filter(display_filter)

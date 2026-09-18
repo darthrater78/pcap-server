@@ -12,13 +12,61 @@
 // /conversations for the static graph, /packets for anything per-packet --
 // so there is nothing new on the backend.
 //
-// Protocol color is the dataviz skill's validated categorical palette
+// Protocol identity is the dataviz skill's validated categorical palette
 // (--diagram-cat-1/2/3 in style.css), not the app's existing --pkt-* row
 // tints: those are tuned for a tint behind a text column and fail the
 // identity-alone gates a node-link diagram and a swimlane both need (any two
-// colors can end up adjacent). Capped at the first three slots -- the only
-// ones that clear the stricter all-pairs check -- with everything else
-// folded into one neutral --diagram-other, always paired with a label.
+// colors can end up adjacent).
+//
+// It used to stop at three protocols, one hue each, with everything past the
+// third folded into a neutral grey. Eight are wanted, and eight hues is not
+// available: run the skill's validator over its whole eight-slot palette on
+// the all-pairs list this diagram needs and both modes hard-FAIL (light CVD
+// 3.2, normal-vision 7.1; dark CVD 1.6, normal-vision 7.1), and a
+// normal-vision pair below 15 is a gate no amount of secondary encoding
+// excuses. Enumerating every subset of those eight hues, FOUR is the most that
+// clears all-pairs in both modes, and only two orderings manage it, both
+// sitting in the 6-8 CVD warn band. The three already here clear at 9.2 light
+// / 9.4 dark, comfortably past the target.
+//
+// So the eight slots come from composite encoding, which is what the skill
+// prescribes past the color ceiling -- three validated hues by three shapes.
+// Any two slots differ in hue (>= 9.2 apart, measured) or share a hue and
+// differ in shape, so no pair rests on a color distinction that was never
+// verified. Zero hex values change: a capture whose traffic is three protocols
+// looks exactly as it did.
+//
+// The shape channel is spent where each diagram has one to spend: the topology
+// draws marks, so it varies the mark's outline; the sequence diagram draws
+// lines, which have no shape, so it varies the stroke dash. Both are driven by
+// the same slot index, and the legend swatch draws the real mark rather than a
+// colored square, so what identifies a protocol on screen is what identifies
+// it in the legend.
+//
+// Light-mode aqua is 2.82:1 on the white canvas, under the 3:1 bar. The
+// skill's relief rule covers it and is satisfied twice over: every legend
+// entry is labelled with its protocol name and count, and every mark carries a
+// <title>. The Conversations dialog is the table view of the same data.
+const PROTOCOL_SLOT_CAP = 8;
+
+// Hue cycles fastest so the first three slots are one hue each, exactly as
+// before. The grid holds nine combinations; the cap of eight is a legend-width
+// choice, not a color-safety limit, which is why one combination goes unused.
+// Order is fixed and never cycled -- a ninth protocol folds into "Other".
+const PROTOCOL_SLOTS = [
+    { color: "var(--diagram-cat-1)", shape: "circle", dash: "" },
+    { color: "var(--diagram-cat-2)", shape: "square", dash: "6 3" },
+    { color: "var(--diagram-cat-3)", shape: "diamond", dash: "1 3" },
+    { color: "var(--diagram-cat-1)", shape: "square", dash: "6 3" },
+    { color: "var(--diagram-cat-2)", shape: "diamond", dash: "1 3" },
+    { color: "var(--diagram-cat-3)", shape: "circle", dash: "" },
+    { color: "var(--diagram-cat-1)", shape: "diamond", dash: "1 3" },
+    { color: "var(--diagram-cat-2)", shape: "circle", dash: "" },
+];
+
+// Everything past the cap. A neutral, and the one slot whose label is not a
+// protocol name -- so it never claims an identity it cannot distinguish.
+const OTHER_SLOT = { color: "var(--diagram-other)", shape: "circle", dash: "2 2" };
 
 const TOPOLOGY_NODE_CAP = 200;
 const SEQUENCE_LANE_CAP = 40;
@@ -43,49 +91,66 @@ function svgEl(tag, attrs = {}) {
 }
 
 // Canvas's 2D context does not resolve CSS custom properties -- SVG
-// attributes and inline styles do, so colorOf below keeps var(...) strings
-// for everything except the one place (the animated dots) that needs a
-// literal color.
+// attributes and inline styles do, so PROTOCOL_SLOTS below keeps var(...)
+// strings and only the canvas (the animated packet marks, and the backdrop
+// ring around them) resolves them to literal colors.
 function resolveColor(expr) {
     const m = /^var\((--[\w-]+)\)$/.exec(expr);
     if (!m) return expr;
     return getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim();
 }
 
-// Ranks the protocols actually present and assigns the three gate-safe
-// categorical slots to the most common ones; everything past that shares one
-// neutral "other" swatch rather than generating a fourth hue no CVD check
-// covers.
+// Ranks the protocols actually present and hands each of the most common ones
+// a slot from the fixed table above; everything past the cap shares the neutral
+// "other" slot rather than generating a hue no CVD check covers.
 function rankProtocols(packets) {
     const counts = new Map();
     for (const p of packets) counts.set(p.protocol, (counts.get(p.protocol) || 0) + 1);
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    const slots = ["var(--diagram-cat-1)", "var(--diagram-cat-2)", "var(--diagram-cat-3)"];
-    const colorOf = new Map();
-    ranked.forEach(([proto], i) => colorOf.set(proto, i < 3 ? slots[i] : "var(--diagram-other)"));
-    return { ranked, colorOf };
+    const slotOf = new Map();
+    ranked.forEach(([proto], i) => {
+        slotOf.set(proto, i < PROTOCOL_SLOT_CAP ? PROTOCOL_SLOTS[i] : OTHER_SLOT);
+    });
+    return { ranked, slotOf };
 }
 
-function protocolColor(colorOf, proto) {
-    return colorOf.get(proto) || "var(--diagram-other)";
+function protocolSlot(slotOf, proto) {
+    return slotOf.get(proto) || OTHER_SLOT;
 }
 
-function legendItem(color, label, count) {
-    return `<span class="diagram-legend-item"><span class="diagram-legend-swatch" ` +
-        `style="background:${color}"></span>${escHtml(label)} (${count.toLocaleString()})</span>`;
+// The legend swatch is the mark, drawn: the slot's dash on a short line and
+// the slot's shape on top of it. A colored square would tell a reader which
+// hue a protocol has and leave them to guess which of the same-hue shapes on
+// the canvas is theirs.
+function slotSwatch(slot) {
+    const shape = {
+        circle: '<circle cx="9" cy="7" r="4"></circle>',
+        square: '<rect x="5" y="3" width="8" height="8"></rect>',
+        diamond: '<path d="M9,2 L14,7 L9,12 L4,7 Z"></path>',
+    }[slot.shape];
+    return `<svg class="diagram-legend-swatch" width="18" height="14" viewBox="0 0 18 14" ` +
+        `aria-hidden="true" fill="${slot.color}" stroke="${slot.color}">` +
+        `<line x1="0" y1="7" x2="18" y2="7" stroke-width="1.5"` +
+        (slot.dash ? ` stroke-dasharray="${slot.dash}"` : "") + `></line>${shape}</svg>`;
 }
 
-// Identity is never color-alone here: every swatch carries its own protocol
-// name and count, both in the legend and (via <title>) on every mark.
-function renderLegend(el, ranked, colorOf) {
+function legendItem(slot, label, count) {
+    return `<span class="diagram-legend-item">${slotSwatch(slot)}` +
+        `${escHtml(label)} (${count.toLocaleString()})</span>`;
+}
+
+// Identity is never color-alone here: every entry carries its own protocol
+// name and count beside a swatch that draws the actual mark, and every mark on
+// the canvas repeats the name via <title>.
+function renderLegend(el, ranked, slotOf) {
     if (!ranked.length) {
         el.innerHTML = '<span class="diagram-legend-empty">No packets</span>';
         return;
     }
-    const top = ranked.slice(0, 3);
-    const otherCount = ranked.slice(3).reduce((s, [, c]) => s + c, 0);
-    const items = top.map(([proto, count]) => legendItem(colorOf.get(proto), proto, count));
-    if (otherCount) items.push(legendItem("var(--diagram-other)", "Other", otherCount));
+    const top = ranked.slice(0, PROTOCOL_SLOT_CAP);
+    const otherCount = ranked.slice(PROTOCOL_SLOT_CAP).reduce((s, [, c]) => s + c, 0);
+    const items = top.map(([proto, count]) => legendItem(protocolSlot(slotOf, proto), proto, count));
+    if (otherCount) items.push(legendItem(OTHER_SLOT, "Other", otherCount));
     el.innerHTML = items.join("");
 }
 
@@ -409,10 +474,15 @@ async function onTopologyPlayClick() {
             showDiagramCapWarning("topology", result.total, PACKET_DIAGRAM_CAP, topologyState.filter);
             return;
         }
-        const { ranked, colorOf } = rankProtocols(result.packets);
-        const resolvedColorOf = new Map([...colorOf].map(([proto, expr]) => [proto, resolveColor(expr)]));
-        renderLegend($("topology-legend"), ranked, colorOf);
-        topologyPlayback = { packets: result.packets, resolvedColorOf, playing: false, progress: 0, raf: null };
+        const { ranked, slotOf } = rankProtocols(result.packets);
+        // Canvas needs literal colors (it cannot resolve var(...)), so the
+        // slots are resolved once here rather than per frame. The shape rides
+        // along unchanged -- it is the same slot object's field.
+        const resolvedSlotOf = new Map(
+            [...slotOf].map(([proto, slot]) => [proto, { ...slot, color: resolveColor(slot.color) }])
+        );
+        renderLegend($("topology-legend"), ranked, slotOf);
+        topologyPlayback = { packets: result.packets, resolvedSlotOf, playing: false, progress: 0, raf: null };
         $("topology-scrubber").max = String(result.packets.length);
         $("topology-scrubber").disabled = false;
         $("topology-speed").disabled = false;
@@ -464,12 +534,45 @@ function drawTopologyFrame(ctx, canvas, playback) {
         const frac = i === idx ? playback.progress - idx : 1;
         const x = a.x + (b.x - a.x) * frac, y = a.y + (b.y - a.y) * frac;
         ctx.globalAlpha = Math.max(0.08, 1 - (idx - i) / 20);
-        ctx.fillStyle = playback.resolvedColorOf.get(p.protocol) || "#888";
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fill();
+        const slot = playback.resolvedSlotOf.get(p.protocol);
+        drawPacketMark(ctx, x, y, slot ? slot.color : "#888", slot ? slot.shape : "circle");
     }
     ctx.globalAlpha = 1;
+}
+
+// One packet on the canvas. The shape is half of what identifies its protocol
+// (see PROTOCOL_SLOTS), so it is drawn a little larger than the 4px circle
+// this used to be -- a 4px square and a 4px circle are the same smudge.
+//
+// The ring is the surface gap two overlapping marks need to stay two marks. It
+// is painted from the canvas's own backdrop rather than a fixed color so it
+// works in both themes, and it goes UNDER the fill so it never eats into the
+// shape it is separating.
+const PACKET_MARK_R = 5;
+
+function drawPacketMark(ctx, x, y, color, shape) {
+    const r = PACKET_MARK_R;
+    const trace = () => {
+        ctx.beginPath();
+        if (shape === "square") {
+            ctx.rect(x - r, y - r, r * 2, r * 2);
+        } else if (shape === "diamond") {
+            ctx.moveTo(x, y - r * 1.3);
+            ctx.lineTo(x + r * 1.3, y);
+            ctx.lineTo(x, y + r * 1.3);
+            ctx.lineTo(x - r * 1.3, y);
+            ctx.closePath();
+        } else {
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+        }
+    };
+    trace();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = resolveColor("var(--bg-primary)") || "#000";
+    ctx.stroke();
+    trace();
+    ctx.fillStyle = color;
+    ctx.fill();
 }
 
 function updatePlaybackCount(playback) {
@@ -526,10 +629,30 @@ function buildSequenceLayout(packets, width) {
     const laneGap = hosts.length > 1 ? (width - 160) / (hosts.length - 1) : 0;
     hosts.forEach((h, i) => laneX.set(h, 80 + i * laneGap));
     const rowGap = 22, topPad = 44;
-    return { hosts, laneX, rowGap, topPad, totalHeight: topPad + packets.length * rowGap + 30 };
+    return { hosts, laneX, laneGap, rowGap, topPad, totalHeight: topPad + packets.length * rowGap + 30 };
 }
 
-function renderSequenceSVG(svg, packets, colorOf) {
+// .seq-lane-label is 11px monospace; a monospace glyph is ~0.6em wide.
+const LANE_LABEL_CHAR_PX = 6.8;
+
+// A centred label may use the gap to its neighbours and twice its distance to
+// either edge -- past that it runs off the diagram (the leftmost lane sits
+// 80px in, so a resolved hostname clipped there) or into the next label.
+function laneLabelRoom(x, width, laneGap) {
+    return Math.min(laneGap - 8, 2 * x - 8, 2 * (width - x) - 8);
+}
+
+// Shortened in the middle, not the end: a hostname is told apart by its first
+// label and an address by its last octets, and a middle cut keeps both. The
+// full name rides in the label's <title>.
+function fitLaneLabel(host, roomPx) {
+    const max = Math.max(5, Math.floor(roomPx / LANE_LABEL_CHAR_PX));
+    if (host.length <= max) return host;
+    const tail = Math.floor((max - 1) / 2);
+    return `${host.slice(0, max - 1 - tail)}…${host.slice(host.length - tail)}`;
+}
+
+function renderSequenceSVG(svg, packets, slotOf) {
     svg.innerHTML = "";
     const width = Math.max(svg.parentElement.clientWidth || 800, 400);
     const layout = buildSequenceLayout(packets, width);
@@ -554,18 +677,30 @@ function renderSequenceSVG(svg, packets, colorOf) {
             class: "seq-lane-line", x1: x, y1: layout.topPad - 12, x2: x, y2: layout.totalHeight - 10,
         }));
         const label = svgEl("text", { class: "seq-lane-label", x, y: layout.topPad - 20, "text-anchor": "middle" });
-        label.textContent = host;
+        const room = laneLabelRoom(x, width, layout.hosts.length > 1 ? layout.laneGap : Infinity);
+        label.textContent = fitLaneLabel(host, room);
+        if (label.textContent !== host) {
+            const full = svgEl("title");
+            full.textContent = host;
+            label.append(full);
+        }
         laneLayer.append(label);
     }
 
     packets.forEach((p, i) => {
         const y = layout.topPad + i * layout.rowGap;
         const x1 = layout.laneX.get(p.source), x2 = layout.laneX.get(p.destination);
-        const color = protocolColor(colorOf, p.protocol);
+        const slot = protocolSlot(slotOf, p.protocol);
         const d = x1 === x2 ? `M${x1 - 12},${y} L${x1 + 12},${y}` : `M${x1},${y} L${x2},${y}`;
-        const path = svgEl("path", {
-            class: "seq-arrow", d, stroke: color, "stroke-width": 1.5, "marker-end": "url(#seq-arrowhead)",
-        });
+        const attrs = {
+            class: "seq-arrow", d, stroke: slot.color, "stroke-width": 1.5,
+            "marker-end": "url(#seq-arrowhead)",
+        };
+        // A lane's worth of dashes is what tells two same-hue protocols apart
+        // here, since a line has no shape to vary. The arrowhead stays solid:
+        // it inherits context-stroke, not the dash pattern.
+        if (slot.dash) attrs["stroke-dasharray"] = slot.dash;
+        const path = svgEl("path", attrs);
         path.dataset.frame = p.number;
         const title = svgEl("title");
         title.textContent = `#${p.number} ${p.protocol} ${p.source} → ${p.destination} ` +
@@ -614,9 +749,9 @@ async function openSequenceDialog() {
             showDiagramCapWarning("sequence", hosts.size, SEQUENCE_LANE_CAP, filter, "hosts");
             return;
         }
-        const { ranked, colorOf } = rankProtocols(result.packets);
-        renderLegend($("sequence-legend"), ranked, colorOf);
-        renderSequenceSVG($("sequence-svg"), result.packets, colorOf);
+        const { ranked, slotOf } = rankProtocols(result.packets);
+        renderLegend($("sequence-legend"), ranked, slotOf);
+        renderSequenceSVG($("sequence-svg"), result.packets, slotOf);
     } catch (e) {
         $("sequence-legend").innerHTML = `<span style="color:var(--danger)">${escHtml(e.message)}</span>`;
     }
