@@ -935,6 +935,8 @@ Adjustable from the Admin panel, applied without a restart:
 | `rate_limit_lockout_minutes` | 15 |
 | `rate_limit_packets_per_min` | 30 |
 | `rate_limit_captures_per_min` | 10 |
+| `max_upload_mb` | 512 |
+| `rate_limit_uploads_per_min` | 6 |
 
 ---
 

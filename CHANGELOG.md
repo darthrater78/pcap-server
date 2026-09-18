@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.1.0-beta.3 — 2026-09-18
+
+Upload a pcap recorded elsewhere, hostname resolution that actually resolves,
+more protocols in the diagrams — and a security fix for installs using
+passphrase mode.
+
+### Security
+
+- **Nothing is written in the clear while encryption is locked.** In
+  passphrase mode the app starts locked until an admin enters the passphrase,
+  and during that window a locked vault looked the same to the write paths as
+  encryption being switched off. An SSH private key uploaded or pasted then was
+  stored as plaintext — and never sealed afterwards, since passphrase mode never
+  starts with a key — and a capture collected then was written as a plaintext
+  `.pcap` until the next unlock. Both are now refused (`503`, "unlock encryption
+  first"), and a capture cannot start while locked. Installs using a key file
+  or `PCAP_MASTER_KEY` never start locked and were not affected. If you use
+  passphrase mode, check Admin → SSH keys for a key added before an unlock:
+  delete and re-add it to have it stored sealed.
+
+### Added
+
+- **Upload a pcap.** **Upload a pcap**, beside Start capture, takes a `.pcap` or
+  `.pcapng` recorded somewhere else and stores it exactly as a capture taken
+  here is stored: encrypted with the same key, named by a server-generated ID,
+  and opened by the same viewer, filters, saved views, sanitizer and download.
+  It is marked **upload** in the capture list, and says it was not recorded by
+  this server rather than showing a blank interface and filter. The size limit
+  is counted as the file arrives, so it holds even without a `Content-Length`;
+  two new Admin settings, **Max uploaded capture size (MB)** (512) and
+  **Capture uploads per minute** (6), control it.
+- **Eight protocols in the diagrams, up from three.** The three existing colours
+  are unchanged and combined with three shapes (and three line styles in the
+  Sequence Diagram), so any two protocols differ in colour or in shape. The
+  legend draws each protocol's actual mark.
+
+### Fixed
+
+- **Resolve hostnames resolved nothing on a stored capture** — in the packet
+  list as well as the diagrams. tshark was told which name sources to use in a
+  way that switched off the capture's own DNS answers, the one source that
+  works when the server cannot look up the traffic's addresses itself. The
+  diagrams' host list also read fields that never carry resolved names, so
+  turning resolution on made Traffic Diagram playback draw nothing.
+- **Long host names in the Sequence Diagram** ran off its edge or into each
+  other; they are shortened in the middle to fit, with the full name on hover.
+- **Closed dialogs were laid out below the page**, out of sight but widening
+  the page on a phone and leaving their buttons reachable with Tab.
+
 ## 1.1.0-beta.2 — 2026-09-17
 
 Follow-ups to the 1.1.0-beta.1 diagrams, plus one unrelated fix.
