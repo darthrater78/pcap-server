@@ -9,6 +9,7 @@ visitor about the build it is running.
 from __future__ import annotations
 
 from tests.browser.conftest import (
+    BROWSER_LOOP,
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
     needs_browser,
@@ -16,7 +17,7 @@ from tests.browser.conftest import (
     totp_now,
 )
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 
 async def test_first_run_offers_registration_instead_of_a_login_box(fresh_page):

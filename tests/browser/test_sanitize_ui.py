@@ -8,9 +8,9 @@ itself is covered against the real route in tests/test_sanitizer.py.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 CAPTURE_ID = "22222222-2222-2222-2222-222222222222"
 

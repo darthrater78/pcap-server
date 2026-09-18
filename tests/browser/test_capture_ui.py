@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 HOST = "203.0.113.41"
 KEY_NAME = "browser-test-key"

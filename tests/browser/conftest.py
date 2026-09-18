@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from tests.browser.browser_binary import launch_kwargs
 
@@ -61,6 +62,10 @@ needs_browser = pytest.mark.skipif(
     not HAS_PLAYWRIGHT,
     reason="playwright is not installed -- pip install -r backend/requirements-dev.txt",
 )
+
+# Every browser test runs on the session's event loop, the one the shared
+# chromium lives on (see the browser fixture for why it has to be the same).
+BROWSER_LOOP = pytest.mark.asyncio(loop_scope="session")
 
 # The admin account every suite signs in as. Created through the real
 # registration and TOTP-enrolment endpoints, not by writing rows. These are not
@@ -146,15 +151,44 @@ def _start_server(root: Path) -> tuple[LiveServer, subprocess.Popen]:
     )
     keyscan.chmod(0o755)
 
+    # The same reasoning for the SSH connections the app opens itself, which go
+    # through asyncssh in-process, so there is no binary to stand in for.
+    # TEST-NET-3 never answers, so every connect waited out the app's 15s
+    # CONNECT_TIMEOUT: one test spent 15s on it, and a page that closed
+    # mid-connect left uvicorn waiting on that request at shutdown until
+    # _stop_server gave up and killed it. Python imports sitecustomize from the
+    # path at startup, before `-m backend.serve` runs, so this lowers the
+    # constant in the test server's process only; the app's source and its
+    # production default are untouched.
+    shim_dir = root / "pyshim"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    (shim_dir / "sitecustomize.py").write_text(
+        "import backend.ssh_manager\n"
+        "# Loudly, if the constant is ever renamed: setting a name that is not\n"
+        "# there would quietly bring the fifteen-second waits back.\n"
+        "assert hasattr(backend.ssh_manager, 'CONNECT_TIMEOUT')\n"
+        "backend.ssh_manager.CONNECT_TIMEOUT = 1\n"
+    )
+    pythonpath = os.pathsep.join(
+        p for p in (str(shim_dir), str(REPO_ROOT), os.environ.get("PYTHONPATH")) if p
+    )
+
     port = _free_port()
     env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PYTHONPATH": pythonpath,
         "DATA_DIR": str(root / "data"),
         "CAPTURES_DIR": str(root / "captures"),
         "SSH_KEYS_DIR": str(root / "ssh-keys"),
         "PCAP_MASTER_KEY": base64.b64encode(secrets.token_bytes(32)).decode(),
         "COOKIE_SECURE": "false",
+        # Same reasoning as the stand-in ssh-keyscan, for the SSH connections
+        # the app makes itself: TEST-NET-3 never answers, and waiting out the
+        # default fifteen seconds proves nothing a second does not. A page that
+        # closed mid-connect also left uvicorn waiting on that request at
+        # shutdown, until _stop_server gave up and killed it.
+        "PCAP_SSH_CONNECT_TIMEOUT": "1",
     }
     log = root / "server.log"
     # To a file rather than a pipe nobody reads: a pipe fills and blocks the
@@ -264,14 +298,21 @@ def fresh_server():
         shutil.rmtree(root, ignore_errors=True)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def browser():
-    """A headless chromium, for one test.
+    """One headless chromium per test process, shared by every test in it.
 
-    Per test rather than per session because an async fixture outliving the
-    test's event loop has to be pinned to a loop of its own, and every test
-    using it pinned to the same one. Chromium starts in a fraction of a second;
-    that is the cheaper side of the trade.
+    Launching one cost about half a second a test -- a playwright driver and a
+    chromium started and torn down some 250 times, more than the tests
+    themselves took. Isolation does not come from the browser but from the
+    context: each test gets a fresh one (no cookies, no storage) from _open_page.
+
+    An async fixture that outlives a test has to live on an event loop that
+    does too, and everything that talks to it has to use that same loop:
+    playwright objects are bound to the loop that created them, and awaiting
+    one from another loop does not fail, it hangs. So this fixture, the page
+    fixtures below and every browser test (BROWSER_LOOP in each module's
+    pytestmark) all run on the session loop.
     """
     if not HAS_PLAYWRIGHT:
         pytest.skip("playwright is not installed")
@@ -323,7 +364,7 @@ async def _open_page(browser, url: str):
     return context, page
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def page(browser, live_server):
     context, page = await _open_page(browser, live_server.url)
     try:
@@ -332,7 +373,7 @@ async def page(browser, live_server):
         await context.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def fresh_page(browser, fresh_server):
     context, page = await _open_page(browser, fresh_server.url)
     try:
@@ -360,35 +401,24 @@ async def sign_in(page, live_server) -> None:
 
 
 @pytest.fixture(scope="session")
-def admin_session(live_server):
+def admin_session(api_client):
     """One signed-in session cookie, minted once for every app_page to reuse.
 
     Signing in through the login screen costs about 0.75s a test -- a scrypt
     verify at OWASP cost, two round trips and a TOTP step -- and it was paid by
     every test that only wanted to be signed in, some 200 of them. The login
     screen itself is exercised by the tests that are about it, which still go
-    through sign_in().
+    through sign_in(). The cookie is api_client's: the same admin, already
+    signed in, so it costs no login of its own.
 
     The session is the admin's, and only a test that ends it (signing out) or
     an admin action on that same user can invalidate it; app_page notices and
     signs in the slow way rather than handing a test a dead session.
     """
-    import httpx
-
-    with httpx.Client(base_url=live_server.url, timeout=30) as client:
-        client.post(
-            "/api/auth/login",
-            json={
-                "username": ADMIN_USERNAME,
-                "password": ADMIN_PASSWORD,
-                "totp_code": totp_now(live_server.totp_secret),
-                "trust_device": False,
-            },
-        ).raise_for_status()
-        return {"value": client.cookies["session"]}
+    return {"value": api_client.cookies["session"]}
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def app_page(page, live_server, admin_session):
     """A page signed in and sitting on the Servers tab."""
     await page.context.add_cookies(

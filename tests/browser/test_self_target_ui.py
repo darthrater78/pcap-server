@@ -10,9 +10,9 @@ covered in tests/test_servers.py and tests/test_localnet.py.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 FINDING = ("the target reports the same kernel boot id as pcap-server itself, "
            "so it is the machine this container is running on")

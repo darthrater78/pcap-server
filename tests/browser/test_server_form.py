@@ -14,9 +14,9 @@ import json
 
 import pytest
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 # TEST-NET-3 (RFC 5737): documentation addresses, guaranteed not to be routed
 # anywhere. add_server refuses a target that resolves to this machine, so the
