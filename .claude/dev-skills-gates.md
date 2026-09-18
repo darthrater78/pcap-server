@@ -23,8 +23,7 @@ alert for real visual weight (was a plain blockquote).
 🔨 BUILD      ➖ N/A -- README.md only, no app/test code touched.
 🔒 SECURITY   ➖ N/A -- no code; a Markdown/HTML-comment edit, no new sinks.
 📄 DOCS       ✅ this commit IS the docs fix -- see summary above.
-📦 RELEASE    ⬜ next: push, open PR to main, merge (small, no version
-              conflict since it only touches README.md).
+📦 RELEASE    ✅ PR #20 open: fix/beta-readme-premature-tag -> main.
 🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
 
 ## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
