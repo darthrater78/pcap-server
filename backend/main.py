@@ -72,6 +72,7 @@ from backend.packet_parser import (
     DisplayFilterError,
     MAX_EXTRA_COLUMNS,
     get_conversations,
+    get_diagram_packets,
     get_follow_stream,
     get_packet_detail,
     get_packet_list,
@@ -114,7 +115,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.4"
+APP_VERSION = "1.1.0-beta.5"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -2616,6 +2617,43 @@ async def list_packets(
     except Exception:
         logger.exception("packet list failed")
         raise HTTPException(500, "failed to list packets")
+
+
+@app.get("/api/captures/{capture_id}/diagram-packets")
+async def list_diagram_packets(
+    capture_id: str,
+    limit: int | None = Query(None, ge=1),
+    display_filter: str = Query(""),
+    resolve_names: bool = Query(False),
+    user: dict = Depends(get_current_user),
+):
+    """Every packet a diagram draws, in one tshark pass, or just the count.
+
+    The ceiling is max_capture_packets -- the most one capture from this app
+    can hold -- and a caller may ask for less (the Sequence Diagram draws a
+    row per packet, and keeps its own lower cap). "total" is what the filter
+    matched, not the capture's size: it is what the caller's cap is judged
+    against.
+    """
+    if not packet_rate_limiter.allow(user["id"]):
+        raise HTTPException(429, "too many packet list requests, slow down")
+    ceiling = max(1, db.get_setting_int("max_capture_packets"))
+    cap = min(limit or ceiling, ceiling)
+    info, path = _require_readable_capture(capture_id, user)
+    try:
+        packets, total = await get_diagram_packets(
+            vault.source_for(path), cap, display_filter=display_filter,
+            resolve_names=resolve_names, interface_names=info.interface_names,
+        )
+    except DisplayFilterError as exc:
+        raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})
+    except Exception:
+        logger.exception("diagram packet list failed")
+        raise HTTPException(500, "failed to list packets")
+    # Straight to JSONResponse: already plain dicts, and FastAPI's own encoder
+    # walks every value -- about 0.6s of event loop at 100,000 packets, where
+    # json.dumps takes 0.07s.
+    return JSONResponse({"packets": packets, "total": total, "cap": cap})
 
 
 @app.get("/api/captures/{capture_id}/packets/{frame_number}")

@@ -175,6 +175,15 @@ and `/api/captures/{id}/stream/{protocol}/{stream}`. All three read-only,
 rate-limited on the same budget as the packet list, and authorized the same
 way as every other capture route: `_require_readable_capture`.
 
+The two diagrams read their packets through a fourth,
+`/api/captures/{id}/diagram-packets` (`get_diagram_packets`): one streamed
+`-T fields` pass that counts every packet the display filter matches but keeps
+only up to the cap (`max_capture_packets`, or a lower `limit` the caller asks
+for). Over the cap it returns the count and no packets, so memory is bounded by
+the cap, not the capture. The packet list's own pages would not do here: their
+offset is a frame number, so every page is a full pass, and their `total` is
+the capture's size rather than the filter's matches.
+
 **The hierarchy and the conversations are built in Python, not by parsing
 tshark's own `-z io,phs` / `-z conv,ip` reports.** Those are formatted for a
 terminal — indentation carries the tree, column widths size themselves to

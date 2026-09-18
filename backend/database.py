@@ -1022,8 +1022,9 @@ class Database:
         "rate_limit_captures_per_min": "10",
         # Ceiling on one uploaded pcap, in MB. Sized for a capture someone
         # actually wants to read in a browser rather than for the largest file
-        # the disk would hold: the viewer's own diagram caps refuse above 5,000
-        # packets, and a 512 MB pcap is far past anything the packet list is
+        # the disk would hold: the Traffic Diagram draws at most
+        # max_capture_packets and the Sequence Diagram 5,000, and a 512 MB
+        # pcap is far past anything the packet list is
         # pleasant on. Raise it if you have a big capture to triage; the cost
         # is disk on the captures volume, counted off the request as it
         # arrives rather than trusted from a header.

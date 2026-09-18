@@ -179,10 +179,19 @@ legend draws each protocol's actual mark, so match the shape as well as the
 colour.
 
 Both read the current display filter the same way Conversations does, and both
-cap how much they will draw at once (200 hosts for the Traffic Diagram, 40 for
-the Sequence Diagram's lanes, 5,000 packets for either) — above that they ask
-for a narrower filter rather than drawing a misleading or unusably dense
-picture.
+cap how much they will draw at once — 200 hosts for the Traffic Diagram and 40
+lanes for the Sequence Diagram; 5,000 packets for the Sequence Diagram (a row
+each), and for the Traffic Diagram as many as one capture can hold (**Max
+capture packets** in Settings, 100,000 by default). Above a cap they ask for a
+narrower filter rather than drawing a misleading or unusably dense picture, and
+the count they judge is what the filter matched, so narrowing it works. The two
+packet caps can be switched off, per browser, with the checkboxes in the
+**Capture** tab's **Limits** row (*Traffic Diagram max 100,000 packets*,
+*Sequence Diagram max 5,000 packets*; hover either for what it does).
+Unticked, a diagram goes up to **Max capture packets** and no further. A
+change applies the next time the diagram opens. A long
+capture plays faster: at 1x the Traffic Diagram plays 40 packets a second, or
+whatever finishes the play in about two minutes, whichever is quicker.
 
 **Resolve hostnames** (the same toggle the packet list uses, under the view
 flags) applies to both: turn it on *before* opening either diagram, since it

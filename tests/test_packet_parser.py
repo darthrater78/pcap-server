@@ -252,6 +252,32 @@ async def test_get_packet_list_parses_a_real_capture():
     assert packets[0].destination == "10.0.0.2"
 
 
+async def test_get_diagram_packets_rejects_hostile_filter_before_running_any_tool():
+    with pytest.raises(ValueError):
+        await packet_parser.get_diagram_packets(
+            BoomSource(), 10, display_filter="tcp.port == 80; rm -rf /"
+        )
+
+
+@needs_tshark
+async def test_get_diagram_packets_counts_every_match_but_keeps_only_the_cap():
+    data = _build_minimal_pcap(num_packets=7)
+    packets, total = await packet_parser.get_diagram_packets(BytesSource(data), 10)
+    assert total == 7 and [p["number"] for p in packets] == list(range(1, 8))
+    assert packets[0]["source"] == "10.0.0.1" and packets[0]["destination"] == "10.0.0.2"
+    over, total = await packet_parser.get_diagram_packets(BytesSource(data), 5)
+    assert over == [] and total == 7
+
+
+@needs_tshark
+async def test_get_diagram_packets_counts_the_filters_matches_not_the_capture():
+    data = _build_minimal_pcap(num_packets=4)
+    none, total = await packet_parser.get_diagram_packets(
+        BytesSource(data), 10, display_filter="udp.port == 9999"
+    )
+    assert none == [] and total == 0
+
+
 @needs_tshark
 async def test_get_packet_list_applies_display_filter():
     data = _build_minimal_pcap()

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.1.0-beta.5 — 2026-09-18
+
+### Changed
+
+- The Traffic Diagram now draws captures over 5,000 packets, up to **Max
+  capture packets** (100,000 by default). It loads them in one tshark pass
+  through a new `/api/captures/{id}/diagram-packets` route instead of 1,000
+  at a time, which on a large capture meant re-reading the whole file for
+  every page and running into the packet-request rate limit. Playback speeds
+  up for long captures so a play at 1x still finishes in about two minutes.
+  The Sequence Diagram keeps its 5,000-packet cap.
+- The **Capture** tab's Limits row has a checkbox per diagram that turns
+  its packet cap on or off and shows it (Traffic Diagram 100,000,
+  Sequence Diagram 5,000), kept per browser, with a tooltip on each.
+  Unticked, a diagram goes up to Max capture packets and no further.
+
+### Fixed
+
+- Narrowing the display filter never got a large capture under a diagram's
+  packet cap: the check compared the cap against the whole capture's packet
+  count, not the filter's matches. It now counts what the filter matched.
+- A filtered diagram on a capture over 1,000 packets drew some packets more
+  than once, inflating its stats, link heat and playback. Paging mixed frame
+  numbers with filtered row counts; the single fetch above has no pages.
+
+- Traffic Diagram's packet-overflow warning ("N ... match ... above the
+  5,000 this diagram can render") mislabeled the count "hosts" instead of
+  "packets" — a large "any"-interface capture could report tens of
+  thousands of "hosts" that didn't exist. The real host cap (200, shown
+  separately) was unaffected.
+
 ## 1.1.0-beta.4 — 2026-09-18
 
 More to see and do in the diagrams, and a place to try them against a pcap

@@ -310,6 +310,18 @@
                         <label for="cap-snaplen">Snap length</label>
                         <input type="number" id="cap-snaplen" placeholder="auto">
                     </div>
+                    <!-- Whether each diagram holds to its packet cap. Per browser,
+                         read when a diagram opens (diagrams.js, diagramPacketLimit). -->
+                    <div class="diagram-caps">
+                        <label class="diagram-cap" title="Ticked: the Traffic Diagram loads at most 100,000 packets and asks for a narrower filter above that. Unticked: only the server's Max capture packets (Settings) limits it, which matters only if an admin has raised it past 100,000. Applies the next time the diagram opens.">
+                            <input type="checkbox" id="topology-cap-enabled" checked>
+                            <span>Traffic Diagram max <strong>100,000</strong> packets</span>
+                        </label>
+                        <label class="diagram-cap" title="Ticked: the Sequence Diagram draws at most 5,000 packets, one row each, and asks for a narrower filter above that. Unticked: it draws up to the server's Max capture packets (Settings, 100,000 by default) -- tens of thousands of rows can slow the browser down. Applies the next time the diagram opens.">
+                            <input type="checkbox" id="sequence-cap-enabled" checked>
+                            <span>Sequence Diagram max <strong>5,000</strong> packets</span>
+                        </label>
+                    </div>
                 </div>
                 <footer class="capture-card-foot">
                     <!-- Upload a pcap recorded somewhere else: the other way to
