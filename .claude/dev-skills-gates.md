@@ -1,5 +1,52 @@
 # Dev Skills gate state
 
+## Work commit: release.yml gate fallback (2026-09-18)
+Track: work commit. Branch: claude/dev-skills-beta-workflow-cwzvx5.
+Environment: remote container (Claude executes git; tag pushes go to the user).
+User: "fix the issue with the .2 beta release workflow".
+
+Diagnosis: release run 35296493378 (tag v1.1.0-beta.2 on 0038140, the PR #15
+handoff merge) failed its gate in 8s -- "Check has never run for 0038140".
+check.yml's paths-ignore skips .claude/**, so the docs-only merge that became
+main's head got no Check run, and the gate had no fallback. Nothing was
+published; :1.1.0-beta.2 does not exist on ghcr.io.
+
+🔢 VERSION    ➖ N/A -- work commit track, no version bump (APP_VERSION stays
+              1.1.0-beta.2).
+🔨 BUILD      ✅ No app code touched, so no image to build. The purpose-built
+              check for these files is lint-workflows.yml: actionlint 1.7.12
+              (repo's pinned version + checksum) with shellcheck 0.9 on PATH,
+              exit 0 over all three workflows. Plus a local harness that runs
+              the gate step's own script against a gh stub backed by this
+              repo's real history: 7 scenarios -- docs-only above a tested
+              push run (pass), tree identical to ancestor (pass), own run
+              passing (pass), own run failed (refuse, no fallback), code file
+              differs from ancestor (refuse, names backend/main.py), ancestor
+              tested only by a pull_request run (refuse), unparseable and
+              unreasonable paths-ignore (refuse).
+🔒 SECURITY   ✅ 0 Critical, 0 High. Reviewed as a gate-weakening question,
+              not a code-injection one. The fallback publishes only when the
+              diff from a tested ancestor is confined to check.yml's own
+              paths-ignore list, and none of those paths enter the image
+              (Dockerfile copies backend/, frontend/, entrypoint.sh,
+              requirements.txt, backend/tls/fetch_lego.py -- nothing else), so
+              the published artifact is the tested one. Fails closed on every
+              branch it cannot establish. Ancestor search restricted to push
+              runs, because a pull_request run tests the merge ref, not the
+              commit. No new permissions (actions: read, contents: read cover
+              the added contents/commits/compare calls); external strings are
+              compared, never eval'd; a filename containing a newline splits
+              into entries that match no pattern and so refuse.
+📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry gains a "Releases" bullet; the
+              reasoning is in release.yml's own comments, as the rest of that
+              file's decisions are.
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜ -- v1.1.0-beta.2 is tagged on 0038140 but was never
+              published; run 35296493378 refused it. Unblocking it needs the
+              tag moved onto a commit carrying this fix (a re-push, so the
+              user's block per SKILL.md 5.8), or a manual Check dispatch on
+              main followed by a re-run of 35296493378.
+
 ## Release sequence: 1.1.0-beta.2 (2026-09-17)
 Track: release sequence. User: "tag and release this as the next beta" for
 the traffic-diagram-followups batch (PR #13, already merged to main as a

@@ -18,6 +18,14 @@ Follow-ups to the 1.1.0-beta.1 diagrams, plus one unrelated fix.
   directional filter (`ip.src`/`ip.dst`) first, with the old bidirectional
   `ip.addr` kept as a second option rather than dropped.
 
+- **Releases**: `release.yml`'s gate refused to publish a tag whose commit
+  had no `Check` run — but `check.yml` deliberately skips commits touching
+  only `README.md`, `CHANGELOG.md`, `docs/`, `.claude/` or
+  `.github/workflows/`, so tagging such a commit was an automatic refusal
+  even though the code had been tested. The gate now falls back to the
+  nearest ancestor with a passing push run and publishes only if everything
+  that changed since lies inside `check.yml`'s own `paths-ignore` list.
+
 Still a prerelease: no floating tag moves for it, and it is not what
 `docker-compose.yml`'s stable pin points at.
 

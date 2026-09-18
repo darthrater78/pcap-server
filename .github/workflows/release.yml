@@ -111,6 +111,157 @@ jobs:
         run: |
           set -euo pipefail
 
+          # One line per Check run for a commit: "<status> <conclusion> <url>".
+          # Shaped by gh's own --jq rather than piping into jq(1), so this step
+          # depends on one tool instead of two.
+          check_runs_for() {
+            gh api \
+              "repos/${REPO}/actions/workflows/check.yml/runs?head_sha=$1&per_page=100" \
+              --jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.html_url)"'
+          }
+
+          # The same lookup restricted to push runs, for the ancestor search
+          # below. On a push, checkout takes the commit itself, so the run's
+          # verdict is about that tree. On a pull_request it takes the merge
+          # ref instead -- head_sha names the PR head, but what ran was the
+          # head merged into the base. That distinction does not matter for the
+          # tagged commit (a merge commit's own push run tests exactly the tree
+          # being published, which is why the loop below is left as it was),
+          # but it is the whole claim the ancestor search rests on.
+          push_runs_for() {
+            gh api \
+              "repos/${REPO}/actions/workflows/check.yml/runs?head_sha=$1&event=push&per_page=100" \
+              --jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.html_url)"'
+          }
+
+          passed() {
+            awk '$2 == "success" { hit = 1 } END { exit !hit }'
+          }
+
+          # check.yml declines to run at all for a commit that touches only
+          # paths it provably does not read -- README.md, CHANGELOG.md, docs/,
+          # .claude/, .github/workflows/. Merge such a commit and tag it, as
+          # v1.1.0-beta.2 was tagged on the merge of its own handoff notes, and
+          # the lookup above finds nothing and this gate refuses a release
+          # whose code had in fact been tested. The tagged tree and the tested
+          # tree differed in two .claude/ files: nothing a test opens, and
+          # nothing that reaches the image either (the Dockerfile copies
+          # backend/, frontend/ and entrypoint.sh, and nothing else).
+          #
+          # So a commit with no run of its own is not refused outright. Find
+          # the nearest ancestor that has a passing one, and require everything
+          # that changed between them to fall inside check.yml's own
+          # paths-ignore list. That is the same claim check.yml makes when it
+          # skips a commit, applied one commit later, and it is the narrowest
+          # thing that can be said without running the suite.
+          #
+          # Everything this cannot establish refuses the release: no tested
+          # ancestor within reach, an ignore list it cannot read, a pattern it
+          # cannot reason about, or a compare too large to read in full. A
+          # commit whose own Check ran and FAILED never arrives here -- that is
+          # a real failure and is handled below, not explained away by an
+          # ancestor.
+          accept_tested_ancestor_or_die() {
+            local patterns pattern base candidate ancestors changed file prefix matched
+
+            # Read the ignore list out of check.yml at the tagged commit rather
+            # than restating it here, so the two cannot drift apart. The first
+            # sed takes the block, the second unwraps each list item.
+            patterns="$(
+              gh api -H 'Accept: application/vnd.github.raw' \
+                "repos/${REPO}/contents/.github/workflows/check.yml?ref=${SHA}" \
+                | sed -n '/^[[:space:]]*paths-ignore:[[:space:]]*$/,/^[[:space:]]*[a-z_-]*:/p' \
+                | sed -n "s/^[[:space:]]*-[[:space:]]*['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}[[:space:]]*\$/\1/p"
+            )"
+
+            if [ -z "$patterns" ]; then
+              echo "::error::Check has no run for ${SHA}, and check.yml's paths-ignore list could not be read at that commit -- so there is no way to tell what skipping it would have meant. Refusing to publish."
+              exit 1
+            fi
+
+            # Two pattern shapes are understood: an exact path, and a directory
+            # glob ending in /**. Anything else is not guessed at, because the
+            # per-file comparison below would silently under-report what a
+            # pattern it mis-read had actually covered.
+            while read -r pattern; do
+              [ -n "$pattern" ] || continue
+              case "$pattern" in
+                */'**') ;;
+                *'*'*|*'?'*|*'['*)
+                  echo "::error::check.yml's paths-ignore contains ${pattern}, a pattern this gate cannot reason about. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
+                  exit 1
+                  ;;
+              esac
+            done <<< "$patterns"
+
+            # Commits reachable from the tagged one, newest first. The tagged
+            # commit heads that list and is dropped -- it is the one already
+            # known to have no run. 50 is far more than the handful of docs
+            # commits that can realistically sit on top of a tested one, and
+            # bounds this to a single page.
+            ancestors="$(gh api "repos/${REPO}/commits?sha=${SHA}&per_page=50" --jq '.[].sha' | tail -n +2)"
+
+            base=""
+            while read -r candidate; do
+              [ -n "$candidate" ] || continue
+              if push_runs_for "$candidate" | passed; then
+                base="$candidate"
+                break
+              fi
+            done <<< "$ancestors"
+
+            if [ -z "$base" ]; then
+              echo "::error::Check has no run for ${SHA}, and no commit among the 50 before it has a passing push run either. Nothing establishes that this tree was ever tested. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
+              exit 1
+            fi
+
+            # compare returns at most 300 entries in .files. A change that
+            # large is not a docs commit, and a truncated list would read as
+            # though the part that fit were the whole change -- so the count is
+            # checked rather than trusted.
+            # No `?` after .files: a response without that key is a
+            # response this cannot read, and jq erroring out of it fails the
+            # step rather than reading as "nothing changed".
+            changed="$(gh api "repos/${REPO}/compare/${base}...${SHA}" --jq '.files[].filename')"
+            if [ "$(printf '%s\n' "$changed" | awk 'NF' | wc -l)" -ge 300 ]; then
+              echo "::error::${base}...${SHA} changes 300 or more files; the compare API truncates there and this gate will not reason about a partial list. Run Check by hand against ${SHA} and re-run this release."
+              exit 1
+            fi
+
+            while read -r file; do
+              [ -n "$file" ] || continue
+              matched=""
+              while read -r pattern; do
+                [ -n "$pattern" ] || continue
+                case "$pattern" in
+                  */'**')
+                    prefix="${pattern%'**'}"
+                    if [ "${file#"$prefix"}" != "$file" ]; then
+                      matched=yes
+                    fi
+                    ;;
+                  *)
+                    if [ "$file" = "$pattern" ]; then
+                      matched=yes
+                    fi
+                    ;;
+                esac
+              done <<< "$patterns"
+
+              if [ -z "$matched" ]; then
+                echo "::error::Check has no run for ${SHA}, and it differs from the last tested commit ${base} in ${file}, which check.yml does not skip. Refusing to publish code nothing has tested."
+                exit 1
+              fi
+            done <<< "$changed"
+
+            if [ -z "$(printf '%s\n' "$changed" | awk 'NF')" ]; then
+              echo "Check has no run for ${SHA}, but ${base} passed and the two trees are identical."
+            else
+              echo "Check has no run for ${SHA}, but ${base} passed and every difference between them is a path check.yml skips:"
+              printf '%s\n' "$changed" | awk 'NF' | sed 's/^/  /'
+            fi
+          }
+
           # Tagging straight after pushing the branch is the normal thing to
           # do, and Check takes minutes -- so an in-progress run is waited on
           # rather than treated as a failure. The deadline is generous against
@@ -119,25 +270,15 @@ jobs:
           deadline=$(( $(date +%s) + 1800 ))
 
           while true; do
-            # One line per run: "<status> <conclusion> <url>". Shaped by gh's
-            # own --jq rather than piping into jq(1), so this step depends on
-            # one tool instead of two.
-            runs=$(gh api \
-              "repos/${REPO}/actions/workflows/check.yml/runs?head_sha=${SHA}&per_page=100" \
-              --jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.html_url)"')
+            runs="$(check_runs_for "${SHA}")"
 
             if [ -z "$runs" ]; then
-              echo "::error::Check has never run for ${SHA}, so nothing has tested this commit."
-              {
-                echo "Push the branch so Check runs on it and then re-tag, or run Check"
-                echo "by hand against this commit (Actions -> Check -> Run workflow)."
-                echo "A commit touching only README.md, CHANGELOG.md, docs/ or .claude/"
-                echo "is skipped by check.yml's paths-ignore and lands here."
-              } >&2
-              exit 1
+              echo "Check has never run for ${SHA} -- looking for a tested ancestor."
+              accept_tested_ancestor_or_die
+              exit 0
             fi
 
-            if printf '%s\n' "$runs" | awk '$2 == "success" { hit = 1 } END { exit !hit }'; then
+            if printf '%s\n' "$runs" | passed; then
               echo "Check passed for ${SHA}."
               exit 0
             fi
