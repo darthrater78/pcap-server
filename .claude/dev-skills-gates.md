@@ -13,7 +13,7 @@ Model: Opus 5 (user approved). Shell: Linux bash.
               pip-audit clean; no new deps; new inputs validated/bounded/user-scoped;
               innerHTML sinks escaped; SQL f-strings interpolate a constant only.
 📄 DOCS       ✅ CHANGELOG 1.1.0-beta.6, viewer.md, filters.md
-📦 RELEASE    ⬜
+📦 RELEASE    ✅ PR #23 open: feat/diagram-views-and-capture-optimize -> main
 🚀 SHIP       ⬜
 
 ## SHIPPED: v1.1.0-beta.5 -- large-capture diagrams + label fix (2026-09-18, local)
