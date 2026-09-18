@@ -73,7 +73,13 @@ published; :1.1.0-beta.2 does not exist on ghcr.io.
 📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry gains a "Releases" bullet; the
               reasoning is in release.yml's own comments, as the rest of that
               file's decisions are.
-📦 RELEASE    ⏳ user approved opening a PR to main ("yes open the PR").
+📦 RELEASE    ✅ PR #16 open: claude/dev-skills-beta-workflow-cwzvx5 -> main,
+              3 commits (e3f6961 fix, 24f233f tests, 1b406da gate record).
+              Opened on the user's "yes open the PR". First attempt was
+              REFUSED by the gate-preflight hook -- BUILD was ✅ with no
+              artifact-handoff annotation and this repo has a Dockerfile. The
+              annotation was added (n/a, remote container) and the PR retried;
+              the block was not worked around.
 🚀 SHIP       ⬜ -- v1.1.0-beta.2 is tagged on 0038140 but was never
               published; run 35296493378 refused it. Once the PR merges, the
               tag moves onto the new main head, which carries the fix (a tag
