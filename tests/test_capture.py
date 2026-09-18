@@ -31,6 +31,7 @@ from backend.capture import (
 )
 from pydantic import ValidationError
 
+from backend.crypto import CryptoError
 from backend.ssh_manager import _shell_quote
 
 from backend.models import (
@@ -1045,3 +1046,53 @@ def test_a_damaged_interface_table_loads_as_what_can_be_read(tmp_path, stored, e
 def _row_for_db(capture_id: str) -> dict:
     from backend.capture import _row
     return _row(CaptureInfo(id=capture_id, server_id="s", user_id="u1", status=CaptureStatus.COMPLETED))
+
+
+# --- a locked vault: refuse rather than write a capture in the clear ---------
+
+
+class LockedVault:
+    """Encryption configured, passphrase not yet entered -- the state every
+    passphrase-mode install is in after a restart until an admin unlocks it."""
+    enabled = True
+    locked = True
+    cryptor = None
+
+
+class RecordingSSHManager(FakeSSHManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetched: list[object] = []
+
+    async def fetch_file(self, server, remote_path, local_path, cryptor=None) -> None:
+        self.fetched.append(cryptor)
+
+
+@pytest.fixture()
+async def locked_manager(tmp_path):
+    ssh = RecordingSSHManager()
+    settings = make_settings()
+    mgr = CaptureManager(ssh, tmp_path, lambda k: settings[k], FakeCaptureDB(), vault=LockedVault())
+    try:
+        yield mgr, ssh
+    finally:
+        await mgr.shutdown()
+
+
+async def test_a_capture_cannot_start_while_the_vault_is_locked(locked_manager):
+    """Refused before tcpdump runs: collecting it later would have written the
+    pcap unsealed, as <id>.pcap, since a locked vault hands out no cryptor."""
+    mgr, ssh = locked_manager
+    with pytest.raises(CryptoError, match="locked"):
+        await mgr.start(CaptureRequest(server_id="s1", interface="eth0"), make_server(), user_id="u1")
+    assert ssh.run_tcpdump_calls == 0
+    assert mgr.active_count() == 0
+
+
+async def test_collecting_while_locked_never_fetches_unsealed(locked_manager, tmp_path):
+    mgr, ssh = locked_manager
+    info = CaptureInfo(id="c1", server_id="s1", user_id="u1", status=CaptureStatus.TRANSFERRING)
+    with pytest.raises(CryptoError):
+        await mgr._collect("c1", make_server(), "/tmp/c1.pcap", tmp_path / "c1.pcap", info)
+    assert ssh.fetched == [], "nothing may be pulled down without a key to seal it"
+    assert not (tmp_path / "c1.pcap").exists()

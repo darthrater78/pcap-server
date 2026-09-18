@@ -248,7 +248,30 @@ class CaptureManager:
         assert_no_forbidden_flags(args)
         return args
 
+    def _refuse_while_locked(self, what: str) -> None:
+        """Raise CryptoError if the vault is waiting for its passphrase.
+
+        FAIL CLOSED BEFORE ANYTHING IS WRITTEN. A locked vault presents
+        cryptor=None, which every write path reads as "encryption is disabled"
+        -- so without this, a pcap arriving while the vault waits for its
+        passphrase is written in the clear, under a name with no .enc suffix,
+        on an installation whose whole premise is encryption at rest. That is
+        the fail-open vault.py refuses to start up into, by another door.
+        Routes map this to 503: an admin unlocking is the remedy, after which
+        the same request works.
+        """
+        if self._vault and self._vault.locked:
+            raise CryptoError(
+                f"the vault is locked, so {what} cannot be encrypted -- unlock "
+                "encryption first rather than storing it in the clear"
+            )
+
     async def start(self, req: CaptureRequest, server: ServerInfo, user_id: str) -> CaptureInfo:
+        # Before anything else, and in particular before tcpdump runs on the
+        # target: refusing at collection time would throw away a capture the
+        # user already waited for.
+        self._refuse_while_locked("a new capture")
+
         # Checked first, before any connection is opened or file created: each
         # running capture holds an SSH connection to a target host plus a local
         # file handle, and neither this container's descriptor table nor the
@@ -420,23 +443,9 @@ class CaptureManager:
         refused, so a client that lies about Content-Length -- or sends no
         Content-Length at all -- cannot fill the volume.
         """
-        # FAIL CLOSED BEFORE ANYTHING IS WRITTEN. A locked vault presents
-        # cryptor=None, which is indistinguishable from "encryption is
-        # disabled" -- so without this check an upload arriving while the vault
-        # waits for its passphrase would be written in the clear, under a name
-        # with no .enc suffix, on an installation whose entire premise is that
-        # captures are encrypted at rest. That is the fail-open vault.py
-        # refuses to start up into, arriving by a different door.
-        #
         # Reproduced before it was fixed: the file landed as <uuid>.pcap with
-        # the pcap magic as its first four bytes. 503 rather than 400, via the
-        # route's handler, because the remedy is an admin unlocking the vault
-        # and then this exact request working.
-        if self._vault and self._vault.enabled and self._vault.locked:
-            raise CryptoError(
-                "the vault is locked, so an uploaded capture cannot be encrypted -- "
-                "unlock encryption first rather than storing this pcap in the clear"
-            )
+        # the pcap magic as its first four bytes.
+        self._refuse_while_locked("an uploaded capture")
 
         capture_id = str(uuid.uuid4())
         target = (
@@ -844,6 +853,10 @@ class CaptureManager:
         info: CaptureInfo,
     ) -> None:
         """Bring the pcap back, tidy the remote host, and record size and count."""
+        # start() already refused while locked; this is the backstop for the
+        # write itself. Raising here leaves the remote file in place, since its
+        # deletion below only runs after a successful fetch.
+        self._refuse_while_locked("this capture")
         cryptor = self._vault.cryptor if self._vault else None
         await self._ssh.fetch_file(server, remote_path, local_path, cryptor=cryptor)
 

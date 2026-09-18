@@ -1828,6 +1828,16 @@ def _store_ssh_key(name: str, content: bytes) -> dict:
     except PrivateKeyRejected as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    # A locked vault has cryptor=None, which the write below would read as
+    # "encryption disabled" and store the private key in the clear. Nothing
+    # re-seals it later in passphrase mode either: key migration only runs at a
+    # startup that already has a key, and passphrase mode never starts with one.
+    if vault.locked:
+        raise HTTPException(
+            503, "encryption is locked, so this key cannot be stored encrypted -- "
+                 "unlock encryption first",
+        )
+
     SSH_KEYS_DIR.mkdir(parents=True, exist_ok=True)
     # Sealed before it ever touches disk when a master key is configured --
     # same as captures, a stored private key never exists as a plaintext file
@@ -2124,6 +2134,8 @@ async def start_capture(req: CaptureRequest, user: dict = Depends(get_current_us
         _refuse_self_target(str(exc), "This capture cannot start")
     except CaptureLimitExceeded as exc:
         raise HTTPException(429, str(exc))
+    except CryptoError as exc:
+        raise HTTPException(503, str(exc))
     except InterfaceAlreadyCapturing as exc:
         # 409, not 429: this is a conflict over one link that waiting will not
         # clear, so retrying the same request is not the remedy.

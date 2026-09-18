@@ -72,13 +72,38 @@ async def test_uploaded_key_is_sealed_when_vault_has_a_cryptor(real_key, key_des
     assert main.vault.cryptor.open_bytes(dest) == real_key
 
 
-async def test_uploaded_key_is_plaintext_when_no_cryptor(monkeypatch, real_key, key_dest):
+async def test_uploaded_key_is_plaintext_when_encryption_is_disabled(monkeypatch, real_key, key_dest):
+    """ALLOW_UNENCRYPTED_CAPTURES: no key source at all, so plaintext is the
+    configured behaviour rather than a fallback."""
+    monkeypatch.setattr(main.vault, "_source", None)
     monkeypatch.setattr(main.vault, "_cryptor", None)
+    assert not main.vault.enabled
     name = "test-upload-key-plain"
     dest = key_dest(name)
 
     await main.upload_ssh_key(FakeUploadFile(name, real_key), user=ADMIN)
     assert dest.read_bytes() == real_key
+
+
+@pytest.mark.parametrize("route", ["upload", "paste"])
+async def test_a_locked_vault_refuses_a_key_rather_than_storing_it_in_the_clear(
+    monkeypatch, real_key, key_dest, route,
+):
+    """Encryption configured but waiting for its passphrase: cryptor is None
+    exactly as when encryption is disabled, and this used to store the private
+    key in the clear. In passphrase mode nothing ever re-sealed it afterwards."""
+    monkeypatch.setattr(main.vault, "_cryptor", None)
+    assert main.vault.locked
+    name = f"test-locked-key-{route}"
+    dest = key_dest(name)
+
+    with pytest.raises(HTTPException) as exc:
+        if route == "upload":
+            await main.upload_ssh_key(FakeUploadFile(name, real_key), user=ADMIN)
+        else:
+            await main.paste_ssh_key(PastedPrivateKey(name=name, key=real_key.decode()), user=ADMIN)
+    assert exc.value.status_code == 503
+    assert not dest.exists()
 
 
 # --- pasting, the other way in ----------------------------------------------
