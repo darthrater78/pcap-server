@@ -13,9 +13,9 @@ suite) so nothing here depends on a stored layout or a real capture.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 CAPTURE = {
     "id": "cap-any", "name": "", "server_id": "s1", "server_label": "edge",

@@ -11,6 +11,10 @@
 # are unchanged and still honoured.
 pytest==9.1.1
 pytest-asyncio==1.4.0
+# Runs the suites across processes (scripts/check.sh passes -n). Each worker
+# boots its own live server and chromium on its own port and temp dir, so the
+# browser suites do not share state. -n 0 turns it off when debugging.
+pytest-xdist==3.8.0
 httpx==0.28.1
 
 # The browser suites (tests/browser) drive the real UI in a real chromium: the

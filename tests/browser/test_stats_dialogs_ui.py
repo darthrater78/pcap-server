@@ -12,9 +12,9 @@ everything else the page calls along the way.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 
 async def _stub_api(page, path_fragment: str, response):

@@ -14,9 +14,9 @@ import json
 
 import pytest
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 # TEST-NET-3 (RFC 5737): documentation addresses, guaranteed not to be routed
 # anywhere. add_server refuses a target that resolves to this machine, so the
@@ -278,7 +278,8 @@ async def test_the_trust_host_button_is_wired_to_something(app_page):
     comes afterwards -- against this address, which is TEST-NET-3 and answers
     nothing, that dialog is ssh-keyscan's failure reported back. Which dialog
     it is does not matter here. That one arrives at all is the regression this
-    test exists for, and it costs the ssh-keyscan timeout to find out.
+    test exists for; against the real command it costs the ssh-keyscan timeout
+    to find out.
     """
     await _add_via_form(
         app_page, HOST, submit=lambda: app_page.press("#new-srv-host", "Enter")
@@ -294,8 +295,8 @@ async def test_the_trust_host_button_is_wired_to_something(app_page):
     app_page.on("dialog", on_dialog)
     await app_page.click('#server-list [data-action="trust-server-host"]')
 
-    # Generous: the scan has to time out against an address that never answers
-    # (ssh-keyscan -T 5) before the dialog can appear.
+    # Generous, though the suite's stand-in ssh-keyscan fails at once: a real
+    # scan against an address that never answers takes its full -T 5 first.
     for _ in range(200):
         if asked:
             break

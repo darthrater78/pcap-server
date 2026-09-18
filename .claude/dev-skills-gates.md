@@ -1,5 +1,39 @@
 # Dev Skills gate state
 
+## HANDOFF: test-suite optimization, in progress (2026-09-18, local)
+Track: test-only work, no release. Branch
+test/faster-keyscan-browser-tests (from main a7ffbb1), 3 commits + UNCOMMITTED work below,
+LOCAL ONLY -- not pushed, no PR. Model: Opus 5.
+
+Committed (browser suite 157s -> 67s; full suite ~97s):
+ * 22eac4e stand-in ssh-keyscan on the live server's PATH
+ * dd0f8bc admin_session: sign in once per run, app_page reuses the cookie
+ * 967b400 check.sh runs pytest -n auto --maxprocesses=4; pytest-xdist==3.8.0 pinned
+
+Uncommitted, verified (full suite 1739 passed in ~36s, three runs; browser -n 0 passes, 58s):
+ * One chromium per worker: browser fixture session-scoped on the session loop; page,
+   fresh_page, app_page use loop_scope="session"; every browser module's pytestmark
+   adds BROWSER_LOOP. The earlier hang was fixtures left on function loops.
+ * Connect timeout, TEST-SIDE ONLY (user: tests must not change the app): _start_server
+   puts a sitecustomize.py on the test server's PYTHONPATH that sets
+   backend.ssh_manager.CONNECT_TIMEOUT = 1 (asserts the name exists). Fixes the 15.6s
+   test and the 10s forced kill at teardown. An app env var was tried and reverted.
+ * admin_session reuses api_client's cookie instead of its own login.
+
+CI simulation (ubuntu:24.04 container, 4 CPUs, 16 GB, non-root, same steps as check.yml):
+base a7ffbb1 pytest 342s; this tree 38s. Real GitHub ran a7ffbb1-era code in 747s (~2.2x
+the sim), so expect ~1.5 min pytest on GitHub. Not yet confirmed by a real run.
+
+PR #25 first Check FAILED: xdist workers inherited the controller's DATA_DIR from
+tests/conftest.py (setdefault), shared one sqlite db, "database is locked" at import.
+Fixed: conftest records the names it set (PCAP_TESTS_CONFTEST_SET) and workers replace
+those; real-environment values still honoured. Temp root removed at exit.
+
+Gotchas: never `pkill -f backend.serve`. Read pytest output through a file.
+
+Gates: 🔢 ➖ no version bump  🔨 ✅ check.sh green (1739)  🔒 ⏳ run pip-audit before merge
+(pytest-xdist)  📄 ➖ N/A (test-only)  📦 PR #25 (draft)  🚀 ➖ N/A, no tag.
+
 ## SHIPPED: v1.1.0-beta.6 -- diagram zones/layouts, capture optimize, upload interfaces (2026-09-18, local)
 Track: release sequence. Branch feat/diagram-views-and-capture-optimize (from main 41b7c14).
 Model: Opus 5 (user approved). Shell: Linux bash.

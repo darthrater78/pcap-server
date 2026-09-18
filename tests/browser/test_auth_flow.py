@@ -9,13 +9,15 @@ visitor about the build it is running.
 from __future__ import annotations
 
 from tests.browser.conftest import (
+    BROWSER_LOOP,
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
     needs_browser,
+    sign_in,
     totp_now,
 )
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 
 async def test_first_run_offers_registration_instead_of_a_login_box(fresh_page):
@@ -85,10 +87,13 @@ async def test_a_wrong_password_is_reported_on_the_login_screen(page):
     assert await page.is_hidden("#app-screen")
 
 
-async def test_signing_out_returns_to_the_login_screen(app_page):
-    await app_page.click("#btn-logout")
-    await app_page.wait_for_selector("#login-form:not([hidden])")
-    assert await app_page.is_hidden("#app-screen")
+async def test_signing_out_returns_to_the_login_screen(page, live_server):
+    # Its own login rather than app_page's shared session: signing out ends the
+    # session server-side, and every other test would be handed a dead one.
+    await sign_in(page, live_server)
+    await page.click("#btn-logout")
+    await page.wait_for_selector("#login-form:not([hidden])")
+    assert await page.is_hidden("#app-screen")
 
 
 async def test_the_inline_theme_script_is_allowed_by_the_csp(page):

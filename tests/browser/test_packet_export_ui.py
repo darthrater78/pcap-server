@@ -9,9 +9,9 @@ pipeline behind it.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 
 async def _select_fake_packet(page, frame_number: int, hex_bytes: str):

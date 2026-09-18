@@ -8,9 +8,9 @@ what is under test here is how it is shown.
 
 from __future__ import annotations
 
-from tests.browser.conftest import needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser
 
-pytestmark = needs_browser
+pytestmark = [needs_browser, BROWSER_LOOP]
 
 SERVER = {
     "id": "srv-1", "name": "edge", "hostname": "203.0.113.17", "port": 22,
