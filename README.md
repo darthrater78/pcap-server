@@ -13,8 +13,18 @@ only reach over SSH.
      see docs/operating.md#choosing-a-version). Delete the whole block,
      comment included, the moment the next non-beta release ships. It exists
      to announce a beta while one is current, not to become a permanent
-     fixture nobody remembers to remove. -->
-> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.4` — see
+     fixture nobody remembers to remove.
+
+     UPDATE THE TAG ONLY AFTER THE IMAGE IS CONFIRMED LIVE ON GHCR -- not as
+     part of the version-bump commit. A version bump lands on the PR branch
+     before the tag is pushed and CI publishes; bumping this line at the same
+     time advertises a pull that 404s until Gate 6 (SHIP) actually finishes.
+     (This exact mistake happened twice: dev.40's handoff and again at
+     1.1.0-beta.4's PR, both caught before the tag was pushed.) Bump this
+     line in its own small commit, straight to the default branch, once
+     `docker pull` of the new tag actually works. -->
+> [!IMPORTANT]
+> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.3` — see
 > [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
 > or the Quick Start below installs; pin this exact tag if you want to try it.
 
