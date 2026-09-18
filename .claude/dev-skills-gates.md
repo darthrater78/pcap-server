@@ -1,5 +1,32 @@
 # Dev Skills gate state
 
+## Fix: README beta line reverted to the deployed tag (2026-09-18, local)
+Track: release-track fix, on fix/beta-readme-premature-tag (from origin/main
+87754cb, the just-merged 1.1.0-beta.4 PR). Model: Sonnet 5. Shell: Linux bash.
+
+User caught it: the beta.4 PR (#19) bumped README's beta announcement to
+1.1.0-beta.4 in the same commit as the version bump -- before the tag was
+pushed or the image published. Anyone on main right now gets a 404 pulling
+that tag. This is the exact dev.40 mistake, repeated. Fix: the README line
+reverts to 1.1.0-beta.3 (still the actually-deployed image) and gains a
+process note in the surrounding HTML comment -- bump that one line only after
+`docker pull` of the new tag works, in its own commit, never bundled with the
+version-bump PR. Also switched the announcement to a GitHub `[!IMPORTANT]`
+alert for real visual weight (was a plain blockquote).
+
+🔢 VERSION    ➖ N/A -- reverts a value forward of what's deployed; carries no
+              version of its own. backend/main.py APP_VERSION and
+              docker-compose.yml correctly stay at 1.1.0-beta.4 (that's what
+              main's code now is, pending its own tag/ship) -- only the
+              README pointer, which this project treats as "what's live on
+              ghcr" rather than "what's on main", moves back.
+🔨 BUILD      ➖ N/A -- README.md only, no app/test code touched.
+🔒 SECURITY   ➖ N/A -- no code; a Markdown/HTML-comment edit, no new sinks.
+📄 DOCS       ✅ this commit IS the docs fix -- see summary above.
+📦 RELEASE    ⬜ next: push, open PR to main, merge (small, no version
+              conflict since it only touches README.md).
+🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
+
 ## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
 Track: release sequence, on claude/dev-skills-beta-workflow-cwzvx5 (from
 origin/main 65bf7d4, tip c8dc667). Model: Sonnet 5 (user switched down,
