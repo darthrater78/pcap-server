@@ -34,8 +34,11 @@ Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
               removed features to scrub. scripts/preview.sh is a dev-only
               throwaway tool, not shipped in the image -- intentionally not
               user-doc'd or changelog'd.
-📦 RELEASE    ⬜ next: sync check, commit approval, push, PR, release notes
-🚀 SHIP       ⬜
+📦 RELEASE    ✅ PR #19 open: claude/dev-skills-beta-workflow-cwzvx5 -> main.
+              Branch was synced with origin before every push (no divergence).
+              Release notes shown to the user in chat; approved ("yes").
+🚀 SHIP       ⬜ next: merge PR #19, confirm merge + CI on that commit, then
+              hand the tag block to the user.
 
 What shipped in this commit (frontend + scripts only; no backend change):
 - Traffic Diagram: end-of-play most-used-protocol badge per host; legend =
