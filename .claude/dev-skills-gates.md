@@ -97,11 +97,27 @@ selection breaks that property, and the run you skip is the one that catches it.
 The waste was never that the suite is thorough -- it is that it ran on commits
 containing no code.
 
-RISK FLAGGED, NOT VERIFIABLE FROM HERE: if Check is a required status check on
-main, a PR whose every file is in paths-ignore now reports no run and sits on
-"Expected -- waiting for status" forever. No tool in this session can read
-branch protection. The remedy is a skip job reporting the same check name, not
-deleting the filter. check.yml carries this note inline.
+RISK RAISED AND RESOLVED: if Check were a required status check on main, a PR
+whose every file is in paths-ignore would report no run and sit on "Expected --
+waiting for status" forever. No tool in this session could read branch
+protection, so it was flagged rather than assumed. The user checked and sent
+the settings page: "Classic branch protections have not been configured", no
+rulesets either. Check is NOT required, so the filter is safe and the skip-job
+remedy is not needed. check.yml keeps the note inline against the day
+protection is added.
+
+Consequence worth recording: with no protection on main, release.yml's gate is
+the ONLY thing standing between a commit and a published image -- nothing
+requires a PR, a review, or a green check to reach main. The design still
+holds (a direct push to main gets a Check run, since that trigger survived the
+narrowing, and the gate requires it to pass), but it holds alone.
+
+VERIFIED LIVE on the push of 38181b8: that commit changed workflows AND tests/,
+which under the old triggers would have run the full suite on a branch push.
+Only Lint workflows ran (run 25, 8s). No Check run. Fix 3 confirmed.
+The waste is now measured, not estimated: runs 139 and 140 -- the two
+.claude/-only PR runs -- took 12m02s and 11m36s. ~24 minutes of CI in one
+session on commits containing no code.
 
 🔢 VERSION    ⬜ not owed -- work commit, APP_VERSION stays 1.1.0-beta.2
 🔨 BUILD      ✅ handoff n/a (remote container; docker is not usable here at
