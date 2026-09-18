@@ -24,7 +24,7 @@ only reach over SSH.
      line in its own small commit, straight to the default branch, once
      `docker pull` of the new tag actually works. -->
 > [!IMPORTANT]
-> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.3` — see
+> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.4` — see
 > [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
 > or the Quick Start below installs; pin this exact tag if you want to try it.
 
