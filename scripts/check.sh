@@ -122,4 +122,9 @@ echo
 # -r s: always show which tests were skipped and why. A suite that prints
 # "all passed" while quietly dropping the tshark-dependent tests is how a
 # real regression (see the dev.7 -n/-nn mixup) ships unnoticed.
-exec "$PYTHON" -m pytest -r s "$@"
+#
+# -n auto, capped at 4: the browser suites boot a server and a chromium per
+# worker, and past four the timing-sensitive UI tests start to flake for want
+# of CPU. A later -n on the command line wins (-n 0 for one process, which is
+# what to use with a debugger or --pdb).
+exec "$PYTHON" -m pytest -r s -n auto --maxprocesses=4 "$@"
