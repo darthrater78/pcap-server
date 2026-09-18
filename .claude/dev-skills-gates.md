@@ -1,7 +1,7 @@
 # Dev Skills gate state
 
 ## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
-Track: RELEASE SEQUENCE on claude/dev-skills-beta-workflow-cwzvx5 (from
+Track: release sequence, on claude/dev-skills-beta-workflow-cwzvx5 (from
 origin/main 65bf7d4, tip c8dc667). Model: Sonnet 5 (user switched down,
 "no more coding if possible" -- docs/version-only work from here). Shell:
 Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
