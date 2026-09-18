@@ -187,7 +187,11 @@ session on commits containing no code.
 📄 DOCS       ➖ N/A -- CI plumbing, not app CHANGELOG material (repo precedent:
               the dev.33/34 CI commits). The reasoning is in the workflows' own
               comments, as the rest of this repo's CI decisions are.
-📦 RELEASE    ⬜
+📦 RELEASE    ✅ PR #17 open: claude/dev-skills-beta-workflow-cwzvx5 -> main.
+              Opened on the user's "commit the record, do the first-parent fix,
+              then open the PR". First attempt refused by the gate-preflight
+              hook on VERSION ⬜ (see that gate above); settled as N/A with the
+              reason stated, then retried. The block was not worked around.
 🚀 SHIP       ⬜ not owed -- no tag, no artifact
 
 ## Release sequence: release.yml gate fallback -> finish v1.1.0-beta.2 (2026-09-18)
