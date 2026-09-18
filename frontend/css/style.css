@@ -3400,6 +3400,7 @@ dialog:not([open]) {
     display: flex;
     align-items: center;
     gap: 8px;
+    font-size: 0.8125rem;
 }
 
 .diagram-speed {
@@ -3432,6 +3433,185 @@ dialog:not([open]) {
 
 .diagram-canvas-wrap--scroll { overflow: auto; }
 
+/* "Traffic Diagram  preview.pcap  View: dns" -- the capture and view after
+   the dialog's own name, quieter than it. */
+.diagram-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.diagram-context { display: contents; }
+.diagram-context-capture {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+.diagram-context-view {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 1px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    color: var(--text-primary);
+}
+
+/* The viewer's lead tool: accent button with a small node-link icon. */
+.btn-diagram { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; width: auto; }
+.btn-diagram-icon { flex: none; stroke: currentColor; stroke-width: 1.4; fill: currentColor; }
+
+/* Zoom, spacing and full screen, floating over the drawing's corner. */
+.diagram-view-controls {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 6px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+.diagram-view-controls .btn { min-width: 28px; }
+.diagram-zoom-level {
+    min-width: 3.2em;
+    text-align: center;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+.diagram-spacing-label { display: inline-flex; align-items: center; gap: 4px; }
+#topology-svg { touch-action: none; }
+.diagram-svg.is-panning { cursor: grabbing; }
+
+/* Full screen: the browser's own where it allows it (:fullscreen), and the
+   class alone -- edge to edge in the viewport -- where it does not. */
+.stats-dialog--large.is-fullscreen {
+    width: 100vw;
+    height: 100vh;
+    max-width: 100vw;
+    max-height: 100vh;
+    margin: 0;
+    border-radius: 0;
+}
+
+/* A "New window" page: the diagram is the whole page. The app behind the
+   dialog is not drawn, and the button that opens another window is gone. */
+body.diagram-window #app-screen,
+body.diagram-window .readonly-notice { visibility: hidden; }
+body.diagram-window #btn-topology-new-window { display: none; }
+
+/* Traffic Diagram only: the drawing and its stats pane side by side. */
+.diagram-main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 8px;
+}
+.diagram-main .diagram-canvas-wrap { min-width: 0; }
+
+.diagram-stats {
+    flex: none;
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    font-size: 0.75rem;
+    overflow: hidden;
+}
+/* Closed, it folds to a narrow strip holding just its label, so the drawing
+   gets the width back. */
+.diagram-stats:not([open]) { width: auto; }
+.diagram-stats > summary {
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: 600;
+    user-select: none;
+}
+.diagram-stats:not([open]) > summary {
+    writing-mode: vertical-rl;
+    padding: 10px 6px;
+}
+.diagram-stats-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 10px 10px;
+}
+.diagram-stats-body h4 {
+    margin: 10px 0 4px;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+.diagram-stats-table { width: 100%; border-collapse: collapse; }
+.diagram-stats-table th, .diagram-stats-table td { padding: 2px 0; vertical-align: top; }
+.diagram-stats-table th {
+    font-weight: normal;
+    text-align: left;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+    padding-right: 8px;
+}
+.diagram-stats-table td {
+    text-align: right;
+    color: var(--text-primary);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+/* On a phone there is no room beside the drawing: the pane goes under it. */
+@media (max-width: 700px) {
+    .diagram-main { flex-direction: column; }
+    .diagram-main .diagram-canvas-wrap { flex: 1 1 60%; }
+    .diagram-stats { width: auto; max-height: 40%; }
+    .diagram-stats:not([open]) > summary { writing-mode: horizontal-tb; padding: 6px 10px; }
+}
+
+/* The legend doubles as the protocol picker -- chips like the viewer's
+   saved-view tabs, pressed when picked. */
+.diagram-legend-hint { color: var(--text-muted); cursor: help; white-space: nowrap; }
+.diagram-hint { margin: 2px 0 10px; font-size: 0.75rem; color: var(--text-muted); }
+.diagram-legend-help { font-size: 0.8125rem; }
+.diagram-legend-chip {
+    padding: 2px 10px 2px 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+}
+.diagram-legend-chip[data-all] { padding-left: 10px; }
+.diagram-legend-chip:hover { color: var(--text-primary); border-color: var(--accent); }
+.diagram-legend-chip[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* The interfaces a host was seen on ("any" captures), after its address. */
+.diagram-node text .diagram-node-iface { fill: var(--text-secondary); font-size: 10px; }
+
+/* A host's most-used protocol, shown under it when a play finishes. The
+   text carries a halo of the canvas color so it stays legible over edges. */
+.diagram-node .diagram-node-top text {
+    fill: var(--text-primary);
+    font-size: 10px;
+    font-weight: 600;
+    paint-order: stroke;
+    stroke: var(--bg-primary);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+.diagram-node-top-mark { stroke: var(--bg-primary); stroke-width: 1.5px; }
+
 .diagram-svg, .diagram-canvas {
     position: absolute;
     inset: 0;
@@ -3453,11 +3633,17 @@ dialog:not([open]) {
     stroke-width: 1.5px;
 }
 .diagram-node:hover circle { fill: var(--accent); fill-opacity: 0.35; }
+/* Full-strength text on a halo of the canvas color: edges run under every
+   label, and at the old muted 10px a busy link simply erased the address. */
 .diagram-node text {
-    fill: var(--text-secondary);
+    fill: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--bg-primary);
+    stroke-width: 3.5px;
+    stroke-linejoin: round;
 }
 
 .diagram-edge {
@@ -3467,6 +3653,60 @@ dialog:not([open]) {
     cursor: pointer;
 }
 .diagram-edge:hover { stroke-opacity: 0.75; }
+/* Link widths are screen pixels at every zoom, like the nodes (glyphScale):
+   zoomed right out they would otherwise thin to invisible hairlines. */
+#topology-svg .diagram-edge { vector-effect: non-scaling-stroke; }
+/* Host search: the first and largest control in the diagram. */
+.diagram-search { display: flex; align-items: center; gap: 10px; position: relative; flex-wrap: wrap; }
+.diagram-search-icon {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    fill: none; stroke: var(--text-secondary); stroke-width: 1.8; pointer-events: none;
+}
+#topology-search {
+    width: min(460px, 100%);
+    padding: 9px 12px 9px 38px;
+    font: inherit;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+}
+#topology-search:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.diagram-search-count { font-size: 0.8125rem; color: var(--text-secondary); }
+#topology-svg .is-dimmed { opacity: 0.15; }
+#topology-svg .diagram-node.is-match circle { stroke: var(--accent); stroke-width: 4px; fill: var(--accent); fill-opacity: 0.35; }
+
+/* Problems: status red, reserved for trouble, always with its ⚠ and a label. */
+.diagram-problem-icon { color: var(--danger); margin-right: 4px; }
+.diagram-legend-chip[data-problems] { border-color: var(--danger); }
+.diagram-legend-chip[data-problems][aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--danger); }
+.diagram-problem-badge { cursor: pointer; }
+.diagram-problem-badge rect { fill: var(--danger); stroke: var(--bg-primary); stroke-width: 1.5px; }
+.diagram-problem-badge text { fill: var(--bg-primary); font-size: 10px; font-weight: 700; pointer-events: none; }
+.diagram-stats-action { cursor: pointer; }
+.diagram-stats-action:hover th, .diagram-stats-action:focus th { color: var(--text-primary); text-decoration: underline; }
+
+/* What was last clicked: the packet list is filtered to it. */
+#topology-svg .diagram-edge.is-selected { stroke: var(--text-primary); stroke-opacity: 1; }
+#topology-svg .diagram-node.is-selected circle { stroke: var(--text-primary); stroke-width: 3px; }
+.diagram-link-protocols text {
+    fill: var(--text-primary);
+    font-size: 11px;
+    font-weight: 600;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--bg-primary);
+    stroke-width: 3.5px;
+    stroke-linejoin: round;
+}
+.diagram-link-protocols { pointer-events: none; }
+.diagram-selection { display: block; color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.diagram-selection:empty { display: none; }
+.diagram-stats-table th .diagram-legend-swatch { width: 18px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+
+/* Hosts and links the picked protocols never touched (applyProtocolScope). */
+#topology-svg .is-hidden { display: none; }
 
 .diagram-tooltip {
     position: absolute;

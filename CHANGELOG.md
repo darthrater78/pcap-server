@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.1.0-beta.4 — 2026-09-18
+
+More to see and do in the diagrams, and a place to try them against a pcap
+without touching a real deployment.
+
+### Added
+
+- **Protocol picker.** The Traffic Diagram legend is now clickable: pick a
+  protocol to show only it on the next play — unrelated hosts and links hide
+  — and pick it again to bring everything back.
+- **15 protocol marks, up from 8.** Three validated colours combined with
+  five shapes, so protocols keep differing by colour or shape without adding
+  a fourth, less distinguishable, hue.
+- **Problems.** A toggleable chip marks any link that carried a reset,
+  retransmission, zero window, IP fragment, ICMP error or malformed packet
+  with a red badge, a red ring during play, and counts in the stats pane.
+- **Host search** in the Traffic Diagram: Enter steps through matches, Esc
+  clears.
+- **Stats pane** (collapsible) with per-protocol totals and, on captures
+  taken from an "any" interface, each host's own capture interfaces.
+- Diagram toolbar: **Fit**, **Spacing** (fans out a dense layout), full
+  screen, and **New window** — a diagram-only page whose clicks relay back
+  to the main tab, useful on a second monitor.
+- Clicking a host or link now filters the packet list without closing the
+  diagram; playback rewinds at the end and keeps the finished picture on
+  screen; the speed control works before play starts; hosts show a
+  most-used-protocol badge once play ends; both diagram windows title
+  themselves with the capture and view name.
+
+### Changed
+
+- Traffic Diagram is now the lead tool button in the viewer toolbar.
+
 ## 1.1.0-beta.3 — 2026-09-18
 
 Upload a pcap recorded elsewhere, hostname resolution that actually resolves,

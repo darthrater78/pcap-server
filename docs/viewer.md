@@ -136,15 +136,32 @@ Two more toolbar buttons, for when a table is the wrong shape to see it in.
 **Traffic Diagram** draws Conversations as a graph instead of a table: a node
 per host, sized by bytes, and an edge per pair, weighted by how much they
 exchanged. Drag a node to untangle a busy layout; click a node or an edge to
-filter onto it, same as a Conversations row — a confirmation dialog checks you
-mean it first, since it also closes the diagram. **Play** fetches the
-capture's actual packet order and animates it — a dot per packet, moving from
-source to destination, colored by protocol — so the diagram shows not just who
-talked to whom but the order and rhythm of it. Slow it right down (the speed
-control goes to 0.02x) to trace one packet at a time, and watch a link get
-visibly brighter and thicker the more traffic crosses it as playback passes
-that point — capped, so one very busy link cannot swallow the rest of the
-graph.
+filter onto it, same as a Conversations row — the diagram stays open, and a
+link's filter covers every protocol it carried — a confirmation dialog checks
+you mean it first, since a node click also closes the diagram. The legend
+doubles as a **protocol picker**: click a chip to show only that protocol on
+the next play, hiding unrelated hosts and links; click again to bring
+everything back. **Play** fetches the capture's actual packet order and
+animates it — a dot per packet, moving from source to destination, colored by
+protocol — so the diagram shows not just who talked to whom but the order and
+rhythm of it, and leaves each host wearing a badge for its most-used protocol
+when play ends. Slow it right down (the speed control works before play
+starts too, and goes to 0.02x) to trace one packet at a time, and watch a link
+get visibly brighter and thicker the more traffic crosses it as playback
+passes that point — capped, so one very busy link cannot swallow the rest of
+the graph. Playback rewinds at the end and keeps the finished picture on
+screen rather than clearing it.
+
+A **Problems** chip toggles red badges on any link that carried a reset,
+retransmission, zero window, IP fragment, ICMP error or malformed packet, with
+a red ring during play and a count in the stats pane. A **search box** finds
+a host by name or address — Enter steps through matches, Esc clears. The
+**stats pane** (collapsible; shown before any play) lists per-protocol
+totals, and on a capture taken from an "any" interface, each host's own
+capture interfaces. Toolbar controls: zoom/pan and **Fit**, **Spacing**
+(fans out a dense layout), full screen, and **New window** — a diagram-only
+page useful on a second monitor, whose clicks relay back to the main tab.
+Both diagram windows title themselves with the capture and view name.
 
 **Sequence Diagram** is closer to Wireshark's own Flow Graph: one lane per
 host, and every packet drawn as a time-ordered arrow between two lanes,
@@ -154,12 +171,12 @@ packets a millisecond apart would otherwise collapse into an unreadable stack.
 A host name too long for its lane is shortened in the middle; hover it for the
 full name.
 
-Both color the eight most common protocols in view and group the rest as
-**Other**. Eight is more than can be told apart by colour alone, so three
-colours are combined with three shapes — circle, square, diamond — and, in the
-Sequence Diagram, three line styles: any two protocols differ in colour or in
-shape. The legend draws each protocol's actual mark, so match the shape as well
-as the colour.
+Both color the 15 most common protocols in view and group the rest as
+**Other**. Fifteen is more than can be told apart by colour alone, so three
+validated colours are combined with five shapes, and, in the Sequence
+Diagram, line styles: any two protocols differ in colour or in shape. The
+legend draws each protocol's actual mark, so match the shape as well as the
+colour.
 
 Both read the current display filter the same way Conversations does, and both
 cap how much they will draw at once (200 hosts for the Traffic Diagram, 40 for

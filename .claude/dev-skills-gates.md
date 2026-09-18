@@ -1,41 +1,72 @@
 # Dev Skills gate state
 
-## Release sequence: 1.1.0-beta.3 (2026-09-18, local)
-Track: release sequence (version bump, PR into main, tag). User: "Yes" to
-starting release prep after cf594f0 + 5741adb were pushed. Branch
-claude/dev-skills-beta-workflow-cwzvx5, 0 behind origin/main (1040454).
-Removed .claude/beta2-handoff.md (folded into the beta.2 SHIP record; user
-approved earlier) and .claude/upload-diagrams-handoff.md (every TODO in it is
-done or recorded in the section below).
+## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
+Track: release sequence, on claude/dev-skills-beta-workflow-cwzvx5 (from
+origin/main 65bf7d4, tip c8dc667). Model: Sonnet 5 (user switched down,
+"no more coding if possible" -- docs/version-only work from here). Shell:
+Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
+(ls-remote, points at 65bf7d4).
 
-🔢 VERSION    ✅ 1.1.0-beta.3 in the four beta refs: backend/main.py:117
-              APP_VERSION, docker-compose.yml:37, README beta block, CHANGELOG.
-              README Quick start + docs/reverse-proxy.md stay on v1.0.0 by the
-              beta rule. v1.1.0-beta.2 tagged on remote (8c2e1bf).
-🔨 BUILD      ✅ handoff offered, user declined to try it -- replied "Commit"
-              without running the docker run block given for the image.
-              check.sh EXIT=0, 1647 passed, 337s, on the bumped tree
-              (unchanged during the run). docker build ->
-              localhost/pcap-server:1.1.0-beta.3 (sha256:13bce72f..., 641MB).
-              release.yml's own smoke step, extracted verbatim and run against
-              it: PASSED -- first real execution of that step anywhere (/ 200,
-              auth/status 200, servers 401, in-image APP_VERSION 1.1.0-beta.3,
-              encryption enabled, no traceback).
-🔒 SECURITY   ✅ 0 Critical, 0 High. Diff since the scanned 5741adb is version
-              strings, docs and two deleted .claude handoffs -- no code.
-              pip-audit clean (unchanged requirements).
-📄 DOCS       ✅ CHANGELOG 1.1.0-beta.3 (Security / Added / Fixed; the
-              locked-vault fix leads, with a passphrase-mode remediation note).
-              viewer.md: new "Opening a pcap from somewhere else"; diagrams get
-              the 8-slot legend, lane-label ellipsis, and where resolved names
-              come from. README "What it does" mentions upload. security.md:
-              uploads sealed in flight + "While locked, nothing is written".
-              architecture.md settings table gains max_upload_mb /
-              rate_limit_uploads_per_min.
-📦 RELEASE    ⏳ de29e7d committed + pushed (user: "Commit"). PR next. First
-              attempt refused by the preflight hook: the handoff annotation sat
-              on a wrapped line of the BUILD row; moved to its first line.
-🚀 SHIP       ⬜
+🔢 VERSION    ✅ bumped 1.1.0-beta.3 -> 1.1.0-beta.4 in backend/main.py
+              (APP_VERSION), docker-compose.yml (image tag), README.md (beta
+              badge). docs/security.md's "Before 1.1.0-beta.3" is a historical
+              note, correctly left alone. No other hardcoded refs found (grep).
+              repo/release-notes links unchanged (REPO_URL-derived, already
+              correct pattern). Previous tag v1.1.0-beta.3 verified on remote.
+🔨 BUILD      ✅ handoff offered and verified by hand. full suite via
+              scripts/check.sh on the tagged tree (75ee7f7): 1672 passed,
+              0 failed, 0 skipped, 366.86s, real tshark/capinfos/chromium/
+              docker. The prior sanitizer flake did not reproduce this run.
+              docker build localhost/pcap-server:1.1.0-beta.4, run with a
+              throwaway MASTER_KEY_FILE, / 200, /api/auth/status 200,
+              in-image APP_VERSION == 1.1.0-beta.4, encryption enabled, no
+              traceback in the log. Image and smoke key removed after.
+🔒 SECURITY   ✅ carried over -- 0 Critical/High on the code diff (prior
+              entry); this commit adds no code, only strings/docs.
+📄 DOCS       ✅ docs/viewer.md Traffic/Sequence Diagram section rewritten:
+              protocol picker, 15 marks (3 hue x 5 shape, was 8), Problems
+              chip/badges/stats, host search, stats pane incl. per-host
+              interfaces, Fit/Spacing/full screen/New window, click-to-filter
+              stays open, rewind-at-end, most-used-protocol badge, window
+              titles. CHANGELOG 1.1.0-beta.4 entry added (Added: picker, 15
+              marks, Problems, search, stats pane, toolbar controls, playback
+              polish; Changed: diagram button is now the lead tool). No
+              removed features to scrub. scripts/preview.sh is a dev-only
+              throwaway tool, not shipped in the image -- intentionally not
+              user-doc'd or changelog'd.
+📦 RELEASE    ✅ PR #19 open: claude/dev-skills-beta-workflow-cwzvx5 -> main.
+              Branch was synced with origin before every push (no divergence).
+              Release notes shown to the user in chat; approved ("yes").
+🚀 SHIP       ⬜ next: merge PR #19, confirm merge + CI on that commit, then
+              hand the tag block to the user.
+
+What shipped in this commit (frontend + scripts only; no backend change):
+- Traffic Diagram: end-of-play most-used-protocol badge per host; legend =
+  multi-select protocol picker (applies to the next play; unrelated hosts and
+  links hide); every protocol gets its own chip; 15 colored marks (3
+  validated hues x 5 shapes -- adding a 4th hue fails the dataviz validator,
+  measured); "Problems" chip + red link badges + stats rows + red ring during
+  play (resets, retransmissions, window, IP fragments, ICMP errors,
+  malformed); host search box (Enter steps through matches, Esc clears);
+  collapsible stats pane (protocols shown before any play); click a host or
+  link = filter the packet list, diagram stays open, link lists all its
+  protocols; zoom/pan/Fit, Spacing, full screen, New window (diagram-only
+  page; clicks relay to the main tab over BroadcastChannel); Resolve names
+  toggle; per-host interfaces on "any" captures; speed usable before play;
+  play rewinds at end with the picture kept; capture + view name in both
+  diagram titles; readable labels; node glyphs keep screen size when zoomed
+  out; automatic view never zooms below the separation floor.
+- Viewer: Traffic Diagram button is the lead tool (accent + icon, after Apply).
+- scripts/preview.sh + scripts/preview_pcap.py: throwaway preview on :8099.
+  See memory preview-container.md for the user's requirements.
+
+Next steps, in order:
+1. Run scripts/check.sh on this commit; expect only the sanitizer flake.
+   Decide whether to fix that flake (seed the random payload).
+2. Open items the user raised but did not decide: stats Top talkers/Busiest
+   links do not follow the protocol pick; problem badges can sit on a host
+   label on short links; a 4-hue palette option was offered, not chosen.
+3. Release prep for the next beta: VERSION bump, docs/viewer.md, CHANGELOG.
 
 ## IN PROGRESS: next beta -- upload tests, locked-vault fix, upload fly-out (2026-09-18, local)
 Track: work commit on claude/dev-skills-beta-workflow-cwzvx5 (resumed from the
@@ -619,9 +650,9 @@ live tree rather than copied forward, because several entries had gone stale.
   warning. It is a NEW package; vet it before adopting.
 - **Python 3.14** -- pydantic-core ships cp314 wheels now, so scripts/check.sh's
   3.13 ceiling could rise once the suite has actually run on 3.14. It never has.
-- **The release.yml smoke step has never executed**, and the gate's ancestor
-  fallback has never fired. Both shipped 2026-09-18 proven by tests only; the
-  next tag is what proves them. Both fail closed.
+- **The gate's ancestor fallback has never fired** (beta.3 used the primary
+  lookup). The release.yml smoke step is PROVEN: run locally against the beta.3
+  image and then in CI on the v1.1.0-beta.3 release, both passing.
 - **If CI time needs cutting**: 186 browser tests are very nearly the entire
   wall clock of a 1594-test run. The lever is pytest-xdist or sharding THOSE.
   NOT path-based test selection -- scripts/check.sh is one entrypoint shared by
