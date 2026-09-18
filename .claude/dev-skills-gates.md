@@ -1,6 +1,6 @@
 # Dev Skills gate state
 
-## IN PROGRESS: v1.1.0-beta.6 -- diagram zones/layouts, capture optimize, upload interfaces (2026-09-18, local)
+## SHIPPED: v1.1.0-beta.6 -- diagram zones/layouts, capture optimize, upload interfaces (2026-09-18, local)
 Track: release sequence. Branch feat/diagram-views-and-capture-optimize (from main 41b7c14).
 Model: Opus 5 (user approved). Shell: Linux bash.
 
@@ -13,8 +13,11 @@ Model: Opus 5 (user approved). Shell: Linux bash.
               pip-audit clean; no new deps; new inputs validated/bounded/user-scoped;
               innerHTML sinks escaped; SQL f-strings interpolate a constant only.
 📄 DOCS       ✅ CHANGELOG 1.1.0-beta.6, viewer.md, filters.md
-📦 RELEASE    ✅ PR #23 open: feat/diagram-views-and-capture-optimize -> main
-🚀 SHIP       ⬜
+📦 RELEASE    ✅ PR #23 merged by user as e387d10
+🚀 SHIP       ✅ tag v1.1.0-beta.6 -> e387d10 (user-pushed); Release run 35384287672 success
+              (smoke test in CI). First tag push landed on 41b7c14 before the merge; the
+              gate refused it (run 35384165318), nothing published; user re-tagged.
+              README beta line -> 1.1.0-beta.6 in docs/beta6-live.
 
 ## SHIPPED: v1.1.0-beta.5 -- large-capture diagrams + label fix (2026-09-18, local)
 Track: release sequence, closed. Branch feat/large-capture-diagrams -> PR #22.
