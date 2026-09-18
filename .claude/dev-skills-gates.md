@@ -33,7 +33,7 @@ confirmed live, so README's beta line moves from 1.1.0-beta.3 to
 📄 DOCS       ✅ this commit IS the doc update -- bumps the beta line now that
               `docker pull ghcr.io/darthrater78/pcap-server:1.1.0-beta.4`
               is verified working (see SHIP above).
-📦 RELEASE    ⬜ next: push, open PR to main, merge.
+📦 RELEASE    ✅ PR #21 open: docs/beta4-live -> main.
 🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
 
 ## Fix: README beta line reverted to the deployed tag (2026-09-18, local)
