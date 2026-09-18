@@ -11,10 +11,26 @@ diagram; more protocols shown there.
 
 🔢 VERSION    ⬜ not owed on a work commit. APP_VERSION stays 1.1.0-beta.2,
               which is what ghcr actually holds.
-🔨 BUILD      ⬜ handoff n/a (remote container; no docker here). Full suite via
-              scripts/check.sh was RUNNING when the session was told to stop,
-              so its result is NOT recorded as a pass -- see the note below.
-              Not required on this track.
+🔨 BUILD      ✅ handoff n/a -- remote container. Precisely: /usr/bin/docker
+              EXISTS here (check.sh's tool line lists it, and earlier gate
+              records saying "no docker" read as if it did not), but there is
+              no daemon -- `docker info` fails on a missing
+              /var/run/docker.sock -- so no image can be built or started, and
+              there is no artifact for the user to try by hand.
+              Full suite via scripts/check.sh on the committed tree: 1604
+              passed, 3 skipped, exit 0, 553.78s, with real
+              tshark/tcpdump/capinfos and chromium. 1607 collected against
+              1594 at beta.2. The 3 skips are test_entrypoint.py's
+              pre-existing root-writes-0500 cases.
+              Run three times this session; only this run counts. The first
+              two were invalidated by edits landing mid-run (pip-audit
+              installed into .venv, then the quality refactor of
+              _write_sealed_upload) and neither was recorded as a result.
+              Targeted re-run of the two highest-risk browser files
+              (test_diagrams_ui.py, test_capture_ui.py) before the commit: 68
+              passed.
+              NOT required on this track; run and recorded because the change
+              is code.
 🔒 SECURITY   ✅ 0 Critical, 0 High. One High found and fixed in this session's
               own new code; one pre-existing twin raised and left open. Detail
               below.
@@ -25,8 +41,15 @@ diagram; more protocols shown there.
 
 STOPPED MID-TASK on the user's instruction: "Stop the work for now, commit
 what's done and write a handoff to the repo." The features work and are
-verified by hand; the tests that would guard them are NOT written. Full state
-in .claude/upload-diagrams-handoff.md, which is the file to start from.
+verified by hand; the tests that would guard the UPLOAD are NOT written (the
+DNS fix does have 5 of its own). Full state in
+.claude/upload-diagrams-handoff.md, which is the file to start from.
+
+COMMITTED AND PUSHED: ca937c5 (the DNS fix and its tests, kept as its own
+commit so the bugfix is reviewable alone) and 19be0ef (uploads, the eight
+protocol slots, this record and the handoff), on
+claude/dev-skills-beta-workflow-cwzvx5, confirmed on the remote at 19be0ef.
+No PR. This gate-record update is a third commit on top of those two.
 
 SECURITY GATE, in full.
 

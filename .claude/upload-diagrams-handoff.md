@@ -92,6 +92,14 @@ encryption at rest. Reproduced (the pcap magic was the first four bytes on
 disk), then fixed fail-closed before anything is written; now 503, because the
 remedy is an admin unlocking and the same request then working.
 
+**5. Suite status on the committed tree.** `scripts/check.sh`: 1604 passed, 3
+skipped, exit 0, 553.78s, with real tshark/tcpdump/capinfos and chromium. The 3
+skips are `test_entrypoint.py`'s pre-existing root-writes-0500 cases. So the
+tree is green — but green here means nothing about the upload, which has no
+tests of its own yet. Note for anyone reading an older gate record: `docker`
+IS on PATH in this container, but there is no daemon (`docker info` fails on a
+missing socket), so no image can be built or run.
+
 ## OPEN — the pre-existing twin of that finding, NOT fixed
 
 ⚠️ **The same fail-open almost certainly exists on the capture path, and it
