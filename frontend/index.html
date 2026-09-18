@@ -456,14 +456,21 @@
                             role="listbox" aria-label="Display filter suggestions" hidden></ul>
                     </div>
                     <button id="btn-apply-filter" class="btn btn-sm btn-secondary">Apply</button>
+                    <!-- The Traffic Diagram leads the viewer's tools, in the accent
+                         color with an icon of its own: it is the fastest way to
+                         see what a capture is. -->
+                    <button id="btn-topology" class="btn btn-sm btn-primary btn-diagram"
+                            title="Who talks to whom, sized by traffic -- with playback of the actual packet order, protocol by protocol">
+                        <svg class="btn-diagram-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                            <line x1="4" y1="4" x2="12" y2="6" /><line x1="4" y1="4" x2="6" y2="12" /><line x1="12" y1="6" x2="6" y2="12" />
+                            <circle cx="4" cy="4" r="2.2" /><circle cx="12" cy="6" r="2.2" /><circle cx="6" cy="12" r="2.2" />
+                        </svg>Traffic Diagram</button>
                     <button id="btn-save-view" class="btn btn-sm btn-secondary"
                             title="Save the current display filter as a tab on this capture">Save view</button>
                     <button id="btn-protocol-hierarchy" class="btn btn-sm btn-secondary"
                             title="How this capture (or the current filter's slice of it) breaks down by protocol">Protocol Hierarchy</button>
                     <button id="btn-conversations" class="btn btn-sm btn-secondary"
                             title="Traffic totals by address pair and by address">Conversations</button>
-                    <button id="btn-topology" class="btn btn-sm btn-secondary"
-                            title="Who talks to whom, sized by traffic -- with playback of the actual packet order">Traffic Diagram</button>
                     <button id="btn-sequence" class="btn btn-sm btn-secondary"
                             title="Time-ordered exchange between hosts, one lane per host">Sequence Diagram</button>
                     <button id="btn-columns" class="btn btn-sm btn-secondary"
@@ -861,10 +868,21 @@
      canvas overlay for the animated packet dots, matching the rest of this
      frontend's zero-dependency approach. -->
 <dialog id="topology-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="topology-title">
-    <h2 id="topology-title" class="sanitize-title">Traffic Diagram</h2>
+    <h2 id="topology-title" class="sanitize-title diagram-title">Traffic Diagram<span id="topology-context" class="diagram-context"></span></h2>
     <p id="topology-scope" class="sanitize-target"></p>
+    <p class="diagram-hint">Click a host or a link to filter the packet list to it (the diagram stays open) and list every protocol it carried. Drag a host to move it.
+        <span id="topology-selection" class="diagram-selection" aria-live="polite"></span></p>
     <div id="topology-cap-warning" class="diagram-cap-warning" hidden></div>
     <div id="topology-body" class="diagram-body">
+        <!-- First thing in the diagram, and the largest control on it. -->
+        <div class="diagram-search">
+            <svg class="diagram-search-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <circle cx="7" cy="7" r="5" /><line x1="11" y1="11" x2="15" y2="15" />
+            </svg>
+            <input type="search" id="topology-search" placeholder="Find a host by name or IP"
+                   aria-label="Find a host by name or IP" autocomplete="off" spellcheck="false">
+            <span id="topology-search-count" class="diagram-search-count" aria-live="polite"></span>
+        </div>
         <div class="diagram-toolbar">
             <div id="topology-legend" class="diagram-legend"></div>
             <div class="diagram-playback">
@@ -883,9 +901,38 @@
                 <span id="topology-playback-count" class="diagram-playback-count"></span>
             </div>
         </div>
-        <div class="diagram-canvas-wrap">
-            <svg id="topology-svg" class="diagram-svg"></svg>
-            <canvas id="topology-canvas" class="diagram-canvas"></canvas>
+        <div class="diagram-main">
+            <div class="diagram-canvas-wrap">
+                <svg id="topology-svg" class="diagram-svg"></svg>
+                <canvas id="topology-canvas" class="diagram-canvas"></canvas>
+                <!-- Floats over the drawing's top-left corner. Wheel zooms and
+                     dragging the background pans, too. -->
+                <div class="diagram-view-controls">
+                    <button type="button" id="btn-topology-zoom-out" class="btn btn-sm btn-secondary" title="Zoom out" aria-label="Zoom out">&minus;</button>
+                    <span id="topology-zoom-level" class="diagram-zoom-level" aria-live="polite">100%</span>
+                    <button type="button" id="btn-topology-zoom-in" class="btn btn-sm btn-secondary" title="Zoom in" aria-label="Zoom in">+</button>
+                    <button type="button" id="btn-topology-fit" class="btn btn-sm btn-secondary" title="Fit the whole diagram in view">Fit</button>
+                    <label class="diagram-spacing-label">Spacing
+                        <select id="topology-spacing" class="diagram-speed" title="Spread the hosts further apart, then zoom in to read them">
+                            <option value="1" selected>Normal</option>
+                            <option value="1.6">Wide</option>
+                            <option value="2.5">Wider</option>
+                            <option value="4">Widest</option>
+                        </select>
+                    </label>
+                    <label class="diagram-spacing-label" title="Show host names instead of addresses. Sends a reverse-DNS query for every address in the capture; the packet list follows the same setting.">
+                        <input type="checkbox" id="topology-resolve"> Resolve names
+                    </label>
+                    <button type="button" id="btn-topology-fullscreen" class="btn btn-sm btn-secondary" aria-pressed="false" title="Full screen">Full screen</button>
+                    <button type="button" id="btn-topology-new-window" class="btn btn-sm btn-secondary" title="Open this diagram in a window of its own">New window</button>
+                </div>
+            </div>
+            <!-- Collapsible: open by default, and remembered per browser once
+                 closed (diagrams.js initTopologyStatsToggle). -->
+            <details id="topology-stats" class="diagram-stats" open>
+                <summary>Stats</summary>
+                <div id="topology-stats-body" class="diagram-stats-body"></div>
+            </details>
         </div>
     </div>
     <div class="sanitize-actions">
@@ -897,7 +944,7 @@
      time-ordered (ordinal, not proportional -- see diagrams.js) arrows
      between lanes. Wireshark calls the equivalent view "Flow Graph". -->
 <dialog id="sequence-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="sequence-title">
-    <h2 id="sequence-title" class="sanitize-title">Sequence Diagram</h2>
+    <h2 id="sequence-title" class="sanitize-title diagram-title">Sequence Diagram<span id="sequence-context" class="diagram-context"></span></h2>
     <p id="sequence-scope" class="sanitize-target"></p>
     <div id="sequence-cap-warning" class="diagram-cap-warning" hidden></div>
     <div id="sequence-body" class="diagram-body">

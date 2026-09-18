@@ -495,6 +495,13 @@ function enterApp() {
     syncSaveButton("btn-save-filter", "cap-bpf");
     renderFilterSuggestions("display-filter-suggestions", DISPLAY_SUGGESTIONS);
     renderFilterPreview();
+    // A page opened by the Traffic Diagram's "New window" shows only that
+    // (diagrams.js openDiagramWindow) and skips the rest of the start-up.
+    const diagramParams = diagramWindowParams();
+    if (diagramParams) {
+        openDiagramWindow(diagramParams);
+        return;
+    }
     loadServers();
     loadCaptures();
     setInterval(refreshRunningCaptures, 3000);
