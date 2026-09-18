@@ -22,6 +22,13 @@ on:
     paths:
       - '.github/workflows/**'
 
+# Same reasoning as check.yml's, minus the main exception: nothing looks up
+# this workflow's conclusion by SHA the way release.yml's gate looks up Check's,
+# so a superseded run here is simply wasted.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   actionlint:
     runs-on: ubuntu-latest

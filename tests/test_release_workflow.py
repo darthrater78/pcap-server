@@ -329,17 +329,51 @@ def test_a_compare_that_cannot_be_read_is_refused_not_passed(tmp_path):
     assert result.returncode != 0
 
 
+def _paths_ignore_blocks() -> list[list[str]]:
+    """Every paths-ignore list in check.yml, in file order."""
+    return [
+        re.findall(r"-\s*['\"]([^'\"]+)['\"]", body)
+        for body in re.findall(
+            r"^\s*paths-ignore:\s*$\n((?:\s*(?:#.*|-\s*['\"].+['\"])\s*$\n)+)",
+            REAL_CHECK_YML,
+            re.MULTILINE,
+        )
+    ]
+
+
 def test_the_real_check_yml_paths_ignore_matches_the_shape_the_step_reads():
     """The list is parsed out of check.yml at the tagged commit rather than
     restated in release.yml, so a change to its formatting -- not just its
     contents -- would make every skipped-commit release refuse."""
-    block = re.search(
-        r"^\s*paths-ignore:\s*$\n((?:\s*(?:#.*|-\s*['\"].+['\"])\s*$\n)+)",
-        REAL_CHECK_YML,
-        re.MULTILINE,
-    )
-    assert block, "check.yml has no paths-ignore block in the shape the step's sed expects"
-    entries = re.findall(r"-\s*['\"]([^'\"]+)['\"]", block.group(1))
+    blocks = _paths_ignore_blocks()
+    assert blocks, "check.yml has no paths-ignore block in the shape the step's sed expects"
+    entries = blocks[0]
     assert ".claude/**" in entries
     # Every entry is an exact path or a directory glob; the step refuses anything else.
     assert all(e.endswith("/**") or "*" not in e for e in entries), entries
+
+
+def test_check_yml_ignores_the_same_paths_on_push_and_pull_request():
+    """GitHub Actions has no YAML anchors, so check.yml writes the ignore list
+    out twice. Nothing but this notices them drifting apart -- and the drift is
+    silent and expensive: the pull_request trigger had no filter at all, so a
+    .claude/-only commit skipped on push ran the full suite on the PR anyway.
+    """
+    blocks = _paths_ignore_blocks()
+    assert len(blocks) == 2, f"expected a paths-ignore under push and pull_request, got {len(blocks)}"
+    assert blocks[0] == blocks[1], f"push ignores {blocks[0]}, pull_request ignores {blocks[1]}"
+
+
+def test_check_yml_push_trigger_still_covers_the_default_branch():
+    """release.yml's gate looks up a push run on the commit a tag points at,
+    and the ancestor search below requires one too. Narrowing this trigger past
+    main would leave every tag with nothing to find."""
+    push = re.search(r"^  push:\n(?:.*\n)*?    branches: \[([^\]]+)\]", REAL_CHECK_YML, re.MULTILINE)
+    assert push, "check.yml's push trigger has no branches filter in the expected shape"
+    assert "main" in push.group(1), push.group(1)
+
+
+def test_check_yml_never_cancels_a_run_on_the_default_branch():
+    """A cancelled run is not a passing one, so cancelling on main would strand
+    a merge commit as untaggable until someone re-ran Check by hand."""
+    assert "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}" in REAL_CHECK_YML

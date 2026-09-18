@@ -1,13 +1,26 @@
 name: Check
 
 on:
-  # Branches only. A bare `push:` also matches a tag push, which is exactly
-  # what fires release.yml -- so tagging a commit this same Check already
-  # passed on the branch push ran the whole suite a second time against
-  # nothing new. Tags carry no separate ref under refs/heads, so this filter
-  # excludes them without needing to name release.yml's own 'v*' pattern here.
+  # The default branch only, and no tags.
+  #
+  # Tags: a bare `push:` also matches a tag push, which is exactly what fires
+  # release.yml -- so tagging a commit this same Check already passed on ran
+  # the whole suite a second time against nothing new. Tags carry no ref under
+  # refs/heads, so naming branches here excludes them without repeating
+  # release.yml's own 'v*' pattern.
+  #
+  # Other branches: this was ['**'], which meant a commit pushed to a branch
+  # with an open PR ran the full suite TWICE against the same tree -- once as
+  # `push`, once as `pull_request`. Both runs take about ten minutes. PR #14's
+  # branch shows the pair: runs 134 (push) and 135 (pull_request), one SHA.
+  # `pull_request:` below covers branch work, so this trigger now exists for
+  # exactly one reason: release.yml's gate looks up a **push** run on the
+  # commit a tag points at, and tags only ever land here.
+  #
+  # The cost is that a branch with no PR open gets no Check. Open a draft PR,
+  # or use the workflow_dispatch below.
   push:
-    branches: ['**']
+    branches: [main]
     # Nothing in this suite reads README.md, docs/**, or CHANGELOG.md --
     # checked, not assumed -- and .claude/ is session scratch, so a push
     # touching only those already gets no coverage whether or not this runs.
@@ -25,12 +38,45 @@ on:
       - 'docs/**'
       - '.claude/**'
       - '.github/workflows/**'
+  # The same ignore list as the push trigger, and it has to be written out
+  # again: GitHub Actions does not support YAML anchors, so there is no way to
+  # define it once. Without this the two triggers disagreed -- a `.claude/`-only
+  # commit was correctly skipped on push and then ran the full ten-minute suite
+  # on the PR anyway. Runs 139 and 140 on 2026-09-18 are that, twice, for two
+  # commits that between them changed one bookkeeping file.
+  #
+  # tests/test_release_workflow.py asserts the two lists stay identical, since
+  # nothing else would notice them drifting apart.
+  #
+  # NOTE: if Check is ever made a required status check on main, a PR whose
+  # every file is in this list reports no run at all and sits on "Expected --
+  # waiting for status" forever. The fix then is a skip job reporting the same
+  # check name, not deleting this filter.
   pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'docs/**'
+      - '.claude/**'
+      - '.github/workflows/**'
   # The escape hatch release.yml's gate points at. That gate refuses to publish
   # a commit Check has never run for, and paths-ignore above means a commit
   # touching only docs can be exactly that commit. Running Check by hand on the
   # branch gives it the run it is looking for, keyed on the branch head's SHA.
   workflow_dispatch:
+
+# Supersede a running suite when the same ref is pushed again -- three commits
+# in quick succession used to run three full suites to completion, none of them
+# about the tree that ended up on the branch.
+#
+# Except on main, where a run is never cancelled. release.yml's gate asks for a
+# passing Check run on the commit a tag points at, and a cancelled run is not a
+# passing one: cancelling here would strand a merge commit as untaggable until
+# someone re-ran it by hand. Merges to main are rare enough that the saving is
+# not worth that.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:

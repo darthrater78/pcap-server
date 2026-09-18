@@ -1,5 +1,142 @@
 # Dev Skills gate state
 
+## SHIPPED: v1.1.0-beta.2 (2026-09-18) -- the interrupted ship, finished
+
+🚀 SHIP ✅ CLOSED AND SHIPPED. All four post-ship checks:
+ * tag v1.1.0-beta.2 -> 8c2e1bf on the remote (the PR #16 merge commit), moved
+   off 0038140 by the user running the presented block. Both halves of the
+   re-push (delete, then create) went through; never executed here.
+ * Release run 35299208966 success. All three gate steps green. The Check step
+   waited 9 minutes for the merge commit's own run and logged "Check passed for
+   8c2e1bf..." -- the PRIMARY lookup. The ancestor fallback added in this
+   release was NOT exercised; it ships proven by tests, not by a live release.
+   The first release to actually use it will be a docs-only one.
+ * GitHub release "v1.1.0-beta.2 (Pre-release)", prerelease: true, 02:35:01Z.
+ * Image ghcr :1.1.0-beta.2 -> sha256:2d5a4ad900550cc688c52794f66662666fc7450a
+   f33ab4b1cd89ae54670b7ba9 (a real digest, not e3b0c442). Floating tags
+   correctly did NOT move: :dev still 2c094523 (dev.40), :latest still c686ea5a
+   (1.0.0), both matching what earlier sessions recorded.
+
+## Work commit: CI trigger waste (2026-09-18)
+Track: work commit -- CI plumbing, no version bump, no artifact, no publish.
+Not added to CHANGELOG, matching the dev.33/34 CI commits' precedent.
+It WILL merge to main via PR, which current SKILL.md S2 reads as a release
+sequence; this repo's own recorded decision (dev-skills 2.23.0, in the dev.40
+section below) says intent to publish is what makes a release, and there is
+none here. Flagged to the user rather than settled unilaterally.
+
+Branch restarted from origin/main (8c2e1bf) because PR #16 is merged -- follow-up
+work is a fresh change, not commits stacked on merged history.
+
+User: "Are we doing the right tests for the right use case? We seem to be doing
+the same long test for every action to github" -> then "do all three".
+
+Three findings, all verified against real run data, not inferred:
+ 1. check.yml's `pull_request:` had NO paths-ignore while `push:` had a
+    carefully reasoned one. A .claude/-only commit was skipped on push and ran
+    the full ~10min suite on the PR. Runs 139 (1b406da) and 140 (4791c7e) on
+    2026-09-18 are exactly this, twice, in one session.
+ 2. No concurrency group on check.yml or lint-workflows.yml -- three quick
+    commits ran three full suites to completion.
+ 3. push ['**'] + bare pull_request double-fired on one SHA. PR #14's branch:
+    runs 134 (push) and 135 (pull_request), same commit 3157794.
+
+Browser-suite timing, relevant to the original question: 186 browser tests
+took 8m48s measured alone (contended with another run, so inflated), against
+1597 tests in ~9m for the whole suite. The ~12% of tests driving a real
+chromium are essentially the entire wall clock. If more time needs cutting, the
+lever is pytest-xdist or sharding those, which skips no tests -- not
+path-based selection.
+
+Fixes: pull_request gains the same paths-ignore (written out again -- GitHub
+Actions has no YAML anchors); concurrency on both workflows, cancel-in-progress
+everywhere EXCEPT main (a cancelled run is not a passing one, and release.yml's
+gate would then refuse to tag that merge commit); push narrowed to [main],
+which is the only branch the gate needs a push run on.
+release.yml's pattern reader gains `sort -u`, because check.yml now carries the
+list twice and sed reads both ranges.
+
+FOURTH ITEM, added on the user's "add the image smoke test too": release.yml
+built the image and pushed it in ONE step, so `docker build` exiting 0 was the
+only thing between a broken image and GHCR. Nothing ever started the container.
+Every artifact check in the release records below -- "boots, / 200, 0
+tracebacks, APP_VERSION correct in-image" -- was done BY HAND, locally, before
+tagging. CI never did it, and this session's own BUILD gate was handoff n/a, so
+:1.1.0-beta.2 was published without anyone in this session starting it (the
+code was unchanged from beta.2's own smoke run, so that was sound -- but by
+luck of the diff, not by design).
+
+Now: build with load: true, prove it runs, then a cache-hit rebuild that
+pushes. Six assertions -- / 200 within 60s, /api/auth/status 200, /api/servers
+401, in-image APP_VERSION == the tag, no Traceback in the log, "encryption
+enabled" present. The version check is the independent half of the gate job's:
+that one reads the repo at the tagged SHA, this reads the code INSIDE the
+artifact, and only the second catches a Dockerfile that copied the wrong tree.
+The v1.0.0 incident (:1.0.0 published holding 0.1.0-dev.40) is that shape one
+layer down.
+Uses a real throwaway key, not ALLOW_UNENCRYPTED_CAPTURES (encryption is what
+docker-compose.yml ships). No bind mounts for data/captures/ssh-keys -- the
+Dockerfile already creates them owned by appuser, and mounting host dirs is
+exactly how the dev.34 by-hand smoke run failed for reasons unrelated to the
+image.
+
+NOT RUN. Docker is not usable in this container, so the smoke test is verified
+only by actionlint+shellcheck, `bash -n`, YAML parse, and the in-image sed
+checked against the real backend/main.py (returns 1.1.0-beta.2). One real bug
+was found and fixed during that check: `curl -fsS` exits non-zero on a 4xx, so
+under `set -e` a wrong status code would have aborted the step with curl's
+error instead of the message naming the code. THE FIRST RELEASE AFTER THIS
+MERGES IS THE PROOF. If the smoke step is itself broken the release fails at
+that step rather than publishing something bad -- the safe direction, but not a
+substitute for having run it.
+
+DELIBERATELY NOT DONE: splitting the suite by path (run browser tests only when
+frontend/ changes). scripts/check.sh is one entrypoint shared by CI and local
+dev, with a comment saying it exists so the two cannot drift; path-based
+selection breaks that property, and the run you skip is the one that catches it.
+The waste was never that the suite is thorough -- it is that it ran on commits
+containing no code.
+
+RISK FLAGGED, NOT VERIFIABLE FROM HERE: if Check is a required status check on
+main, a PR whose every file is in paths-ignore now reports no run and sits on
+"Expected -- waiting for status" forever. No tool in this session can read
+branch protection. The remedy is a skip job reporting the same check name, not
+deleting the filter. check.yml carries this note inline.
+
+🔢 VERSION    ⬜ not owed -- work commit, APP_VERSION stays 1.1.0-beta.2
+🔨 BUILD      ✅ handoff n/a (remote container; docker is not usable here at
+              all, which is also why the smoke test itself could not be run).
+              Full suite via scripts/check.sh: 1594 passed, 3 skipped, exit 0,
+              556.99s. actionlint 1.7.12 + shellcheck clean over all three
+              workflows. The 4 new workflow-shape tests were checked against
+              8c2e1bf's check.yml and 3 of them fail there, so they
+              discriminate.
+🔒 SECURITY   ✅ 0 Critical, 0 High. Triggers and concurrency add no execution
+              surface -- they only narrow which pushes start a run; no new
+              action, no new SHA, no permissions change anywhere.
+
+              The one item with real content is the smoke step: the release
+              job holds contents: write and packages: write, and it now RUNS
+              this repo's code rather than only building it. Checked rather
+              than waved through: `docker run` passes no host environment into
+              the container, so GITHUB_TOKEN is not reachable from inside it;
+              only MASTER_KEY_FILE and one read-only bind of a /dev/urandom
+              key that never leaves the runner. The two values read back out
+              of the container (in-image APP_VERSION, the log text) are
+              compared and grepped, never eval'd. A hung container is bounded
+              twice, by the step's own 60s poll deadline and the job's 30min
+              timeout.
+
+              Quality: the step fails closed everywhere -- a container that
+              exits during the poll is detected rather than waited out, and
+              cleanup() dumps the container log on every exit path so a smoke
+              failure never needs a re-run to find out what happened.
+📄 DOCS       ➖ N/A -- CI plumbing, not app CHANGELOG material (repo precedent:
+              the dev.33/34 CI commits). The reasoning is in the workflows' own
+              comments, as the rest of this repo's CI decisions are.
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜ not owed -- no tag, no artifact
+
 ## Release sequence: release.yml gate fallback -> finish v1.1.0-beta.2 (2026-09-18)
 Track: started as a work commit; became a release sequence when the user
 asked to move the tag and unblock beta.2, which needs the fix on main.
