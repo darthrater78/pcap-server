@@ -278,7 +278,8 @@ async def test_the_trust_host_button_is_wired_to_something(app_page):
     comes afterwards -- against this address, which is TEST-NET-3 and answers
     nothing, that dialog is ssh-keyscan's failure reported back. Which dialog
     it is does not matter here. That one arrives at all is the regression this
-    test exists for, and against the real command that costs the ssh-keyscan timeout to find out.
+    test exists for; against the real command it costs the ssh-keyscan timeout
+    to find out.
     """
     await _add_via_form(
         app_page, HOST, submit=lambda: app_page.press("#new-srv-host", "Enter")

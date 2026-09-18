@@ -359,10 +359,51 @@ async def sign_in(page, live_server) -> None:
     await page.wait_for_selector("#app-screen:not([hidden])")
 
 
+@pytest.fixture(scope="session")
+def admin_session(live_server):
+    """One signed-in session cookie, minted once for every app_page to reuse.
+
+    Signing in through the login screen costs about 0.75s a test -- a scrypt
+    verify at OWASP cost, two round trips and a TOTP step -- and it was paid by
+    every test that only wanted to be signed in, some 200 of them. The login
+    screen itself is exercised by the tests that are about it, which still go
+    through sign_in().
+
+    The session is the admin's, and only a test that ends it (signing out) or
+    an admin action on that same user can invalidate it; app_page notices and
+    signs in the slow way rather than handing a test a dead session.
+    """
+    import httpx
+
+    with httpx.Client(base_url=live_server.url, timeout=30) as client:
+        client.post(
+            "/api/auth/login",
+            json={
+                "username": ADMIN_USERNAME,
+                "password": ADMIN_PASSWORD,
+                "totp_code": totp_now(live_server.totp_secret),
+                "trust_device": False,
+            },
+        ).raise_for_status()
+        return {"value": client.cookies["session"]}
+
+
 @pytest.fixture
-async def app_page(page, live_server):
+async def app_page(page, live_server, admin_session):
     """A page signed in and sitting on the Servers tab."""
-    await sign_in(page, live_server)
+    await page.context.add_cookies(
+        [{"name": "session", "value": admin_session["value"], "url": live_server.url}]
+    )
+    await page.goto("/")
+    signed_in = await page.wait_for_selector(
+        "#app-screen:not([hidden]), #login-form:not([hidden])"
+    )
+    if await signed_in.get_attribute("id") != "app-screen":
+        # The shared session is gone (something signed the admin out). Sign in
+        # the long way and share the new one, so one such test costs one login.
+        await sign_in(page, live_server)
+        cookies = await page.context.cookies(live_server.url)
+        admin_session["value"] = next(c["value"] for c in cookies if c["name"] == "session")
     return page
 
 
