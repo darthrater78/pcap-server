@@ -270,7 +270,8 @@
                             go looking for, grouped by what you are hunting. These are
                             <strong>capture</strong> filters: they decide what tcpdump records
                             on the remote host, and anything they exclude is gone for good.
-                            Choosing one fills in the BPF field above. To narrow a capture you
+                            Choosing one fills in the BPF field above; <strong>Not</strong> leaves
+                            that traffic out instead. To narrow a capture you
                             already have, use the Viewer's display filter instead &mdash;
                             different language, different job.
                         </p>
@@ -310,17 +311,42 @@
                         <label for="cap-snaplen">Snap length</label>
                         <input type="number" id="cap-snaplen" placeholder="auto">
                     </div>
-                    <!-- Whether each diagram holds to its packet cap. Per browser,
-                         read when a diagram opens (diagrams.js, diagramPacketLimit). -->
-                    <div class="diagram-caps">
-                        <label class="diagram-cap" title="Ticked: the Traffic Diagram loads at most 100,000 packets and asks for a narrower filter above that. Unticked: only the server's Max capture packets (Settings) limits it, which matters only if an admin has raised it past 100,000. Applies the next time the diagram opens.">
-                            <input type="checkbox" id="topology-cap-enabled" checked>
-                            <span>Traffic Diagram max <strong>100,000</strong> packets</span>
-                        </label>
-                        <label class="diagram-cap" title="Ticked: the Sequence Diagram draws at most 5,000 packets, one row each, and asks for a narrower filter above that. Unticked: it draws up to the server's Max capture packets (Settings, 100,000 by default) -- tens of thousands of rows can slow the browser down. Applies the next time the diagram opens.">
-                            <input type="checkbox" id="sequence-cap-enabled" checked>
-                            <span>Sequence Diagram max <strong>5,000</strong> packets</span>
-                        </label>
+                    <!-- "Optimize for diagrams": ticking a diagram fits the capture
+                         to it -- Max packets set to that diagram's cap (the
+                         lower one when both are ticked), a snap length that
+                         keeps headers only, and noisy traffic left out so the
+                         cap is spent on conversations. Unticked by default,
+                         and not remembered: each capture chooses.
+                         app.js initDiagramOptimize. -->
+                    <div class="diagram-optimize">
+                        <span class="capture-limits-label">Optimize for diagrams <span class="hint">&mdash; tick one (one per capture) to fit this capture to it</span></span>
+                        <div class="diagram-caps">
+                            <label class="diagram-cap" title="Ticking sets Max packets to 100,000, a header-only snap length, and leaves the noise below out of the capture. While ticked, the capture never asks for more packets than the Traffic Diagram can draw.">
+                                <input type="checkbox" id="topology-cap-enabled">
+                                <span>Traffic Diagram <span class="hint">max <strong>100,000</strong> packets</span></span>
+                            </label>
+                            <label class="diagram-cap" title="Ticking sets Max packets to 10,000 (the Sequence Diagram draws one row per packet), a header-only snap length, and leaves the noise below out of the capture. While ticked, the capture never asks for more than 10,000 packets.">
+                                <input type="checkbox" id="sequence-cap-enabled">
+                                <span>Sequence Diagram <span class="hint">max <strong>10,000</strong> packets</span></span>
+                            </label>
+                        </div>
+                        <div id="optimize-panel" class="optimize-panel" hidden>
+                            <p class="field-hint">Leave out chatter that crowds a diagram: every one of these packets would count against the cap. Ticked ones are added to the BPF filter above as <code>and not (&hellip;)</code>.</p>
+                            <div id="optimize-exclusions" class="optimize-exclusions" role="group" aria-label="Traffic to leave out"></div>
+                            <div class="optimize-row">
+                                <span id="optimize-summary" class="hint"></span>
+                                <button type="button" id="btn-optimize-apply" class="btn btn-sm btn-primary"
+                                        title="Set Max packets and Snap length for the ticked diagram(s), and add the ticked exclusions to the BPF filter">Apply optimized settings</button>
+                            </div>
+                            <div class="optimize-row">
+                                <label for="optimize-preset">Your presets</label>
+                                <select id="optimize-preset"><option value="">Recommended</option></select>
+                                <button type="button" id="btn-optimize-save" class="btn btn-sm btn-secondary"
+                                        title="Save the ticked exclusions, snap length and max packets under a name of your own">Save as preset</button>
+                                <button type="button" id="btn-optimize-delete" class="btn btn-sm btn-danger btn-quiet" disabled>Delete</button>
+                                <span id="optimize-msg" class="hint" role="status" aria-live="polite"></span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <footer class="capture-card-foot">
@@ -346,6 +372,18 @@
                                 <input type="file" id="upload-file" accept=".pcap,.pcapng,.cap,application/vnd.tcpdump.pcap">
                                 <button id="btn-upload-capture" class="btn btn-secondary" disabled>Upload</button>
                                 <span id="upload-msg" class="hint" role="status" aria-live="polite"></span>
+                            </div>
+                            <!-- Captured on more than one interface? Ticking opens the
+                                 Interfaces dialog now, and the mapping goes up with the
+                                 file (app.js openSubnetMapDialog, onUploadCaptureClick). -->
+                            <label class="upload-multi">
+                                <input type="checkbox" id="upload-multi-iface">
+                                Captured on more than one interface
+                                <span class="hint">Say which subnet was on which interface; it is saved with the upload</span>
+                            </label>
+                            <div id="upload-subnet-summary" class="upload-subnet-summary" hidden>
+                                <span id="upload-subnet-list"></span>
+                                <button type="button" id="btn-upload-subnets-edit" class="btn btn-sm btn-secondary">Edit</button>
                             </div>
                         </div>
                     </div>
@@ -468,7 +506,7 @@
                             role="listbox" aria-label="Display filter suggestions" hidden></ul>
                     </div>
                     <button id="btn-apply-filter" class="btn btn-sm btn-secondary">Apply</button>
-                    <!-- The Traffic Diagram leads the viewer's tools, in the accent
+                    <!-- The two diagrams lead the viewer's tools, in the accent
                          color with an icon of its own: it is the fastest way to
                          see what a capture is. -->
                     <button id="btn-topology" class="btn btn-sm btn-primary btn-diagram"
@@ -477,14 +515,19 @@
                             <line x1="4" y1="4" x2="12" y2="6" /><line x1="4" y1="4" x2="6" y2="12" /><line x1="12" y1="6" x2="6" y2="12" />
                             <circle cx="4" cy="4" r="2.2" /><circle cx="12" cy="6" r="2.2" /><circle cx="6" cy="12" r="2.2" />
                         </svg>Traffic Diagram</button>
+                    <!-- Its companion, right beside it and just as prominent. -->
+                    <button id="btn-sequence" class="btn btn-sm btn-primary btn-diagram"
+                            title="Time-ordered exchange between hosts, one lane per host">
+                        <svg class="btn-diagram-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                            <line x1="3" y1="2" x2="3" y2="14" /><line x1="13" y1="2" x2="13" y2="14" />
+                            <line x1="3" y1="5" x2="12" y2="5" /><line x1="13" y1="9" x2="4" y2="9" /><line x1="3" y1="12.5" x2="12" y2="12.5" />
+                        </svg>Sequence Diagram</button>
                     <button id="btn-save-view" class="btn btn-sm btn-secondary"
                             title="Save the current display filter as a tab on this capture">Save view</button>
                     <button id="btn-protocol-hierarchy" class="btn btn-sm btn-secondary"
                             title="How this capture (or the current filter's slice of it) breaks down by protocol">Protocol Hierarchy</button>
                     <button id="btn-conversations" class="btn btn-sm btn-secondary"
                             title="Traffic totals by address pair and by address">Conversations</button>
-                    <button id="btn-sequence" class="btn btn-sm btn-secondary"
-                            title="Time-ordered exchange between hosts, one lane per host">Sequence Diagram</button>
                     <button id="btn-columns" class="btn btn-sm btn-secondary"
                             title="Choose which columns this list shows, and their order. Drag a heading to move it, or right-click one.">Columns</button>
                     <button id="btn-download-capture" class="btn btn-sm btn-secondary">Download .pcap</button>
@@ -873,6 +916,26 @@
     </div>
 </dialog>
 
+<!-- Which subnet sits behind which interface, for a capture whose packets do
+     not say (an upload, or one named interface). Each packet then gets that
+     interface and an in/out direction (packet_parser.SubnetMap). -->
+<dialog id="subnet-map-dialog" class="stats-dialog subnet-map-dialog" aria-labelledby="subnet-map-title">
+    <h2 id="subnet-map-title" class="sanitize-title">Interfaces<span id="subnet-map-capture" class="diagram-context"></span></h2>
+    <p class="hint">Name the interface each subnet was captured on. A packet to a mapped subnet is <strong>out</strong> on its interface, one from it is <strong>in</strong>; routed between two, it shows where it leaves. A direction the pcapng recorded wins. Leave a name empty to skip that subnet.</p>
+    <table class="subnet-map-table">
+        <thead><tr><th scope="col">Subnet</th><th scope="col">Interface</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr></thead>
+        <tbody id="subnet-map-rows"></tbody>
+    </table>
+    <div class="subnet-map-foot">
+        <button type="button" id="btn-subnet-map-add" class="btn btn-sm btn-secondary">Add a subnet</button>
+        <span id="subnet-map-msg" class="hint" role="status" aria-live="polite"></span>
+    </div>
+    <div class="sanitize-actions">
+        <button type="button" class="btn btn-sm btn-secondary" data-close-dialog>Skip</button>
+        <button type="button" id="btn-subnet-map-save" class="btn btn-sm btn-primary">Save interfaces</button>
+    </div>
+</dialog>
+
 <!-- Traffic Diagram: a force-directed graph of who talks to whom, built from
      the same Conversations totals above -- plus an opt-in playback of the
      capped packet-level order for the "dynamic" part. No external graphing
@@ -881,8 +944,11 @@
      frontend's zero-dependency approach. -->
 <dialog id="topology-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="topology-title">
     <h2 id="topology-title" class="sanitize-title diagram-title">Traffic Diagram<span id="topology-context" class="diagram-context"></span></h2>
+    <!-- Which capture this is: server, interface, capture filter, when, how
+         much (diagrams.js renderCaptureDetails). -->
+    <dl id="topology-capture-details" class="diagram-capture-details"></dl>
     <p id="topology-scope" class="sanitize-target"></p>
-    <p class="diagram-hint">Click a host or a link to filter the packet list to it (the diagram stays open) and list every protocol it carried. Drag a host to move it.
+    <p class="diagram-hint">Click a host to filter the packet list to it and light up every host it talks to; click a link for that conversation (the diagram stays open). Drag a host to move it.
         <span id="topology-selection" class="diagram-selection" aria-live="polite"></span></p>
     <div id="topology-cap-warning" class="diagram-cap-warning" hidden></div>
     <div id="topology-body" class="diagram-body">
@@ -894,9 +960,21 @@
             <input type="search" id="topology-search" placeholder="Find a host by name or IP"
                    aria-label="Find a host by name or IP" autocomplete="off" spellcheck="false">
             <span id="topology-search-count" class="diagram-search-count" aria-live="polite"></span>
+            <!-- Saved layouts belong to this capture (and are deleted with it): host
+                 positions, picked chips, zoom and the filter it was drawn from. -->
+            <div class="diagram-layouts">
+                <label for="topology-layout-select">Layout</label>
+                <select id="topology-layout-select" title="Open a layout saved for this capture">
+                    <option value="">(not saved)</option>
+                </select>
+                <button type="button" id="btn-topology-layout-save" class="btn btn-sm btn-secondary"
+                        title="Save host positions, picked chips, zoom and filter. Saves over the open layout, or asks for a name.">Save</button>
+                <button type="button" id="btn-topology-layout-save-as" class="btn btn-sm btn-secondary" title="Save as a new layout under another name">Save as…</button>
+                <button type="button" id="btn-topology-layout-delete" class="btn btn-sm btn-danger btn-quiet" disabled>Delete</button>
+                <span id="topology-layout-msg" class="hint" role="status" aria-live="polite"></span>
+            </div>
         </div>
         <div class="diagram-toolbar">
-            <div id="topology-legend" class="diagram-legend"></div>
             <div class="diagram-playback">
                 <button type="button" id="btn-topology-play" class="btn btn-sm btn-secondary" disabled>Play</button>
                 <select id="topology-speed" class="diagram-speed" disabled title="Playback speed -- slow it down to trace individual packets">
@@ -914,9 +992,28 @@
             </div>
         </div>
         <div class="diagram-main">
+            <!-- The chips: what to play, grouped by what the traffic is for.
+                 A column of their own beside the drawing, so each group has
+                 room for its heading and its chips without taking height
+                 from the graph (diagrams.js renderTopologyLegend). -->
+            <details id="topology-chips" class="diagram-stats diagram-chips" open>
+                <summary>Protocols</summary>
+                <div class="diagram-stats-body">
+                    <div id="topology-legend" class="diagram-legend"></div>
+                </div>
+            </details>
             <div class="diagram-canvas-wrap">
                 <svg id="topology-svg" class="diagram-svg"></svg>
                 <canvas id="topology-canvas" class="diagram-canvas"></canvas>
+                <!-- What a link's color means (diagrams.js ZONES). -->
+                <div class="diagram-zone-legend diagram-zone-legend--overlay" aria-label="Link colors">
+                    <span class="zone-key-internet" title="A public address: this traffic crosses the internet. Drawn at the top."><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke-width="3"/></svg>Internet (public)<input type="color" class="zone-color" id="zone-color-internet" data-zone="internet" aria-label="Color for Internet (public) links" title="Change this color (kept in this browser)"></span>
+                    <span class="zone-key-lan" title="RFC 1918, ULA or link-local: another machine on the local network"><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke-width="3"/></svg>LAN (RFC 1918)<input type="color" class="zone-color" id="zone-color-lan" data-zone="lan" aria-label="Color for LAN (RFC 1918) links" title="Change this color (kept in this browser)"></span>
+                    <span class="zone-key-box" title="Never left the capturing machine: containers, pods, bridges (docker0, cni0, veth), loopback"><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke-width="3"/></svg>Inside this box (containers, Kubernetes)<input type="color" class="zone-color" id="zone-color-box" data-zone="box" aria-label="Color for Inside this box (containers, Kubernetes) links" title="Change this color (kept in this browser)"></span>
+                    <button type="button" id="btn-zone-colors-reset" class="zone-colors-reset" hidden title="Back to the default colors">Reset colors</button>
+                <span title="An address that only ever sends packets out of a physical interface (never forwarded in) -- where this box's own traffic leaves. On a capture without directions: the address in at least half the IP packets."><strong>Bold host</strong> = this box's own address (likely)</span>
+                    <span title="A capture on &quot;any&quot; records which interface each packet crossed. After a host's address: the interfaces it was seen on, the first two by name, then how many more (+1). Hover a host for the full list.">Grey line under an address (<code>cni0 · ens18 +1</code>) = interfaces it was seen on</span>
+                </div>
                 <!-- Floats over the drawing's top-left corner. Wheel zooms and
                      dragging the background pans, too. -->
                 <div class="diagram-view-controls">
@@ -957,6 +1054,7 @@
      between lanes. Wireshark calls the equivalent view "Flow Graph". -->
 <dialog id="sequence-dialog" class="stats-dialog stats-dialog--large" aria-labelledby="sequence-title">
     <h2 id="sequence-title" class="sanitize-title diagram-title">Sequence Diagram<span id="sequence-context" class="diagram-context"></span></h2>
+    <dl id="sequence-capture-details" class="diagram-capture-details"></dl>
     <p id="sequence-scope" class="sanitize-target"></p>
     <div id="sequence-cap-warning" class="diagram-cap-warning" hidden></div>
     <div id="sequence-body" class="diagram-body">

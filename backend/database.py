@@ -15,6 +15,27 @@ MAX_CUSTOM_FILTERS_PER_USER = 200
 MAX_VIEWS_PER_CAPTURE = 50
 
 
+def _with_json(row, column: str) -> dict:
+    """A row as a dict, with one JSON column parsed. A value that will not
+    parse comes back empty rather than failing the whole list: it is saved
+    UI state, and the route validates it again before returning it."""
+    out = dict(row)
+    try:
+        out[column] = json.loads(out[column] or "{}")
+    except (TypeError, ValueError):
+        out[column] = {}
+    return out
+
+
+def _subnet_map(stored: str) -> list[dict]:
+    """A stored mapping, or none if it is empty or will not parse."""
+    try:
+        value = json.loads(stored) if stored else []
+    except ValueError:
+        return []
+    return [m for m in value if isinstance(m, dict) and "cidr" in m and "name" in m] if isinstance(value, list) else []
+
+
 def _interface_names(stored: str) -> dict[str, str]:
     """A capture's stored interface table, or {} for none or anything unreadable.
 
@@ -137,6 +158,7 @@ class Database:
                 interface TEXT NOT NULL DEFAULT '',
                 bpf_filter TEXT NOT NULL DEFAULT '',
                 interface_names TEXT NOT NULL DEFAULT '',
+                subnet_map TEXT NOT NULL DEFAULT '',
                 origin TEXT NOT NULL DEFAULT 'capture'
             );
 
@@ -162,6 +184,32 @@ class Database:
                 position INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 UNIQUE(capture_id, user_id, name)
+            );
+
+            -- Saved arrangements of one capture's Traffic Diagram (host
+            -- positions, picked chips, zoom), as validated JSON. Tied to the
+            -- capture by the foreign key, so deleting the capture deletes
+            -- its diagrams with it; private to the user who saved them.
+            CREATE TABLE IF NOT EXISTS diagram_views (
+                id TEXT PRIMARY KEY,
+                capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(capture_id, user_id, name)
+            );
+
+            -- An operator's saved "optimize for diagrams" capture settings:
+            -- exclusion keys and limits, as validated JSON.
+            CREATE TABLE IF NOT EXISTS capture_presets (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                label TEXT NOT NULL,
+                settings TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(user_id, label)
             );
 
             -- An operator's own capture filters, alongside the built-in
@@ -207,6 +255,8 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_active_servers_user_id ON active_servers(user_id);
             CREATE INDEX IF NOT EXISTS idx_capture_views_owner
                 ON capture_views(capture_id, user_id, position);
+            CREATE INDEX IF NOT EXISTS idx_diagram_views_owner
+                ON diagram_views(capture_id, user_id);
             CREATE INDEX IF NOT EXISTS idx_custom_filters_owner
                 ON custom_filters(user_id, label);
             CREATE INDEX IF NOT EXISTS idx_custom_display_filters_owner
@@ -315,6 +365,9 @@ class Database:
         if "interface_names" not in capture_columns:
             # '' reads back as no table, so older captures show bare indexes.
             conn.execute("ALTER TABLE captures ADD COLUMN interface_names TEXT NOT NULL DEFAULT ''")
+        if "subnet_map" not in capture_columns:
+            # '' reads back as no mapping, which is what every older capture has.
+            conn.execute("ALTER TABLE captures ADD COLUMN subnet_map TEXT NOT NULL DEFAULT ''")
         if "origin" not in capture_columns:
             # 'capture' rather than '': every row that predates uploads IS a
             # capture this server took, so the backfill is a fact, not a guess.
@@ -718,22 +771,31 @@ class Database:
 
     def upsert_capture(self, row: dict) -> None:
         names = row.get("interface_names") or {}
-        row = {**row, "interface_names": json.dumps({str(k): v for k, v in names.items()}) if names else ""}
+        subnets = row.get("subnet_map") or []
+        row = {
+            **row,
+            "interface_names": json.dumps({str(k): v for k, v in names.items()}) if names else "",
+            "subnet_map": json.dumps(subnets) if subnets else "",
+        }
         self._conn().execute(
             """INSERT OR REPLACE INTO captures
                (id, name, user_id, server_id, server_label, status, started_at, stopped_at, command,
                 remote_path, local_path, packet_count, file_size, error, interface,
-                bpf_filter, interface_names, origin)
+                bpf_filter, interface_names, subnet_map, origin)
                VALUES (:id, :name, :user_id, :server_id, :server_label, :status, :started_at, :stopped_at, :command,
                        :remote_path, :local_path, :packet_count, :file_size, :error, :interface,
-                       :bpf_filter, :interface_names, :origin)""",
+                       :bpf_filter, :interface_names, :subnet_map, :origin)""",
             row,
         )
         self._conn().commit()
 
     def list_captures(self) -> list[dict]:
         rows = self._conn().execute("SELECT * FROM captures ORDER BY started_at").fetchall()
-        return [{**dict(r), "interface_names": _interface_names(r["interface_names"])} for r in rows]
+        return [
+            {**dict(r), "interface_names": _interface_names(r["interface_names"]),
+             "subnet_map": _subnet_map(r["subnet_map"])}
+            for r in rows
+        ]
 
     def delete_capture(self, capture_id: str) -> None:
         self._conn().execute("DELETE FROM captures WHERE id = ?", (capture_id,))
@@ -1005,6 +1067,123 @@ class Database:
             (view_id, user_id),
         )
         conn.commit()
+        return cur.rowcount > 0
+
+    # --- saved Traffic Diagram views ---
+    #
+    # `state` is JSON the route has already validated (models.DiagramViewState);
+    # it is stored as given and parsed again on the way out.
+
+    _DIAGRAM_VIEW_COLUMNS = "id, capture_id, name, state, created_at, updated_at"
+
+    def list_diagram_views(self, capture_id: str, user_id: str) -> list[dict]:
+        rows = self._conn().execute(
+            f"SELECT {self._DIAGRAM_VIEW_COLUMNS} FROM diagram_views "
+            "WHERE capture_id = ? AND user_id = ? ORDER BY name COLLATE NOCASE",
+            (capture_id, user_id),
+        ).fetchall()
+        return [_with_json(r, "state") for r in rows]
+
+    def get_diagram_view(self, view_id: str, user_id: str) -> dict | None:
+        row = self._conn().execute(
+            f"SELECT {self._DIAGRAM_VIEW_COLUMNS} FROM diagram_views WHERE id = ? AND user_id = ?",
+            (view_id, user_id),
+        ).fetchone()
+        return _with_json(row, "state") if row else None
+
+    def add_diagram_view(self, capture_id: str, user_id: str, name: str, state: str) -> dict:
+        """Saves one. ValueError on a duplicate name or past the per-capture cap
+        (the same cap, and for the same reason, as add_capture_view)."""
+        conn = self._conn()
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM diagram_views WHERE capture_id = ? AND user_id = ?",
+            (capture_id, user_id),
+        ).fetchone()["n"]
+        if count >= MAX_VIEWS_PER_CAPTURE:
+            raise ValueError(
+                f"this capture already has {MAX_VIEWS_PER_CAPTURE} saved diagrams, "
+                "which is the limit -- delete one to save another"
+            )
+        view_id = str(uuid.uuid4())
+        now = _utcnow().isoformat()
+        try:
+            conn.execute(
+                "INSERT INTO diagram_views "
+                "(id, capture_id, user_id, name, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (view_id, capture_id, user_id, name, state, now, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()  # see add_capture_view
+            raise ValueError(f"a diagram named {name!r} is already saved on this capture") from exc
+        conn.commit()
+        return self.get_diagram_view(view_id, user_id)
+
+    def update_diagram_view(self, view_id: str, user_id: str, name: str, state: str) -> dict | None:
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE diagram_views SET name = ?, state = ?, updated_at = ? "
+                "WHERE id = ? AND user_id = ?",
+                (name, state, _utcnow().isoformat(), view_id, user_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            raise ValueError(f"a diagram named {name!r} is already saved on this capture") from exc
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get_diagram_view(view_id, user_id)
+
+    def delete_diagram_view(self, view_id: str, user_id: str) -> bool:
+        conn = self._conn()
+        cur = conn.execute("DELETE FROM diagram_views WHERE id = ? AND user_id = ?", (view_id, user_id))
+        conn.commit()
+        return cur.rowcount > 0
+
+    # --- capture presets ---
+
+    def list_capture_presets(self, user_id: str) -> list[dict]:
+        rows = self._conn().execute(
+            "SELECT id, label, settings, created_at FROM capture_presets "
+            "WHERE user_id = ? ORDER BY label COLLATE NOCASE",
+            (user_id,),
+        ).fetchall()
+        return [_with_json(r, "settings") for r in rows]
+
+    def add_capture_preset(self, user_id: str, label: str, settings: str) -> dict:
+        """Saves one, capped like saved filters; ValueError on a duplicate label."""
+        conn = self._conn()
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM capture_presets WHERE user_id = ?", (user_id,)
+        ).fetchone()["n"]
+        if count >= MAX_CUSTOM_FILTERS_PER_USER:
+            raise ValueError(
+                f"you already have {MAX_CUSTOM_FILTERS_PER_USER} saved presets, "
+                "which is the limit -- delete one to save another"
+            )
+        preset_id = str(uuid.uuid4())
+        try:
+            conn.execute(
+                "INSERT INTO capture_presets (id, user_id, label, settings, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (preset_id, user_id, label, settings, _utcnow().isoformat()),
+            )
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            raise ValueError(f"you already have a preset called {label!r}") from exc
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, label, settings, created_at FROM capture_presets WHERE id = ?",
+            (preset_id,),
+        ).fetchone()
+        return _with_json(row, "settings")
+
+    def delete_capture_preset(self, user_id: str, preset_id: str) -> bool:
+        cur = self._conn().execute(
+            "DELETE FROM capture_presets WHERE id = ? AND user_id = ?", (preset_id, user_id)
+        )
+        self._conn().commit()
         return cur.rowcount > 0
 
     # --- settings ---

@@ -50,8 +50,13 @@ from backend.models import (
     CaptureRename,
     CaptureRequest,
     CaptureStatus,
+    CapturePreset,
+    CapturePresetRequest,
     CaptureView,
     CaptureViewRequest,
+    SubnetMapRequest,
+    DiagramView,
+    DiagramViewRequest,
     ColumnLayout,
     CustomFilter,
     CustomFilterRequest,
@@ -115,7 +120,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.5"
+APP_VERSION = "1.1.0-beta.6"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -1974,6 +1979,39 @@ async def delete_custom_filter(
     return {"ok": True}
 
 
+# --- the operator's saved capture presets ---
+#
+# The Capture tab's "optimize for diagrams" settings under a name: exclusion
+# keys from the page's fixed catalog plus limits. Private to the account.
+
+
+@app.get("/api/capture-presets")
+async def list_capture_presets(user: dict = Depends(get_current_user)):
+    out = []
+    for row in db.list_capture_presets(user["id"]):
+        try:
+            out.append(CapturePreset(**row))
+        except ValueError:
+            logger.warning("skipping a capture preset that no longer validates: %s", row.get("id"))
+    return out
+
+
+@app.post("/api/capture-presets")
+async def create_capture_preset(body: CapturePresetRequest, user: dict = Depends(get_current_user)):
+    try:
+        row = db.add_capture_preset(user["id"], body.label, body.settings.model_dump_json())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return CapturePreset(**row)
+
+
+@app.delete("/api/capture-presets/{preset_id}")
+async def delete_capture_preset(preset_id: str, user: dict = Depends(get_current_user)):
+    if not db.delete_capture_preset(user["id"], preset_id):
+        raise HTTPException(404, "preset not found")
+    return {"ok": True}
+
+
 # --- the operator's own saved display filters ---
 #
 # Private to the account for the same reason as the capture filters above, and
@@ -2181,6 +2219,11 @@ def _upload_label(filename: str) -> str:
 async def upload_capture(
     request: Request,
     filename: str = Query("", max_length=255),
+    # Which subnet sits behind which interface, for a file captured on more
+    # than one: the same JSON the subnet-map route takes, sent with the file
+    # so the capture is stored with it in one step. Checked before a byte of
+    # the file is read.
+    subnet_map: str = Query("", max_length=8192),
     user: dict = Depends(get_current_user),
 ):
     # The read-only-over-HTTP middleware already refuses every mutating /api/
@@ -2191,12 +2234,21 @@ async def upload_capture(
     _require_secure_transport(request)
     if not upload_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many uploads, slow down")
+    mappings: list[dict] = []
+    if subnet_map:
+        try:
+            mappings = [m.model_dump() for m in SubnetMapRequest.model_validate_json(subnet_map).mappings]
+        except ValueError as exc:
+            raise HTTPException(400, f"the interface mapping is not valid: {exc}")
 
     max_bytes = db.get_setting_int("max_upload_mb") * 1024 * 1024
     try:
-        return await capture_manager.import_upload(
+        info = await capture_manager.import_upload(
             user["id"], _upload_label(filename), request.stream(), max_bytes,
         )
+        if mappings:
+            info = capture_manager.set_subnet_map(info.id, mappings)
+        return info
     except UploadRejected as exc:
         # 400, not 500: everything this raises is a statement about the file
         # the caller sent -- wrong format, too big, empty, unreadable -- and
@@ -2218,6 +2270,21 @@ async def stop_capture(capture_id: str, user: dict = Depends(get_current_user)):
         return await capture_manager.stop(capture_id)
     except KeyError:
         raise HTTPException(404, "capture not found")
+
+
+@app.put("/api/captures/{capture_id}/subnet-map")
+async def set_subnet_map(
+    capture_id: str,
+    body: SubnetMapRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Which subnet sits behind which interface, for a capture whose packets
+    do not say (an upload, or one taken on a single named interface). The
+    viewer and diagrams derive each packet's interface and in/out from it.
+    An empty list removes the mapping."""
+    _require_own_capture(capture_id, user)
+    mappings = [m.model_dump() for m in body.mappings]
+    return capture_manager.set_subnet_map(capture_id, mappings)
 
 
 @app.post("/api/captures/{capture_id}/rename")
@@ -2349,6 +2416,73 @@ async def delete_capture_view(
     _view_or_404(capture_id, view_id, user)
     if not db.delete_capture_view(view_id, user["id"]):
         raise HTTPException(404, "view not found")
+    return {"ok": True}
+
+
+# --- saved Traffic Diagram views ---
+#
+# One capture's diagram as the operator arranged it. Owned like capture views,
+# and removed with the capture by the foreign key.
+
+
+def _diagram_views(rows: list[dict]) -> list[DiagramView]:
+    out = []
+    for row in rows:
+        try:
+            out.append(DiagramView(**row))
+        except ValueError:
+            # A row saved under a looser shape than today's validator: left out
+            # of the list rather than failing it (it can still be deleted).
+            logger.warning("skipping a saved diagram view that no longer validates: %s", row.get("id"))
+    return out
+
+
+def _diagram_view_or_404(capture_id: str, view_id: str, user: dict) -> dict:
+    row = db.get_diagram_view(view_id, user["id"])
+    if not row or row["capture_id"] != capture_id:
+        raise HTTPException(404, "diagram view not found")
+    return row
+
+
+@app.get("/api/captures/{capture_id}/diagram-views")
+async def list_diagram_views(capture_id: str, user: dict = Depends(get_current_user)):
+    _require_own_capture(capture_id, user)
+    return _diagram_views(db.list_diagram_views(capture_id, user["id"]))
+
+
+@app.post("/api/captures/{capture_id}/diagram-views")
+async def create_diagram_view(
+    capture_id: str, body: DiagramViewRequest, user: dict = Depends(get_current_user),
+):
+    _require_own_capture(capture_id, user)
+    try:
+        row = db.add_diagram_view(capture_id, user["id"], body.name, body.state.model_dump_json())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return DiagramView(**row)
+
+
+@app.put("/api/captures/{capture_id}/diagram-views/{view_id}")
+async def update_diagram_view(
+    capture_id: str, view_id: str, body: DiagramViewRequest, user: dict = Depends(get_current_user),
+):
+    _require_own_capture(capture_id, user)
+    _diagram_view_or_404(capture_id, view_id, user)
+    try:
+        row = db.update_diagram_view(view_id, user["id"], body.name, body.state.model_dump_json())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if not row:
+        raise HTTPException(404, "diagram view not found")
+    return DiagramView(**row)
+
+
+@app.delete("/api/captures/{capture_id}/diagram-views/{view_id}")
+async def delete_diagram_view(capture_id: str, view_id: str, user: dict = Depends(get_current_user)):
+    _require_own_capture(capture_id, user)
+    _diagram_view_or_404(capture_id, view_id, user)
+    if not db.delete_diagram_view(view_id, user["id"]):
+        raise HTTPException(404, "diagram view not found")
     return {"ok": True}
 
 
@@ -2602,7 +2736,7 @@ async def list_packets(
             vault.source_for(path), offset=offset, limit=limit,
             display_filter=display_filter, view_flags=view_flags,
             resolve_names=resolve_names, interface_names=info.interface_names,
-            extra_fields=extra_fields,
+            extra_fields=extra_fields, subnet_map=info.subnet_map,
         )
         return {"packets": packets, "total": info.packet_count}
     except ColumnFieldError as exc:
@@ -2641,9 +2775,10 @@ async def list_diagram_packets(
     cap = min(limit or ceiling, ceiling)
     info, path = _require_readable_capture(capture_id, user)
     try:
-        packets, total = await get_diagram_packets(
+        packets, total, names = await get_diagram_packets(
             vault.source_for(path), cap, display_filter=display_filter,
             resolve_names=resolve_names, interface_names=info.interface_names,
+            subnet_map=info.subnet_map,
         )
     except DisplayFilterError as exc:
         raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})
@@ -2653,7 +2788,7 @@ async def list_diagram_packets(
     # Straight to JSONResponse: already plain dicts, and FastAPI's own encoder
     # walks every value -- about 0.6s of event loop at 100,000 packets, where
     # json.dumps takes 0.07s.
-    return JSONResponse({"packets": packets, "total": total, "cap": cap})
+    return JSONResponse({"packets": packets, "total": total, "cap": cap, "names": names})
 
 
 @app.get("/api/captures/{capture_id}/packets/{frame_number}")

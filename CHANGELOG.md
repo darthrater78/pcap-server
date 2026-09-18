@@ -1,5 +1,76 @@
 # Changelog
 
+## 1.1.0-beta.6 — 2026-09-18
+
+### Added
+
+- **Traffic Diagram links are colored by where the traffic goes**: amber for
+  the internet, grey for the LAN (RFC 1918), violet and dashed for traffic
+  that never left the capturing box (containers, Kubernetes, bridges,
+  loopback). Internet hosts are laid out at the top, and the box's own
+  address — where its traffic leaves — is drawn in bold.
+- Clicking a host lights up every host it talks to and the links to them,
+  and fades the rest.
+- The diagram's chips are grouped by purpose (Problems, Name resolution,
+  Directory & auth (AD), Web & APIs, File sharing, …); a group's name picks
+  the whole group. **Problems** is broken out by kind, one chip each.
+  Unpicked chips step back while anything is picked.
+- **Saved layouts** for the Traffic Diagram: host positions, picked chips,
+  zoom, spacing, filter and names setting, stored against the capture and
+  deleted with it. The diagram header now shows the capture's server,
+  interface, capture filter, start, duration, packets and size.
+- **Optimize for diagrams** on the Capture tab: ticking a diagram sets Max
+  packets to its cap, Snap length to 256, and leaves out a list of noisy
+  protocols (ARP, mDNS, SSDP, …) through the BPF filter. The choice can be
+  saved as a named preset (new `/api/capture-presets`).
+- **Not** on every capture filter library row, and **…and NOT this** in the
+  combine menu.
+- **Interfaces for uploads**: a capture taken on more than one interface
+  (a Wireshark pcapng, say) can be told which subnet sits behind which
+  interface: tick **Captured on more than one interface** when uploading,
+  enter the subnets and names, and they go up with the file. **Interfaces**
+  on the capture edits them later, offering the private subnets it found. Each packet
+  then shows that interface and an in/out direction the way a capture on
+  "any" does — a direction the pcapng recorded wins; a packet routed between
+  two mapped subnets shows where it leaves. A pcapng's own per-packet
+  interface name and direction are shown too.
+- The link colors are customizable: a color picker on each key of the
+  diagram's legend, kept per browser, with **Reset colors**.
+- **Source IP** and **Destination IP** columns appear in the packet list
+  while names are resolved.
+
+### Changed
+
+- The Sequence Diagram draws up to **10,000** packets (was 5,000), and its
+  Capture-tab checkbox caps a capture at the same.
+- The Traffic Diagram's chips move to a **Protocols** column of their own
+  beside the drawing, each group under its own heading; it and the Stats pane
+  both fold away.
+- Both diagram windows can be resized from their corner; the drawing
+  follows, and the size is kept per browser.
+- The Sequence Diagram button sits right of the Traffic Diagram and is just
+  as prominent.
+- With names resolved, diagram hosts show the name with the address under it
+  (Sequence Diagram lanes too).
+
+### Fixed
+
+- With **Resolve hostnames** on, clicking a Traffic Diagram host or link
+  built `ip.addr == "ec2-….amazonaws.com"`, which tshark refuses ("IPv4
+  address cannot be converted from a string"). Diagram hosts are now keyed by
+  address, with the name carried beside it; the packet list's right-click
+  filters use the address too.
+- The diagram checkboxes on the Capture tab did not limit the capture
+  itself; with one ticked, a capture now never asks for more packets than
+  that diagram can draw. They start unticked, only one can be ticked per
+  capture, and they no longer switch the diagrams' drawing caps off (those
+  always apply).
+- Unpicking the Problems chips left the problem badges and red rings on
+  screen.
+- IP fragments (and IPv6 fragments) were not colored as problems in the
+  packet list. The list's Problem color now uses the Traffic Diagram's own
+  problem kinds, so the two always agree.
+
 ## 1.1.0-beta.5 — 2026-09-18
 
 ### Changed

@@ -74,6 +74,12 @@
     --diagram-cat-2: #d95926;
     --diagram-cat-3: #199e70;
     --diagram-other: var(--text-muted);
+    /* Traffic Diagram zones (diagrams.js ZONES): the reference palette's
+       yellow and violet slots, validated as a pair in both modes, plus a
+       neutral for the LAN. The box's links are also dashed. */
+    --zone-internet: #c98500;
+    --zone-box: #9085e9;
+    --zone-lan: var(--text-secondary);
 }
 
 :root[data-theme="light"] {
@@ -108,6 +114,9 @@
     --diagram-cat-2: #eb6834;
     --diagram-cat-3: #1baf7a;
     --diagram-other: var(--text-muted);
+    --zone-internet: #eda100;
+    --zone-box: #4a3aa7;
+    --zone-lan: var(--text-secondary);
 
     color-scheme: light;
 }
@@ -905,6 +914,17 @@ dialog:not([open]) {
     border-top: 1px dashed var(--border);
 }
 .capture-limits .form-group { flex: 0 1 130px; min-width: 100px; }
+.diagram-optimize { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; }
+.capture-limits .diagram-optimize .diagram-caps { flex-direction: row; flex-wrap: wrap; gap: 6px 22px; margin-left: 0; }
+.optimize-panel { border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 8px; }
+.optimize-exclusions { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 14px; }
+.optimize-exclusion { display: flex; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text-secondary); cursor: pointer; }
+.optimize-exclusion input { margin: 0; }
+.optimize-rec { font-size: 0.6875rem; color: var(--success); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.optimize-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 0.8125rem; }
+.optimize-row select { max-width: 220px; }
+.optimize-row .btn { width: auto; }
+.btn-not { font-weight: 600; }
 .capture-limits .diagram-caps {
     display: flex;
     flex-direction: column;
@@ -1383,6 +1403,7 @@ dialog:not([open]) {
 .col-src { width: 140px; }
 .col-dst { width: 140px; }
 .col-mac { width: 130px; }
+.col-src-ip, .col-dst-ip { width: 130px; font-family: var(--font-mono); }
 .col-iface { width: 130px; }
 .col-iface .iface-dir { color: var(--text-muted); }
 .col-proto { width: 70px; }
@@ -3360,6 +3381,17 @@ dialog:not([open]) {
     width: min(1180px, calc(100vw - 32px));
     height: calc(100vh - 48px);
 }
+/* The two diagrams can be resized by their corner handle; the drawing
+   follows (diagrams.js resizeTopology), and the size is kept per browser
+   (initDiagramResize). Full screen takes over the whole window instead. */
+#topology-dialog:not(.is-fullscreen), #sequence-dialog:not(.is-fullscreen) {
+    resize: both;
+    overflow: auto;
+    min-width: min(560px, 100vw);
+    min-height: min(420px, 100vh);
+    max-width: 100vw;
+    max-height: 100vh;
+}
 
 .diagram-cap-warning {
     padding: 10px 12px;
@@ -3455,6 +3487,21 @@ dialog:not([open]) {
    the dialog's own name, quieter than it. */
 .diagram-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
 .diagram-context { display: contents; }
+/* The capture behind a diagram, under its title: label over value, in a
+   row that wraps. */
+.diagram-capture-details {
+    display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 4px 0 6px;
+    font-size: 0.75rem;
+}
+.diagram-capture-details > div { display: flex; flex-direction: column; min-width: 0; }
+.diagram-capture-details dt { color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.625rem; }
+.diagram-capture-details dd { margin: 0; color: var(--text-primary); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.diagram-capture-details:empty { display: none; }
+.diagram-layouts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-left: auto; font-size: 0.8125rem; }
+.diagram-layouts label { color: var(--text-secondary); }
+.diagram-layouts select { max-width: 240px; }
+/* Playback first, then the chips (which take the full width below it). */
+.diagram-toolbar .diagram-playback { order: -1; }
 .diagram-context-capture {
     font-size: 0.875rem;
     font-weight: 500;
@@ -3505,8 +3552,10 @@ dialog:not([open]) {
 /* Full screen: the browser's own where it allows it (:fullscreen), and the
    class alone -- edge to edge in the viewport -- where it does not. */
 .stats-dialog--large.is-fullscreen {
-    width: 100vw;
-    height: 100vh;
+    /* !important: a size the operator dragged the dialog to is an inline
+       style (initDiagramResize), and full screen has to win over it. */
+    width: 100vw !important;
+    height: 100vh !important;
     max-width: 100vw;
     max-height: 100vh;
     margin: 0;
@@ -3614,6 +3663,38 @@ body.diagram-window #btn-topology-new-window { display: none; }
     box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+/* Chips in groups by purpose: a small label (which picks the whole group),
+   then its chips, each group a wrapped row of its own. */
+/* The chips live in a column left of the drawing: each group a block with
+   its heading on its own line and its chips wrapping beneath, scrolling
+   inside the column when a capture has many. */
+.diagram-stats.diagram-chips { width: 270px; font-size: 0.8125rem; }
+.diagram-stats.diagram-chips:not([open]) { width: auto; }
+.diagram-chips .diagram-stats-body { padding-top: 4px; }
+#topology-legend { display: flex; flex-direction: column; align-items: stretch; gap: 16px; font-size: 0.8125rem; }
+.diagram-chip-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.diagram-picked-count { color: var(--text-primary); font-weight: 600; }
+.diagram-chip-group {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding-left: 10px; border-left: 3px solid var(--border);
+}
+.diagram-chip-group--problems { border-left-color: var(--danger); }
+.diagram-chip-group-label {
+    flex-basis: 100%; text-align: left; padding: 0 0 2px;
+    background: none; border: none; font: inherit; font-size: 0.6875rem;
+    text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); cursor: pointer;
+}
+.diagram-chip-group-label:hover { color: var(--text-primary); text-decoration: underline; }
+/* While something is picked, what is NOT in the next play steps back:
+   faded, dashed, its swatch greyed -- and the picks stand out solid. */
+#topology-legend.has-picks .diagram-legend-chip[aria-pressed="false"]:not([data-all]) {
+    opacity: 0.45; border-style: dashed; text-decoration: line-through; text-decoration-color: var(--text-muted);
+}
+#topology-legend.has-picks .diagram-legend-chip[aria-pressed="false"]:not([data-all]) .diagram-legend-swatch { filter: grayscale(1); }
+#topology-legend.has-picks .diagram-legend-chip[aria-pressed="false"]:hover { opacity: 0.85; text-decoration: none; }
+#topology-legend .diagram-legend-chip[aria-pressed="true"]:not([data-all]) { font-weight: 600; }
+@media (max-width: 700px) { .diagram-stats.diagram-chips { width: auto; max-height: 30%; } }
+
 /* The interfaces a host was seen on ("any" captures), after its address. */
 .diagram-node text .diagram-node-iface { fill: var(--text-secondary); font-size: 10px; }
 
@@ -3681,7 +3762,7 @@ body.diagram-window #btn-topology-new-window { display: none; }
     fill: none; stroke: var(--text-secondary); stroke-width: 1.8; pointer-events: none;
 }
 #topology-search {
-    width: min(460px, 100%);
+    width: min(380px, 100%);
     padding: 9px 12px 9px 38px;
     font: inherit;
     font-size: 0.9375rem;
@@ -3697,8 +3778,8 @@ body.diagram-window #btn-topology-new-window { display: none; }
 
 /* Problems: status red, reserved for trouble, always with its ⚠ and a label. */
 .diagram-problem-icon { color: var(--danger); margin-right: 4px; }
-.diagram-legend-chip[data-problems] { border-color: var(--danger); }
-.diagram-legend-chip[data-problems][aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--danger); }
+.diagram-chip-group--problems .diagram-legend-chip { border-color: var(--danger); }
+.diagram-chip-group--problems .diagram-legend-chip[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--danger); }
 .diagram-problem-badge { cursor: pointer; }
 .diagram-problem-badge rect { fill: var(--danger); stroke: var(--bg-primary); stroke-width: 1.5px; }
 .diagram-problem-badge text { fill: var(--bg-primary); font-size: 10px; font-weight: 700; pointer-events: none; }
@@ -3723,6 +3804,35 @@ body.diagram-window #btn-topology-new-window { display: none; }
 .diagram-selection:empty { display: none; }
 .diagram-stats-table th .diagram-legend-swatch { width: 18px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 
+/* Zones: a link's color is where its farther end sits; a host wears the same
+   as its ring. Internet and the box's own address read loudest. */
+#topology-svg .diagram-edge.zone-internet { stroke: var(--zone-internet); stroke-opacity: 0.7; }
+#topology-svg .diagram-edge.zone-lan { stroke: var(--zone-lan); stroke-opacity: 0.55; }
+#topology-svg .diagram-edge.zone-box { stroke: var(--zone-box); stroke-opacity: 0.7; stroke-dasharray: 5 3; }
+#topology-svg .diagram-node.zone-internet circle { stroke: var(--zone-internet); stroke-width: 2px; }
+#topology-svg .diagram-node.zone-lan circle { stroke: var(--zone-lan); }
+#topology-svg .diagram-node.zone-box circle { stroke: var(--zone-box); stroke-width: 2px; stroke-dasharray: 3 2; }
+#topology-svg .diagram-node.is-egress circle { stroke-width: 4px; stroke-dasharray: none; }
+#topology-svg .diagram-node.is-egress .diagram-node-name { font-weight: 700; }
+#topology-svg .diagram-node .diagram-node-ip { fill: var(--text-secondary); font-size: 10px; }
+
+/* A selected host and everything it talked to; the rest steps back. */
+#topology-svg .is-faded { opacity: 0.12; }
+#topology-svg .diagram-node.is-neighbor circle { stroke: var(--text-primary); stroke-width: 2.5px; fill: var(--accent); fill-opacity: 0.25; }
+#topology-svg .diagram-node.is-neighbor text { font-weight: 600; }
+#topology-svg .diagram-edge.is-active { stroke-opacity: 1; stroke-width: 3px; }
+
+.diagram-zone-legend--overlay {
+    position: absolute; left: 8px; bottom: 8px; z-index: 1; max-width: calc(100% - 16px);
+    padding: 4px 8px; border-radius: 6px; pointer-events: auto;
+    background: color-mix(in srgb, var(--bg-primary) 85%, transparent);
+}
+.diagram-zone-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 0.75rem; color: var(--text-secondary); }
+.diagram-zone-legend svg { vertical-align: -2px; margin-right: 4px; }
+.diagram-zone-legend .zone-key-internet line { stroke: var(--zone-internet); }
+.diagram-zone-legend .zone-key-lan line { stroke: var(--zone-lan); }
+.diagram-zone-legend .zone-key-box line { stroke: var(--zone-box); stroke-dasharray: 5 3; }
+
 /* Hosts and links the picked protocols never touched (applyProtocolScope). */
 #topology-svg .is-hidden { display: none; }
 
@@ -3744,6 +3854,7 @@ body.diagram-window #btn-topology-new-window { display: none; }
    packets a millisecond apart would otherwise collapse into an unreadable
    stack). */
 .seq-lane-line { stroke: var(--border); stroke-width: 1px; }
+.seq-lane-label.seq-lane-ip { fill: var(--text-secondary); font-size: 10px; }
 .seq-lane-label {
     fill: var(--text-primary);
     font-family: var(--font-mono);
@@ -3897,3 +4008,31 @@ body.diagram-window #btn-topology-new-window { display: none; }
     border-radius: 6px;
     resize: vertical;
 }
+
+/* Upload: captured on several interfaces? Then the Interfaces dialog. */
+.upload-multi { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-top: 12px; font-size: 0.8125rem; color: var(--text-primary); cursor: pointer; }
+.upload-multi .hint { flex-basis: 100%; padding-left: 20px; }
+.upload-subnet-summary { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 20px; font: 0.75rem var(--font-mono); color: var(--text-primary); flex-wrap: wrap; }
+.upload-multi input { margin: 0; }
+.subnet-map-dialog { width: min(560px, calc(100vw - 32px)); }
+.subnet-map-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.subnet-map-table th { text-align: left; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 0 6px 4px 0; font-weight: 600; }
+.subnet-map-table td { padding: 3px 6px 3px 0; }
+.subnet-map-table input {
+    width: 100%; padding: 6px 8px; font: 0.8125rem var(--font-mono);
+    color: var(--text-primary); background: var(--bg-surface);
+    border: 1px solid var(--border); border-radius: 6px;
+}
+.subnet-map-table input:focus { outline: none; border-color: var(--accent); }
+.subnet-map-dialog > .hint { display: block; font-size: 0.8125rem; line-height: 1.5; margin-top: 4px; }
+.subnet-map-dialog h2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.subnet-map-dialog .subnet-map-foot .hint { font-size: 0.8125rem; }
+.subnet-map-table td:last-child { width: 36px; }
+.subnet-map-foot { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; flex-wrap: wrap; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Zone color pickers, one per key in the diagram's color legend. */
+.zone-color { width: 18px; height: 14px; padding: 0; margin-left: 5px; border: 1px solid var(--border); border-radius: 3px; background: none; cursor: pointer; vertical-align: -2px; }
+.zone-color::-webkit-color-swatch-wrapper { padding: 0; }
+.zone-color::-webkit-color-swatch { border: none; }
+.zone-colors-reset { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }

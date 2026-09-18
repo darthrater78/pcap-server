@@ -152,7 +152,7 @@ def test_the_diagram_route_counts_what_the_filter_matched(secure_client, enrolle
 def test_the_diagram_route_over_its_cap_sends_the_count_alone(secure_client, enrolled):
     capture_id = _upload(secure_client, PCAP).json()["id"]
     body = secure_client.get(f"/api/captures/{capture_id}/diagram-packets", params={"limit": 2}).json()
-    assert body == {"packets": [], "total": 3, "cap": 2}
+    assert body == {"packets": [], "total": 3, "cap": 2, "names": {}}
 
 
 def test_the_diagram_route_never_exceeds_max_capture_packets(secure_client, enrolled):
@@ -355,3 +355,22 @@ def test_the_origin_migration_backfills_existing_rows_as_captures(tmp_path):
     old = [c for c in Database(path).list_captures() if c["id"] == "old"][0]
     assert old["origin"] == "capture"
     Database(path)  # and a second open does not trip over the column
+
+
+def test_an_upload_can_carry_its_interface_mapping(secure_client, enrolled):
+    """Sent with the file, so the capture is stored with it in one step."""
+    import json
+    mapping = json.dumps({"mappings": [{"cidr": "10.0.0.0/8", "name": "eth1"}]})
+    resp = secure_client.post(UPLOAD, params={"filename": "multi.pcap", "subnet_map": mapping}, content=PCAP)
+    assert resp.status_code == 200
+    assert resp.json()["subnet_map"] == [{"cidr": "10.0.0.0/8", "name": "eth1"}]
+    packets = secure_client.get(f"/api/captures/{resp.json()['id']}/packets").json()["packets"]
+    assert packets and all(p["interface"] == "eth1" and p["direction"] in ("in", "out") for p in packets)
+
+
+def test_a_bad_interface_mapping_is_refused_before_the_file_is_kept(secure_client, enrolled):
+    before = _leftovers()
+    resp = secure_client.post(UPLOAD, params={"filename": "x.pcap", "subnet_map": '{"mappings":[{"cidr":"nope","name":"eth0"}]}'},
+                              content=PCAP)
+    assert resp.status_code == 400
+    assert _leftovers() == before

@@ -131,6 +131,206 @@ class CaptureViewRequest(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
+# --- Traffic Diagram views --------------------------------------------------
+#
+# A saved arrangement of one capture's Traffic Diagram: where each host sits,
+# which chips are picked, the zoom, and the display filter it was drawn from.
+# Stored as JSON, so every part of it is bounded and typed here before it is:
+# it is written by the browser and replayed into the page on every later open.
+
+DIAGRAM_VIEW_MAX_NODES = 500
+DIAGRAM_VIEW_MAX_CHIPS = 100
+DIAGRAM_VIEW_KEY_MAX = 80
+# Layout coordinates are a few thousand at most; anything past this is not a
+# position anyone dragged a host to.
+DIAGRAM_COORD_MAX = 1_000_000.0
+
+_DIAGRAM_KEY_RE = re.compile(r"\A[\x21-\x7e]{1,80}\Z")
+
+
+def _finite(v: float, lo: float, hi: float, what: str) -> float:
+    if v != v or not lo <= v <= hi:  # v != v: NaN
+        raise ValueError(f"{what} is out of range")
+    return v
+
+
+class DiagramPoint(BaseModel):
+    x: float
+    y: float
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coord(cls, v: float) -> float:
+        return _finite(v, -DIAGRAM_COORD_MAX, DIAGRAM_COORD_MAX, "a position")
+
+
+class DiagramZoom(BaseModel):
+    k: float = 1.0
+    tx: float = 0.0
+    ty: float = 0.0
+
+    @field_validator("k")
+    @classmethod
+    def validate_k(cls, v: float) -> float:
+        return _finite(v, 0.01, 100.0, "the zoom")
+
+    @field_validator("tx", "ty")
+    @classmethod
+    def validate_t(cls, v: float) -> float:
+        return _finite(v, -DIAGRAM_COORD_MAX * 100, DIAGRAM_COORD_MAX * 100, "the pan")
+
+
+class DiagramViewState(BaseModel):
+    display_filter: str = ""
+    # Host address -> where it was left. Addresses, never names: names are a
+    # display setting, and the layout has to survive resolution being toggled.
+    positions: dict[str, DiagramPoint] = Field(default_factory=dict)
+    # The picked chips: protocol names and problem-kind keys.
+    selected: list[str] = Field(default_factory=list)
+    spacing: float = 1.0
+    zoom: DiagramZoom | None = None
+    resolve_names: bool = False
+
+    @field_validator("display_filter")
+    @classmethod
+    def validate_filter(cls, v: str) -> str:
+        try:
+            return validate_display_filter(v.strip())
+        except DisplayFilterError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("positions")
+    @classmethod
+    def validate_positions(cls, v: dict[str, DiagramPoint]) -> dict[str, DiagramPoint]:
+        if len(v) > DIAGRAM_VIEW_MAX_NODES:
+            raise ValueError(f"at most {DIAGRAM_VIEW_MAX_NODES} host positions")
+        for key in v:
+            if not _DIAGRAM_KEY_RE.match(key):
+                raise ValueError("a host key must be 1-80 printable characters")
+        return v
+
+    @field_validator("selected")
+    @classmethod
+    def validate_selected(cls, v: list[str]) -> list[str]:
+        if len(v) > DIAGRAM_VIEW_MAX_CHIPS:
+            raise ValueError(f"at most {DIAGRAM_VIEW_MAX_CHIPS} picked chips")
+        for key in v:
+            if not isinstance(key, str) or not _DIAGRAM_KEY_RE.match(key):
+                raise ValueError("a chip key must be 1-80 printable characters")
+        return list(dict.fromkeys(v))
+
+    @field_validator("spacing")
+    @classmethod
+    def validate_spacing(cls, v: float) -> float:
+        return _finite(v, 0.25, 8.0, "the spacing")
+
+
+class DiagramViewRequest(BaseModel):
+    name: str
+    state: DiagramViewState
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        cleaned = "".join(ch for ch in v if ch.isprintable()).strip()
+        if not cleaned:
+            raise ValueError("a view needs a name")
+        if len(cleaned) > VIEW_NAME_MAX:
+            raise ValueError(f"name must be at most {VIEW_NAME_MAX} characters")
+        return cleaned
+
+
+class DiagramView(BaseModel):
+    id: str
+    capture_id: str
+    name: str
+    state: DiagramViewState
+    created_at: str = ""
+    updated_at: str = ""
+
+
+# --- capture presets -----------------------------------------------------------
+#
+# The "optimize for diagrams" settings an operator saved under a name: which
+# noisy traffic to leave out, and the limits. The exclusions are KEYS into the
+# fixed catalog in app.js, never BPF text -- the expression is composed in the
+# page from the catalog and then goes through the capture route's own BPF
+# validation like anything typed into the field.
+
+PRESET_MAX_EXCLUSIONS = 40
+_PRESET_KEY_RE = re.compile(r"\A[a-z0-9][a-z0-9-]{0,31}\Z")
+
+
+class CapturePresetSettings(BaseModel):
+    exclusions: list[str] = Field(default_factory=list)
+    snaplen: int | None = Field(default=None, ge=64, le=262144)
+    max_packets: int | None = Field(default=None, ge=1, le=10_000_000)
+
+    @field_validator("exclusions")
+    @classmethod
+    def validate_exclusions(cls, v: list[str]) -> list[str]:
+        if len(v) > PRESET_MAX_EXCLUSIONS:
+            raise ValueError(f"at most {PRESET_MAX_EXCLUSIONS} exclusions")
+        for key in v:
+            if not _PRESET_KEY_RE.match(key):
+                raise ValueError("an exclusion key is lowercase letters, digits and dashes")
+        return list(dict.fromkeys(v))
+
+
+class CapturePresetRequest(BaseModel):
+    label: str
+    settings: CapturePresetSettings
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, v: str) -> str:
+        cleaned = "".join(ch for ch in v if ch.isprintable()).strip()
+        if not cleaned:
+            raise ValueError("a preset needs a name")
+        if len(cleaned) > FILTER_LABEL_MAX:
+            raise ValueError(f"name must be at most {FILTER_LABEL_MAX} characters")
+        return cleaned
+
+
+class CapturePreset(BaseModel):
+    id: str
+    label: str
+    settings: CapturePresetSettings
+    created_at: str = ""
+
+
+# --- subnet -> interface mapping, for uploaded captures ---------------------
+
+SUBNET_MAP_MAX = 32
+_IFACE_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._@:+-]{0,31}\Z")
+
+
+class SubnetMapping(BaseModel):
+    cidr: str
+    name: str
+
+    @field_validator("cidr")
+    @classmethod
+    def validate_cidr(cls, v: str) -> str:
+        import ipaddress
+        try:
+            return str(ipaddress.ip_network(v.strip(), strict=False))
+        except ValueError:
+            raise ValueError(f"not a subnet: {v!r} (write it like 10.42.0.0/16)") from None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not _IFACE_NAME_RE.match(v):
+            raise ValueError("an interface name is 1-32 letters, digits and . _ @ : + -")
+        return v
+
+
+class SubnetMapRequest(BaseModel):
+    mappings: list[SubnetMapping] = Field(default_factory=list, max_length=SUBNET_MAP_MAX)
+
+
 class CaptureView(BaseModel):
     id: str
     capture_id: str
@@ -593,6 +793,8 @@ BUILTIN_PACKET_COLUMNS = {
     "time": "Time",
     "source": "Source",
     "destination": "Destination",
+    "src_ip": "Source IP",
+    "dst_ip": "Destination IP",
     "interface": "Interface",
     "src_mac": "Src MAC",
     "dst_mac": "Dst MAC",
@@ -713,6 +915,12 @@ class CaptureInfo(BaseModel):
     # interface, a capture that predates the column, or a host that could not
     # be asked -- the viewer then shows the bare index.
     interface_names: dict[int, str] = Field(default_factory=dict)
+    # For a capture with no interface on each packet -- an upload, or one of a
+    # single named interface: which subnet sits behind which interface, as the
+    # operator described it (SubnetMapRequest). The viewer and diagrams read
+    # each packet's interface and in/out direction from it
+    # (packet_parser.SubnetMap). Empty for anything not mapped.
+    subnet_map: list[dict] = Field(default_factory=list)
     status: CaptureStatus
     # Whether this server recorded the pcap or someone uploaded it. Defaults to
     # CAPTURE, which is what every record written before uploads existed is --
@@ -752,6 +960,15 @@ class PacketSummary(BaseModel):
     # it.
     tcp_stream: int | None = None
     udp_stream: int | None = None
+    # The network-layer addresses, unresolved. With name resolution on,
+    # source and destination above are names; these stay addresses, for the
+    # packet list's IP columns and for any filter built from a row. Empty on a
+    # packet with no IP layer (ARP, STP ...).
+    source_addr: str = ""
+    destination_addr: str = ""
+    # An IP (or IPv6) fragment, read from the header: the Info column cannot
+    # say so on the fragment that completes a datagram.
+    fragment: bool = False
     # Whatever the operator added to their column layout beyond the built-in
     # columns above, keyed by tshark field name. Empty on a default layout.
     values: dict[str, str] = Field(default_factory=dict)
@@ -821,6 +1038,9 @@ class ConversationEndpoint(BaseModel):
     address: str
     packets: int
     bytes: int
+    # What name resolution called it, when it was on and found one; empty
+    # otherwise. The address stays the identity: filters are built from it.
+    name: str = ""
 
 
 class Conversation(BaseModel):
