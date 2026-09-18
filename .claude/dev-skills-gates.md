@@ -61,8 +61,8 @@ built the image and pushed it in ONE step, so `docker build` exiting 0 was the
 only thing between a broken image and GHCR. Nothing ever started the container.
 Every artifact check in the release records below -- "boots, / 200, 0
 tracebacks, APP_VERSION correct in-image" -- was done BY HAND, locally, before
-tagging. CI never did it, and this session's own BUILD gate was handoff n/a, so
-:1.1.0-beta.2 was published without anyone in this session starting it (the
+tagging. CI never did it. This session could not either (no docker in the
+container), so :1.1.0-beta.2 was published without anyone here starting it (the
 code was unchanged from beta.2's own smoke run, so that was sound -- but by
 luck of the diff, not by design).
 
@@ -119,7 +119,22 @@ The waste is now measured, not estimated: runs 139 and 140 -- the two
 .claude/-only PR runs -- took 12m02s and 11m36s. ~24 minutes of CI in one
 session on commits containing no code.
 
-🔢 VERSION    ⬜ not owed -- work commit, APP_VERSION stays 1.1.0-beta.2
+🔢 VERSION    ➖ N/A -- structural: this change ships no artifact and publishes
+              nothing, so there is no version for it to carry. APP_VERSION
+              stays 1.1.0-beta.2, which is what ghcr actually holds; bumping it
+              here would leave the declared version disagreeing with the
+              published image and assert a release that is not happening. This
+              is the repo's own recorded convention (dev-skills 2.23.0, in the
+              dev.40 section below, adopted on the user's direction): intent to
+              publish -- a bump, a tag or an artifact -- is what makes a
+              release, and a merge to main without one is a work commit.
+              Reached because the gate-preflight hook refused the PR with
+              VERSION ⬜; the track question had been flagged to the user twice
+              and left open, so it was settled here on that recorded convention
+              and surfaced to them to overrule rather than decided silently.
+              NOT a "we'll do it later" skip: there is no later bump owed for
+              this change at all. The next real release bumps from
+              1.1.0-beta.2 as if this had never happened.
 🔨 BUILD      ✅ handoff n/a (remote container; docker is not usable here at
               all, which is also why the smoke test itself could not be run).
               Full suite via scripts/check.sh: 1594 passed, 3 skipped, exit 0,
