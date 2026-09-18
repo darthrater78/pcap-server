@@ -20,7 +20,19 @@ published; :1.1.0-beta.2 does not exist on ghcr.io.
               v1.1.0-beta.1 confirmed tagged on remote (ed4ba63). The tag
               being moved keeps naming the version the commit declares, so
               release.yml's own APP_VERSION check still matches.
-🔨 BUILD      ✅ No app code touched, so no image to build. actionlint 1.7.12
+🔨 BUILD      ✅ handoff n/a (remote container -- this session's clone is in an
+              ephemeral container the user's terminal never sees, so there is
+              no artifact here for them to try). Recorded as n/a rather than
+              "offered": the accurate reason is structural, not a decline.
+              Worth stating alongside it, though it is not what makes the gate
+              pass: this diff touches release.yml, tests/, CHANGELOG.md and
+              this file only. No app code, and the Dockerfile copies none of
+              those paths, so the image built from this tree is byte-identical
+              to the one beta.2's suite already tested at 88b4b59. The user was
+              given the local `docker build` + smoke command anyway, to run on
+              their own box if they want it.
+
+              actionlint 1.7.12
               (repo's pinned version + checksum) with shellcheck on PATH, exit
               0 over all three workflows; lint-workflows.yml run 35298127820
               green on the pushed commit.
