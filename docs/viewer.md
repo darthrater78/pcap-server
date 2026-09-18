@@ -152,16 +152,62 @@ passes that point — capped, so one very busy link cannot swallow the rest of
 the graph. Playback rewinds at the end and keeps the finished picture on
 screen rather than clearing it.
 
-A **Problems** chip toggles red badges on any link that carried a reset,
-retransmission, zero window, IP fragment, ICMP error or malformed packet, with
-a red ring during play and a count in the stats pane. A **search box** finds
-a host by name or address — Enter steps through matches, Esc clears. The
-**stats pane** (collapsible; shown before any play) lists per-protocol
-totals, and on a capture taken from an "any" interface, each host's own
-capture interfaces. Toolbar controls: zoom/pan and **Fit**, **Spacing**
-(fans out a dense layout), full screen, and **New window** — a diagram-only
-page useful on a second monitor, whose clicks relay back to the main tab.
-Both diagram windows title themselves with the capture and view name.
+**Links are colored by where the traffic goes.** Amber: a public address, the
+internet — those hosts are always drawn at the top. Grey: another machine on
+the LAN (RFC 1918, ULA, link-local). Violet and dashed: traffic that never left
+the capturing box — containers, Kubernetes pods, bridges and loopback. A host's
+ring wears the same color. The box's own address, the one its outbound traffic
+leaves through, is drawn in **bold**: on an "any" capture, the address that only
+ever sends packets *out* of a physical interface and never has them forwarded
+*in* (the kernel records each packet's direction); on other captures, the
+address in at least half the IP packets. The diagram calls it "likely". Inside
+versus outside the box is read from the interface a host was seen on when the
+capture was taken on "any" (a host only ever seen on `cni0`, `docker0` or a
+`veth` is inside), and otherwise from container-default ranges (Docker's
+172.17/16, k3s' 10.42/16 and 10.43/16, kubeadm's 10.244/16 and 10.96/12).
+
+Each key in the color legend has a color picker: change a zone's color and
+every link and ring follows, kept in this browser; **Reset colors** puts the
+defaults back.
+
+**Clicking a host** filters the packet list to it and lights up every host it
+talks to: its peers and the links to them are drawn on top at full strength,
+and everything else fades back. Click it again to clear.
+
+On an "any" capture (or an upload with mapped subnets) each host's label has a
+grey line under its address listing the **interfaces it was seen on**:
+`cni0 · ens18 +1` means the host crossed `cni0` and `ens18` and one more
+interface (hover the host for the full list). With names resolved, a host
+shows its name, then its address, then its interfaces, one line each.
+
+The chips are grouped by what the traffic is for — **Problems**, Name
+resolution, Directory & auth (AD), Web & APIs, File sharing, Remote access,
+Discovery & broadcast, Network services, Mail, Databases, Transport only,
+Other — and clicking a group's name picks the whole group. **Problems** is
+broken out by kind (resets, retransmissions, window problems, IP fragments,
+ICMP errors, malformed), each a chip of its own. With anything picked, the
+unpicked chips step back (faded and dashed), and problem badges and red rings
+show only for the problem kinds that are picked — a play of just DNS shows
+none. A **JSON** chip is HTTP bodies carrying JSON, usually API calls: tshark
+names a packet by its innermost layer. A **search box** finds a host by name
+or address — Enter steps through matches, Esc clears. The **Protocols** column (left) and the **stats pane** (right) each fold
+to a narrow strip, remembered per browser. The stats pane (shown before any
+play) lists per-protocol totals, problems by
+kind, and how many hosts sit in each zone. Toolbar controls: zoom/pan and
+**Fit**, **Spacing** (fans out a dense layout), full screen, and **New
+window** — a diagram-only page useful on a second monitor, whose clicks relay
+back to the main tab.
+
+Both diagram windows can be **resized** by dragging their bottom-right
+corner; the drawing refits, and the size is remembered per browser.
+
+**Saved layouts.** The header under a diagram's title names the capture it
+draws: server, interface, capture filter, when it started, how long it ran,
+packets and size. **Save layout** keeps the Traffic Diagram as you arranged it
+— every host's position, the picked chips, zoom, spacing, and the filter and
+names setting it was drawn with — against that capture, on the server, so it
+follows your account. Pick it from **Saved layout** to get it back; **Save
+as…** keeps another. A capture's layouts are deleted with the capture.
 
 **Sequence Diagram** is closer to Wireshark's own Flow Graph: one lane per
 host, and every packet drawn as a time-ordered arrow between two lanes,
@@ -169,7 +215,8 @@ colored by protocol. Click an arrow to jump straight to that packet's detail.
 Rows are spaced evenly rather than by real elapsed time, since a burst of
 packets a millisecond apart would otherwise collapse into an unreadable stack.
 A host name too long for its lane is shortened in the middle; hover it for the
-full name.
+full name. With names resolved, each lane shows the name with its address
+under it.
 
 Both color the 15 most common protocols in view and group the rest as
 **Other**. Fifteen is more than can be told apart by colour alone, so three
@@ -180,26 +227,46 @@ colour.
 
 Both read the current display filter the same way Conversations does, and both
 cap how much they will draw at once — 200 hosts for the Traffic Diagram and 40
-lanes for the Sequence Diagram; 5,000 packets for the Sequence Diagram (a row
+lanes for the Sequence Diagram; 10,000 packets for the Sequence Diagram (a row
 each), and for the Traffic Diagram as many as one capture can hold (**Max
 capture packets** in Settings, 100,000 by default). Above a cap they ask for a
 narrower filter rather than drawing a misleading or unusably dense picture, and
 the count they judge is what the filter matched, so narrowing it works. The two
-packet caps can be switched off, per browser, with the checkboxes in the
-**Capture** tab's **Limits** row (*Traffic Diagram max 100,000 packets*,
-*Sequence Diagram max 5,000 packets*; hover either for what it does).
-Unticked, a diagram goes up to **Max capture packets** and no further. A
-change applies the next time the diagram opens. A long
+packet caps always apply; the **Optimize for diagrams** checkboxes on the
+**Capture** tab fit a capture to one of them before it is taken (see
+[Filters](filters.md#optimize-for-diagrams)). A long
 capture plays faster: at 1x the Traffic Diagram plays 40 packets a second, or
 whatever finishes the play in about two minutes, whichever is quicker.
 
 **Resolve hostnames** (the same toggle the packet list uses, under the view
 flags) applies to both: turn it on *before* opening either diagram, since it
 changes what gets fetched rather than how an already-loaded one is drawn, and
-flipping it mid-view does nothing until you reopen. Names come from the DNS
+flipping it mid-view does nothing until you reopen. Hosts stay keyed by
+address either way — clicking a named host filters on `ip.addr == <address>`
+— and the packet list gains **Source IP** and **Destination IP** columns
+beside Source and Destination while names are on. Names come from the DNS
 answers inside the capture itself, which works even when this server cannot
 look the addresses up, and for addresses those do not cover, from a reverse-DNS
 query — same tradeoff as everywhere else it appears in this app.
+
+### Interfaces on an uploaded capture
+
+A capture from somewhere else — a Wireshark pcapng taken on several
+interfaces, say — does not carry the Linux cooked header an "any" capture
+here has, so its packets have no interface of their own to show. Tell it which
+subnet sits behind which: tick **Captured on more than one interface** in
+the upload fly-out, and the **Interfaces** dialog opens right away — enter
+each subnet and the interface it was captured on (e.g. `192.168.1.0/24`
+`eth0`, `10.42.0.0/16` `cni0`), and the mapping goes up with the file.
+**Interfaces** on the capture opens the same dialog later, with the private
+subnets it found in the capture listed to name.
+Each packet then shows that interface and a direction, as a capture on "any"
+would: to a mapped subnet is **out** on its interface, from one is **in**, and
+a packet routed between two mapped subnets shows where it leaves (out on the
+destination's). Where the pcapng recorded a packet's direction, that wins, and
+the subnets only say which interface. The Traffic Diagram reads the same
+interfaces for its zones, so mapping a pod range to `cni0` puts those hosts
+inside the box.
 
 ## Saved views
 

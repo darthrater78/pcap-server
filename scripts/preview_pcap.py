@@ -14,7 +14,7 @@ It is Linux cooked v2, the format of a capture on "any", so every packet
 carries the index of the interface it crossed: 2 wired LAN, 3 Wi-Fi, 4 WAN.
 A file has no table naming those indexes (a real capture on "any" records one
 from the target), so on its own the viewer shows "#2", "#3" and "#4";
-scripts/preview.sh gives them the names eth0, wlan0 and wan.
+scripts/preview.sh gives them the names eth0, wlan0, wan and cni0 (the pod bridge).
 
 Packets are built by hand with tests/packet_builders.py, the same helpers the
 sanitizer tests use, so this adds no dependency.
@@ -45,6 +45,11 @@ TV = "192.168.1.40"
 WEB = "203.0.113.10"      # TEST-NET-3
 CDN = "198.51.100.25"     # TEST-NET-2
 NTP_SERVER = "198.51.100.123"
+# A small Kubernetes node on the NAS: two pods and the cluster DNS service,
+# on the pod bridge (cni0), so the diagram has traffic inside the box.
+POD_WEB = "10.42.0.12"
+POD_API = "10.42.0.15"
+CLUSTER_DNS = "10.43.0.10"
 # Enough destinations that the Traffic Diagram has a crowd to lay out.
 SITES = [
     ("shop.example.com", WEB), ("cdn.example.net", CDN),
@@ -60,9 +65,10 @@ MACS = {
 
 
 # Interface indexes, as a capture on the router's "any" would record them.
-WIRED, WIFI, WAN = 2, 3, 4
+WIRED, WIFI, WAN, CNI = 2, 3, 4, 5
 # 0.0.0.0 is the phone asking DHCP for an address, on Wi-Fi.
-IFINDEX = {LAPTOP: WIFI, PHONE: WIFI, NAS: WIRED, PRINTER: WIRED, TV: WIRED, "0.0.0.0": WIFI}
+IFINDEX = {LAPTOP: WIFI, PHONE: WIFI, NAS: WIRED, PRINTER: WIRED, TV: WIRED, "0.0.0.0": WIFI,
+           POD_WEB: CNI, POD_API: CNI, CLUSTER_DNS: CNI}
 
 
 def _mac_for(address: str) -> bytes:
@@ -79,7 +85,10 @@ def _ifindex(src: str, dst: str) -> int:
 def _sll2(src: str, dst: str, ethertype: int, payload: bytes) -> bytes:
     # protocol, reserved, ifindex, ARPHRD_ETHER, packet type (0 = to us),
     # address length, address padded to 8.
-    header = struct.pack("!HHiHBB8s", ethertype, 0, _ifindex(src, dst), 1, 0, 6, _mac_for(src) + b"\0\0")
+    # The router's own packets are outgoing (4); everything else arrives (0).
+    # That is how the Traffic Diagram tells the capturing box's own address.
+    pkttype = 4 if src == ROUTER else 0
+    header = struct.pack("!HHiHBB8s", ethertype, 0, _ifindex(src, dst), 1, pkttype, 6, _mac_for(src) + b"\0\0")
     return header + payload
 
 
@@ -157,8 +166,8 @@ def _web(rng: random.Random, client: str, sport: int) -> list[bytes]:
 
 
 KINDS = ["web", "stream", "http", "ssh", "smb", "mdns", "ssdp", "dhcp", "ping", "ntp", "snmp", "syslog", "arp",
-         "refused", "retransmit", "fragments", "unreachable"]
-WEIGHTS = [5, 4, 2, 2, 3, 3, 2, 1, 2, 1, 3, 2, 2, 3, 2, 1, 1]
+         "refused", "retransmit", "fragments", "unreachable", "k8s"]
+WEIGHTS = [5, 4, 2, 2, 3, 3, 2, 1, 2, 1, 3, 2, 2, 3, 2, 1, 1, 3]
 
 
 def _session(rng: random.Random, kind: str) -> list[bytes]:
@@ -233,6 +242,21 @@ def _session(rng: random.Random, kind: str) -> list[bytes]:
         query = _udp(PHONE, PRINTER, sport, 53, dns_query("printer.local"))[20:]  # the IP packet
         return [_udp(PHONE, PRINTER, sport, 53, dns_query("printer.local")),
                 _ip_frame(PRINTER, PHONE, 1, icmp(3, 3, b"\0\0\0\0" + query[:28]))]
+    if kind == "k8s":
+        # A pod resolves a service, calls another pod's JSON API, and that pod
+        # calls out to the internet.
+        body = b'{"status":"ok","items":[1,2,3]}'
+        frames = [_udp(POD_WEB, CLUSTER_DNS, sport, 53, dns_query("api.default.svc.cluster.local"))]
+        frames += _handshake(POD_WEB, POD_API, sport + 1, 8080)
+        frames.append(_tcp(POD_WEB, POD_API, sport + 1, 8080,
+                           b"GET /items HTTP/1.1\r\nHost: api\r\nAccept: application/json\r\n\r\n"))
+        frames.append(_tcp(POD_API, POD_WEB, 8080, sport + 1,
+                           b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                           + str(len(body)).encode() + b"\r\n\r\n" + body))
+        name, server = rng.choice(SITES)
+        frames += _handshake(POD_API, server, sport + 2, 443)
+        frames.append(_tcp(POD_API, server, sport + 2, 443, tls_client_hello(name)))
+        return frames
     return [_arp(rng.choice([LAPTOP, PHONE, TV]), ROUTER)]
 
 

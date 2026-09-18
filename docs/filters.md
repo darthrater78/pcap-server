@@ -47,6 +47,35 @@ A display filter tshark cannot parse is reported back with tshark's own message
 and the position it objected to. An empty packet list therefore always means the
 filter was valid and nothing matched it.
 
+## Leaving traffic out
+
+Every library row has a **Not** button beside **Use**: it leaves that traffic
+out, adding `and not (…)` to what the field already holds, or `not (…)` when
+it is empty. The combine menu offers the same as **…and NOT this**.
+
+## Optimize for diagrams
+
+The **Capture** tab's **Optimize for diagrams** checkboxes fit a capture to
+the diagram you will read it with. Both start unticked, and only one can be
+ticked per capture. Ticking **Traffic Diagram** or **Sequence Diagram**:
+
+- sets **Max packets** to that diagram's cap — 100,000 or 10,000 — and while
+  it stays ticked, a capture never asks for more (a blank Max packets means
+  exactly the cap; a larger number asks first);
+- sets **Snap length** to 256 bytes: every header a diagram reads, and the
+  start of the payload protocols are recognised by, at a fraction of the file
+  size;
+- adds the ticked noise to the BPF field as `and not (…)`, so the cap is spent
+  on conversations rather than chatter.
+
+The noise list is pre-ticked with the usual suspects — ARP, STP, LLDP/CDP,
+mDNS, SSDP, LLMNR, NetBIOS name/datagram, WS-Discovery, IGMP and IPv6
+neighbour discovery — with DHCP, NTP, broadcast, multicast and SSH (which
+includes this app's own capture session) there to add. Changing the ticks
+rewrites the clause it added rather than stacking a second one. **Save as
+preset** keeps your choice of exclusions, snap length and max packets under a
+name, private to your account; pick it from **Your presets** next time.
+
 ## What a capture says it captured afterwards
 
 Each capture in the list carries a badge naming its filter: the library's own

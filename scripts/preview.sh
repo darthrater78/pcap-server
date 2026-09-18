@@ -5,7 +5,7 @@
 # diagrams have something to show straight away.
 #
 # The capture is then dressed up as one taken on "any", with names for its
-# interface indexes (eth0, wlan0, wan). An upload never has those -- the file
+# interface indexes (eth0, wlan0, wan, cni0). An upload never has those -- the file
 # does not carry them -- so they are written into the preview's database
 # directly and the container restarted to load them. Fine for a fake capture
 # in a disposable container; never something the app itself does.
@@ -166,7 +166,7 @@ for capture in call("GET", "/api/captures"):
     call("DELETE", f"/api/captures/{capture['id']}")
 capture = call("POST", "/api/captures/upload?filename=preview-home-network.pcap", raw=sys.stdin.buffer.read())
 # Make it read as a capture on "any" with named interfaces (see the header).
-names = {"2": "eth0", "3": "wlan0", "4": "wan"}
+names = {"2": "eth0", "3": "wlan0", "4": "wan", "5": "cni0"}
 with sqlite3.connect("/app/data/pcap-server.db") as conn:
     conn.execute("UPDATE captures SET interface = 'any', interface_names = ? WHERE id = ?",
                  (json.dumps(names), capture["id"]))

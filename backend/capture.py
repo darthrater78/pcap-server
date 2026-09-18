@@ -638,6 +638,14 @@ class CaptureManager:
 
         return info
 
+    def set_subnet_map(self, capture_id: str, mappings: list[dict]) -> CaptureInfo:
+        info = self._captures.get(capture_id)
+        if not info:
+            raise KeyError(f"capture {capture_id} not found")
+        info.subnet_map = mappings
+        self._persist(info)
+        return info
+
     def rename(self, capture_id: str, name: str) -> CaptureInfo:
         info = self._captures.get(capture_id)
         if not info:

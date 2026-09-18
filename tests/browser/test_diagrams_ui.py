@@ -271,15 +271,15 @@ async def test_edge_heat_climbs_with_crossings_and_stays_capped(app_page):
 
 
 async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):
-    await _stub_api(app_page, "/diagram-packets?", {"packets": [], "total": 5001})
+    await _stub_api(app_page, "/diagram-packets?", {"packets": [], "total": 10001})
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
     await app_page.wait_for_selector("#sequence-dialog[open]")
 
     assert await app_page.is_visible("#sequence-cap-warning")
-    assert "5,001" in await app_page.inner_text("#sequence-cap-warning") \
-        or "5001" in await app_page.inner_text("#sequence-cap-warning")
+    assert "10,001" in await app_page.inner_text("#sequence-cap-warning") \
+        or "10001" in await app_page.inner_text("#sequence-cap-warning")
     assert await app_page.is_hidden("#sequence-body")
 
 
@@ -448,9 +448,9 @@ async def test_picking_a_protocol_narrows_the_next_play(app_page):
     await _open_topology_with_packets(app_page)
     await _play_to_end(app_page)
 
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='DNS']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='DNS']")
     assert await app_page.get_attribute(
-        "#topology-legend .diagram-legend-chip[data-proto='DNS']", "aria-pressed") == "true"
+        "#topology-legend .diagram-legend-chip[data-key='DNS']", "aria-pressed") == "true"
     assert await app_page.get_attribute("#topology-legend .diagram-legend-chip[data-all]", "aria-pressed") == "false"
     assert await app_page.get_attribute("#topology-scrubber", "max") == "2"
     # A pick rewinds: no badges from the previous play survive it.
@@ -462,7 +462,7 @@ async def test_picking_a_protocol_narrows_the_next_play(app_page):
     assert tops == ["DNS", "DNS"]
 
     # A second pick adds to the first; "All" clears both.
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='HTTP']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='HTTP']")
     assert await app_page.get_attribute("#topology-scrubber", "max") == "3"
     await app_page.click("#topology-legend .diagram-legend-chip[data-all]")
     assert await app_page.get_attribute("#topology-scrubber", "max") == "6"
@@ -704,15 +704,15 @@ async def test_every_protocol_gets_its_own_chip(app_page):
     packets = [_packet(i + 1, "10.0.0.1", "10.0.0.2", proto) for i, proto in enumerate(protocols)]
     await _open_topology_with_packets(app_page, packets)
     await app_page.click("#btn-topology-play")
-    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-proto]")
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip:not([data-key^='problem:'])[data-key]")
 
     chips = await app_page.eval_on_selector_all(
-        "#topology-legend .diagram-legend-chip[data-proto]", "els => els.map(e => e.dataset.proto)")
+        "#topology-legend .diagram-legend-chip:not([data-key^='problem:'])[data-key]", "els => els.map(e => e.dataset.key)")
     assert sorted(chips) == sorted(protocols)
     assert await app_page.locator("#topology-legend [data-other]").count() == 0
 
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='SSH']")
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='SNMP']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='SSH']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='SNMP']")
     assert await app_page.get_attribute("#topology-scrubber", "max") == "2"
     assert "one or more" in await app_page.inner_text("#topology-legend .diagram-legend-hint")
 
@@ -726,10 +726,10 @@ async def test_fifteen_protocols_each_get_a_colored_mark_of_their_own(app_page):
             packets.append(_packet(n, "10.0.0.1", "10.0.0.2", proto))
     await _open_topology_with_packets(app_page, packets)
     await app_page.click("#btn-topology-play")
-    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-proto]")
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip:not([data-key^='problem:'])[data-key]")
 
     marks = await app_page.eval_on_selector_all(
-        "#topology-legend .diagram-legend-chip[data-proto] svg",
+        "#topology-legend .diagram-legend-chip:not([data-key^='problem:'])[data-key] svg",
         """els => els.map(svg => {
             const shape = svg.lastElementChild;
             const kind = shape.tagName === 'circle' && shape.getAttribute('fill') === 'none' ? 'ring'
@@ -770,11 +770,11 @@ async def test_picking_protocols_hides_hosts_and_links_they_never_touched(app_pa
     await app_page.click("#btn-topology")
     await app_page.wait_for_selector("#topology-svg .diagram-node")
     await app_page.click("#btn-topology-play")
-    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-proto='DNS']")
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='DNS']")
 
     visible = "() => [...document.querySelectorAll('#topology-svg .diagram-node:not(.is-hidden) > text')].map(t => t.firstChild.textContent).sort()"
     links = "() => document.querySelectorAll('#topology-svg .diagram-edge:not(.is-hidden)').length"
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='DNS']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='DNS']")
     assert await app_page.evaluate(visible) == ["10.0.0.1", "10.0.0.2"]
     assert await app_page.evaluate(links) == 1
 
@@ -811,7 +811,7 @@ async def test_resolve_names_can_be_switched_from_the_diagram(app_page):
 
 async def test_protocols_are_in_the_stats_and_legend_before_any_play(app_page):
     await _open_topology_with_packets(app_page)
-    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-proto='TLS']")
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='TLS']")
     stats = await app_page.inner_text("#topology-stats-body")
     assert "TLS" in stats and "DNS" in stats and "HTTP" in stats
     assert await app_page.inner_text("#btn-topology-play") == "Play"
@@ -827,20 +827,38 @@ PROBLEM_PACKETS = [
 
 
 async def test_problems_are_counted_badged_and_pickable(app_page):
+    """Each problem kind is a chip of its own, in a Problems group."""
     await _open_topology_with_packets(app_page, PROBLEM_PACKETS)
-    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-problems]")
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='problem:reset']")
 
-    assert "Problems (3)" in await app_page.inner_text("#topology-legend .diagram-legend-chip[data-problems]")
+    group = await app_page.inner_text("#topology-legend .diagram-chip-group--problems")
+    assert "Resets (1)" in group and "IP fragments (1)" in group and "Retransmissions / lost (1)" in group
     stats = await app_page.inner_text("#topology-stats-body")
     assert "Resets" in stats and "IP fragments" in stats and "Retransmissions" in stats
     assert await app_page.text_content("#topology-svg .diagram-problem-badge text") == "⚠3"
 
-    # Picked on its own, only the problem packets play.
-    await app_page.click("#topology-legend .diagram-legend-chip[data-problems]")
+    # One kind on its own plays only those packets.
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='problem:reset']")
+    assert await app_page.get_attribute("#topology-scrubber", "max") == "1"
+    assert await app_page.text_content("#topology-svg .diagram-problem-badge text") == "⚠1"
+    # The group's name picks every kind in it.
+    await app_page.click("#topology-legend .diagram-chip-group--problems .diagram-chip-group-label")
     assert await app_page.get_attribute("#topology-scrubber", "max") == "3"
     # Alongside a protocol, the two add up.
-    await app_page.click("#topology-legend .diagram-legend-chip[data-proto='DNS']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='DNS']")
     assert await app_page.get_attribute("#topology-scrubber", "max") == "4"
+
+
+async def test_unpicking_problems_takes_their_icons_away(app_page):
+    """A play of just DNS shows no problem badges -- the icons follow the chips."""
+    await _open_topology_with_packets(app_page, PROBLEM_PACKETS)
+    await app_page.wait_for_selector("#topology-svg .diagram-problem-badge")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='DNS']")
+    assert await app_page.locator("#topology-svg .diagram-problem-badge").count() == 0
+    # Unpicked chips step back while something is picked.
+    assert await app_page.locator("#topology-legend.has-picks").count() == 1
+    await app_page.click("#topology-legend .diagram-legend-chip[data-all]")
+    assert await app_page.locator("#topology-svg .diagram-problem-badge").count() == 1
 
 
 async def test_a_problem_row_filters_the_packet_list(app_page):
@@ -876,25 +894,25 @@ async def test_host_search_highlights_matches_and_steps_through_them(app_page):
     assert await app_page.locator("#topology-dialog[open]").count() == 1
 
 
-# --- captures above 5,000 packets ---------------------------------------------
+# --- captures above the Sequence Diagram's 10,000 packets ---------------------------------------------
 
 
 async def test_traffic_diagram_plays_a_capture_past_the_sequence_cap(app_page):
-    # 6,000 packets: over the Sequence Diagram's 5,000, under the server's
+    # 12,000 packets: over the Sequence Diagram's 10,000, under the server's
     # ceiling (the route reports it as "cap"). The Traffic Diagram draws it.
-    packets = [_packet(i, "10.0.0.1", "10.0.0.2") for i in range(1, 6001)]
+    packets = [_packet(i, "10.0.0.1", "10.0.0.2") for i in range(1, 12001)]
     await app_page.evaluate(
         """(r) => { const real = window.api; window.api = async (path, opts) =>
             path.includes('/conversations') ? r.conv
             : path.includes('/diagram-packets?') ? r.pkts : real(path, opts); }""",
-        {"conv": CONVERSATIONS_PAYLOAD, "pkts": {"packets": packets, "total": 6000, "cap": 100000}},
+        {"conv": CONVERSATIONS_PAYLOAD, "pkts": {"packets": packets, "total": 12000, "cap": 100000}},
     )
     await _open_viewer(app_page)
     await app_page.click("#btn-topology")
     await app_page.wait_for_selector("#topology-svg .diagram-node")
     await app_page.click("#btn-topology-play")
     await app_page.wait_for_function(
-        "() => document.getElementById('topology-playback-count').textContent.endsWith('/ 6,000')"
+        "() => document.getElementById('topology-playback-count').textContent.endsWith('/ 12,000')"
     )
     assert await app_page.is_hidden("#topology-cap-warning")
 
@@ -920,14 +938,14 @@ async def test_sequence_diagram_asks_for_its_own_cap(app_page):
     await app_page.evaluate(
         """() => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
             window.__calls.push(path);
-            return path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 5000 } : real(path, opts); }; }"""
+            return path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 10000 } : real(path, opts); }; }"""
     )
     await _open_viewer(app_page)
     await app_page.click("#btn-sequence")
     await app_page.wait_for_selector("#sequence-dialog[open]")
     await app_page.wait_for_function("() => window.__calls.some((c) => c.includes('/diagram-packets?'))")
     calls = await app_page.evaluate("() => window.__calls")
-    assert any("/diagram-packets?" in c and "limit=5000" in c for c in calls)
+    assert any("/diagram-packets?" in c and "limit=10000" in c for c in calls)
 
 
 async def test_edge_heat_carried_forward_matches_a_recount(app_page):
@@ -947,7 +965,9 @@ async def test_edge_heat_carried_forward_matches_a_recount(app_page):
     assert same
 
 
-async def test_ticked_caps_reach_each_diagrams_request(app_page):
+async def test_each_diagram_always_asks_for_its_own_cap(app_page):
+    """The Capture tab's checkboxes no longer switch the drawing caps off:
+    unticked (the default), each diagram still asks for no more than it draws."""
     await app_page.evaluate(
         """(r) => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
             window.__calls.push(path);
@@ -955,7 +975,8 @@ async def test_ticked_caps_reach_each_diagrams_request(app_page):
                 : path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 1 } : real(path, opts); }; }""",
         CONVERSATIONS_PAYLOAD,
     )
-    await app_page.evaluate("() => { $('topology-cap-enabled').checked = true; $('sequence-cap-enabled').checked = true; }")
+    assert not await app_page.is_checked("#topology-cap-enabled")
+    assert not await app_page.is_checked("#sequence-cap-enabled")
     await _open_viewer(app_page)
     await app_page.click("#btn-topology")
     await app_page.wait_for_function(
@@ -964,25 +985,339 @@ async def test_ticked_caps_reach_each_diagrams_request(app_page):
     await app_page.evaluate("() => $('topology-dialog').close()")
     await app_page.click("#btn-sequence")
     await app_page.wait_for_function(
-        "() => window.__calls.some((c) => c.includes('/diagram-packets?') && c.includes('limit=5000'))"
+        "() => window.__calls.some((c) => c.includes('/diagram-packets?') && c.includes('limit=10000'))"
     )
-
-
-async def test_an_unticked_cap_asks_for_the_servers_maximum(app_page):
-    await app_page.evaluate(
-        """() => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
-            window.__calls.push(path);
-            return path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 100000 } : real(path, opts); }; }"""
-    )
-    await app_page.evaluate("() => { $('sequence-cap-enabled').checked = false; }")
-    await _open_viewer(app_page)
-    await app_page.click("#btn-sequence")
-    await app_page.wait_for_function("() => window.__calls.some((c) => c.includes('/diagram-packets?'))")
-    calls = await app_page.evaluate("() => window.__calls.filter((c) => c.includes('/diagram-packets?'))")
-    assert all("limit=" not in c for c in calls)
 
 
 async def test_the_cap_checkboxes_show_their_max_and_have_tooltips(app_page):
-    for sel, shown in (("label:has(#topology-cap-enabled)", "100,000"), ("label:has(#sequence-cap-enabled)", "5,000")):
+    for sel, shown in (("label:has(#topology-cap-enabled)", "100,000"), ("label:has(#sequence-cap-enabled)", "10,000")):
         assert shown in await app_page.inner_text(sel)
         assert "ticked" in (await app_page.get_attribute(sel, "title")).lower()
+
+
+# --- names, zones, selection, saved layouts ----------------------------------
+
+
+NAMED = {
+    "conversations": [
+        {"a": "10.254.253.113", "b": "52.9.185.162", "packets_a_to_b": 3, "bytes_a_to_b": 300,
+         "packets_b_to_a": 3, "bytes_b_to_a": 300},
+        {"a": "10.254.253.113", "b": "10.42.0.7", "packets_a_to_b": 2, "bytes_a_to_b": 200,
+         "packets_b_to_a": 2, "bytes_b_to_a": 200},
+    ],
+    "endpoints": [
+        {"address": "10.254.253.113", "name": "", "packets": 10, "bytes": 1000},
+        {"address": "52.9.185.162", "name": "ec2-52-9-185-162.us-west-1.compute.amazonaws.com",
+         "packets": 6, "bytes": 600},
+        {"address": "10.42.0.7", "name": "", "packets": 4, "bytes": 400},
+    ],
+}
+
+
+async def _open_named(page, packets=None):
+    packets = packets or []
+    await page.evaluate(
+        """(r) => { const real = window.api; window.api = async (path, opts) =>
+            path.includes('/conversations') ? r.conv : path.includes('/diagram-packets?') ? r.pkts : real(path, opts); }""",
+        {"conv": NAMED, "pkts": {"packets": packets, "total": len(packets), "names": {}}},
+    )
+    await _open_viewer(page)
+    await page.click("#btn-topology")
+    await page.wait_for_selector("#topology-svg .diagram-node")
+
+
+async def test_a_resolved_host_shows_its_name_over_its_address_and_filters_by_address(app_page):
+    """The regression: with names on, a click built ip.addr == "ec2-..." and
+    tshark refused it. The node is keyed by address; the name is a label."""
+    await _open_named(app_page)
+    node = app_page.locator("#topology-svg .diagram-node[data-id='52.9.185.162']")
+    assert "ec2-52-9-185-162" in await node.locator(".diagram-node-name").text_content()
+    assert await node.locator(".diagram-node-ip").text_content() == "52.9.185.162"
+    await node.locator("circle").click()
+    assert await app_page.input_value("#display-filter") == "ip.addr == 52.9.185.162"
+
+
+async def test_selecting_a_host_lights_up_everything_it_talks_to(app_page):
+    await _open_named(app_page)
+    await app_page.click("#topology-svg .diagram-node[data-id='52.9.185.162'] circle")
+    assert await app_page.locator("#topology-svg .diagram-node.is-selected").count() == 1
+    neighbor = "#topology-svg .diagram-node[data-id='10.254.253.113']"
+    assert "is-neighbor" in await app_page.get_attribute(neighbor, "class")
+    assert "is-faded" in await app_page.get_attribute("#topology-svg .diagram-node[data-id='10.42.0.7']", "class")
+    assert await app_page.locator("#topology-svg .diagram-edge.is-active").count() == 1
+
+
+async def test_links_are_colored_by_zone_and_the_internet_sits_on_top(app_page):
+    await _open_named(app_page)
+    classes = await app_page.eval_on_selector_all(
+        "#topology-svg .diagram-edge", "els => els.map(e => e.getAttribute('class'))")
+    assert any("zone-internet" in c for c in classes)
+    # 10.42.0.0/16: a k3s pod, with no interface on record to say otherwise.
+    assert "zone-box" in await app_page.get_attribute("#topology-svg .diagram-node[data-id='10.42.0.7']", "class")
+    ys = await app_page.evaluate("() => Object.fromEntries(topologyState.nodes.map(n => [n.id, n.y]))")
+    assert ys["52.9.185.162"] < min(ys["10.254.253.113"], ys["10.42.0.7"])
+
+
+async def test_the_box_address_is_found_from_its_physical_interface(app_page):
+    packets = [
+        {**_packet(i, "10.254.253.113", "52.9.185.162"), "interface": "ens18"} for i in range(1, 12)
+    ] + [{**_packet(20, "10.42.0.7", "10.254.253.113"), "interface": "cni0"}]
+    await _open_named(app_page, packets)
+    await app_page.wait_for_selector("#topology-svg .diagram-node.is-egress")
+    assert await app_page.get_attribute("#topology-svg .diagram-node.is-egress", "data-id") == "10.254.253.113"
+    assert "zone-box" in await app_page.get_attribute("#topology-svg .diagram-node[data-id='10.42.0.7']", "class")
+    assert "likely" in await app_page.inner_text("#topology-stats-body")
+
+
+async def test_a_layout_saves_positions_and_picks_against_the_capture(app_page):
+    await app_page.evaluate("""() => {
+        window.__saved = null;
+        const real = window.api;
+        window.api = async (path, opts) => {
+            if (path.includes('/diagram-views') && opts && opts.method === 'POST') {
+                window.__saved = JSON.parse(opts.body);
+                return { id: 'v1', capture_id: 'cap-1', name: window.__saved.name, state: window.__saved.state };
+            }
+            if (path.includes('/diagram-views')) return window.__saved
+                ? [{ id: 'v1', capture_id: 'cap-1', name: window.__saved.name, state: window.__saved.state }] : [];
+            return real(path, opts);
+        };
+        window.prompt = () => 'my layout';
+    }""")
+    await _open_named(app_page, [_packet(1, "10.254.253.113", "52.9.185.162", "TLS")])
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='TLS']")
+    await app_page.click("#topology-legend .diagram-legend-chip[data-key='TLS']")
+    await app_page.evaluate("() => { const n = topologyState.byId.get('10.42.0.7'); n.x = 123; n.y = 45; }")
+    await app_page.click("#btn-topology-layout-save")
+    await app_page.wait_for_function("() => window.__saved !== null")
+    saved = await app_page.evaluate("() => window.__saved")
+    assert saved["name"] == "my layout"
+    assert saved["state"]["positions"]["10.42.0.7"] == {"x": 123, "y": 45}
+    assert saved["state"]["selected"] == ["TLS"]
+
+    # Opening it again puts the host back where it was saved.
+    await app_page.evaluate("() => { const n = topologyState.byId.get('10.42.0.7'); n.x = 0; n.y = 0; }")
+    await app_page.wait_for_selector("#topology-layout-select option[value='v1']", state="attached")
+    await app_page.select_option("#topology-layout-select", "v1")
+    await app_page.wait_for_function(
+        "() => topologyState && topologyState.byId.get('10.42.0.7')?.x === 123 && topologyState.restored")
+
+
+async def test_the_diagram_header_names_the_capture_it_draws(app_page):
+    await app_page.evaluate("""() => { captures = [{ id: 'cap-1', name: 'slow logons', interface: 'any',
+        bpf_filter: 'not arp', packet_count: 1234, started_at: '2026-09-18T10:00:00+00:00',
+        server_label: 'box-1', status: 'completed' }]; }""")
+    await _open_named(app_page)
+    details = await app_page.inner_text("#topology-capture-details")
+    assert "box-1" in details and "not arp" in details and "1,234" in details
+
+
+# --- the Capture tab: optimize for diagrams, NOT in the filter library -----
+
+
+async def _capture_panel(page):
+    await page.evaluate("() => activatePanel('capture')")
+
+
+async def test_ticking_a_diagram_fits_the_capture_to_it(app_page):
+    await _capture_panel(app_page)
+    # Unticked by default.
+    assert not await app_page.is_checked("#topology-cap-enabled")
+    assert not await app_page.is_checked("#sequence-cap-enabled")
+    assert await app_page.is_hidden("#optimize-panel")
+    await app_page.fill("#cap-bpf", "host 10.0.0.1")
+    await app_page.check("#sequence-cap-enabled")
+    assert await app_page.input_value("#cap-count") == "10000"
+    assert await app_page.input_value("#cap-snaplen") == "256"
+    bpf = await app_page.input_value("#cap-bpf")
+    assert bpf.startswith("(host 10.0.0.1) and not (arp or stp")
+    # Changing the exclusions rewrites our own clause, not a second copy of it.
+    await app_page.uncheck("#optimize-exclusions input[value='arp']")
+    bpf = await app_page.input_value("#cap-bpf")
+    assert bpf.startswith("(host 10.0.0.1) and not (stp") and bpf.count("and not") == 1
+
+
+async def test_a_library_row_can_be_excluded_with_not(app_page):
+    await _capture_panel(app_page)
+    await app_page.evaluate("() => { document.getElementById('filter-library-details').open = true; }")
+    await app_page.fill("#cap-bpf", "")
+    await app_page.evaluate("() => onBpfFilterChanged()")
+    first = app_page.locator("#filter-library [data-action='exclude-library-filter']").first
+    expr = await first.get_attribute("data-id")
+    await first.click()
+    assert await app_page.input_value("#cap-bpf") == f"not ({expr})"
+
+
+async def test_the_box_address_is_what_only_ever_goes_out(app_page):
+    """On an "any" capture the kernel's direction decides: a forwarded packet
+    arrives before it leaves, the box's own only ever leave."""
+    def pkt(n, src, dst, iface, direction):
+        return {**_packet(n, src, dst), "interface": iface, "direction": direction}
+    packets = [pkt(i, "10.254.253.113", "52.9.185.162", "ens18", "out") for i in range(1, 5)]
+    # A pod's packet: in on cni0 -- busier than the node, but never "out" alone.
+    packets += [pkt(10 + i, "10.42.0.7", "52.9.185.162", "cni0", "in") for i in range(20)]
+    await _open_named(app_page, packets)
+    await app_page.wait_for_selector("#topology-svg .diagram-node.is-egress")
+    assert await app_page.locator("#topology-svg .diagram-node.is-egress").count() == 1
+    assert await app_page.get_attribute("#topology-svg .diagram-node.is-egress", "data-id") == "10.254.253.113"
+
+
+async def test_link_colors_can_be_changed_and_reset(app_page):
+    await _open_named(app_page)
+    await app_page.evaluate("""() => { const i = document.getElementById('zone-color-internet');
+        i.value = '#ff00aa'; i.dispatchEvent(new Event('input', { bubbles: true })); }""")
+    edge = "#topology-svg .diagram-edge.zone-internet"
+    assert await app_page.evaluate(f"() => getComputedStyle(document.querySelector('{edge}')).stroke") == "rgb(255, 0, 170)"
+    assert await app_page.is_visible("#btn-zone-colors-reset")
+    await app_page.click("#btn-zone-colors-reset")
+    assert await app_page.evaluate(f"() => getComputedStyle(document.querySelector('{edge}')).stroke") != "rgb(255, 0, 170)"
+
+
+async def test_the_interfaces_dialog_suggests_subnets_and_saves_the_named_ones(app_page):
+    await app_page.evaluate("""(conv) => {
+        window.__put = null;
+        captures = [{ id: 'cap-1', name: 'uploaded', interface: '', status: 'completed', subnet_map: [] }];
+        const real = window.api;
+        window.api = async (path, opts) => {
+            if (path.includes('/conversations')) return conv;
+            if (path.includes('/subnet-map')) { window.__put = JSON.parse(opts.body); return {}; }
+            if (path === '/api/captures') return captures;
+            return real(path, opts);
+        };
+    }""", NAMED)
+    await app_page.evaluate("() => openSubnetMapDialog('cap-1')")
+    await app_page.wait_for_selector("#subnet-map-rows .subnet-cidr")
+    cidrs = await app_page.eval_on_selector_all("#subnet-map-rows .subnet-cidr", "els => els.map(e => e.value)")
+    # Private /24s from the capture; the public address is not offered.
+    assert set(cidrs) == {"10.254.253.0/24", "10.42.0.0/24"}
+    await app_page.locator("#subnet-map-rows .subnet-name").nth(cidrs.index("10.42.0.0/24")).fill("cni0")
+    await app_page.click("#btn-subnet-map-save")
+    await app_page.wait_for_function("() => window.__put !== null")
+    # Only the named row is saved.
+    assert await app_page.evaluate("() => window.__put") == {"mappings": [{"cidr": "10.42.0.0/24", "name": "cni0"}]}
+    assert await app_page.locator("#subnet-map-dialog[open]").count() == 0
+
+
+async def test_protocols_and_stats_both_fold_away(app_page):
+    await _open_named(app_page)
+    for pane in ("#topology-chips", "#topology-stats"):
+        assert await app_page.evaluate(f"() => document.querySelector('{pane}').open")
+        await app_page.click(f"{pane} > summary")
+        assert not await app_page.evaluate(f"() => document.querySelector('{pane}').open")
+    # Remembered: the next open of the diagram keeps them folded.
+    assert await app_page.evaluate("() => localStorage.getItem('pcap.topologyChipsOpen')") == "0"
+    await app_page.evaluate("() => { localStorage.removeItem('pcap.topologyChipsOpen'); localStorage.removeItem('pcap.topologyStatsOpen'); }")
+
+
+async def _start_capture_request(page, count_value):
+    """Press Start capture with the form as it stands; the request body it sends."""
+    await page.evaluate("""(count) => {
+        window.__started = null;
+        const sel = document.getElementById('cap-server');
+        if (!sel.querySelector('option[value="srv-1"]')) sel.append(new Option('box-1', 'srv-1'));
+        sel.value = 'srv-1';
+        document.getElementById('cap-name').value = 'limit check';
+        document.getElementById('cap-count').value = count;
+        window.confirm = () => true;
+        confirmBpfFilter = async () => true;
+        const real = window.api;
+        window.api = async (path, opts) => {
+            if (path === '/api/captures' && opts && opts.method === 'POST') { window.__started = JSON.parse(opts.body); return {}; }
+            return real(path, opts);
+        };
+    }""", count_value)
+    await page.evaluate("() => startCapture()")
+    await page.wait_for_function("() => window.__started !== null")
+    return await page.evaluate("() => window.__started")
+
+
+async def test_a_ticked_diagram_polices_the_capture_limit(app_page):
+    await _capture_panel(app_page)
+    await app_page.check("#sequence-cap-enabled")
+    # Blank Max packets: exactly the diagram's cap, not the server maximum.
+    assert (await _start_capture_request(app_page, ""))["count"] == 10000
+    # More than it can draw: held to the cap (the confirm is answered OK).
+    assert (await _start_capture_request(app_page, "50000"))["count"] == 10000
+    # Less is left alone.
+    assert (await _start_capture_request(app_page, "800"))["count"] == 800
+    # One per capture: ticking Traffic unticks Sequence, and its cap applies.
+    await app_page.fill("#cap-count", "")
+    await app_page.check("#topology-cap-enabled")
+    assert not await app_page.is_checked("#sequence-cap-enabled")
+    assert await app_page.input_value("#cap-count") == "100000"
+    assert (await _start_capture_request(app_page, ""))["count"] == 100000
+    # Neither ticked: no limit is added.
+    await app_page.uncheck("#topology-cap-enabled")
+    assert "count" not in await _start_capture_request(app_page, "")
+
+
+async def test_every_problem_kind_is_colored_in_the_packet_list(app_page):
+    """The list's Problem color follows the diagram's own problem kinds, so a
+    fragment is colored like a retransmission -- it used to look normal."""
+    classes = await app_page.evaluate("""() => [
+        'Fragmented IP protocol (proto=UDP 17, off=0, ID=4d31)',
+        'IPv6 fragment (off=0 more=y ident=0x1)',
+        '[TCP Retransmission] 443 → 51453 [PSH, ACK]',
+        '[TCP ZeroWindow] 443 → 51453 [ACK]',
+        'Destination unreachable (Port unreachable)',
+        '[Malformed Packet]',
+        'Standard query 0x4321 A example.com',
+    ].map((info) => packetClass({ protocol: 'IPV4', info }))""")
+    assert classes[:6] == ["pkt-bad"] * 6
+    assert classes[6] != "pkt-bad"
+
+
+async def test_the_interface_mapping_is_entered_before_the_upload_and_sent_with_it(app_page):
+    await _capture_panel(app_page)
+    await app_page.evaluate("""() => {
+        window.__upload = null;
+        const real = window.api;
+        window.api = async (path, opts) => {
+            if (path.startsWith('/api/captures/upload')) {
+                window.__upload = path;
+                return { id: 'up-1', packet_count: 3, subnet_map: [{ cidr: '192.168.1.0/24', name: 'eth0' }] };
+            }
+            if (path === '/api/captures') return [];
+            return real(path, opts);
+        };
+    }""")
+    await app_page.click("#btn-upload-toggle")
+    await app_page.set_input_files("#upload-file", files=[
+        {"name": "multi.pcapng", "mimeType": "application/octet-stream", "buffer": b"\x0a\x0d\x0d\x0a" + b"\x00" * 60}])
+    await app_page.check("#upload-multi-iface")
+    # The dialog opens now, before anything is sent.
+    await app_page.wait_for_selector("#subnet-map-dialog[open]")
+    assert await app_page.inner_text("#btn-subnet-map-save") == "Use for this upload"
+    assert window_upload_is_none(await app_page.evaluate("() => window.__upload"))
+    await app_page.locator("#subnet-map-rows .subnet-cidr").first.fill("192.168.1.0/24")
+    await app_page.locator("#subnet-map-rows .subnet-name").first.fill("eth0")
+    await app_page.click("#btn-subnet-map-save")
+    assert "eth0 192.168.1.0/24" in await app_page.inner_text("#upload-subnet-summary")
+    await app_page.evaluate("() => onUploadCaptureClick()")
+    await app_page.wait_for_function("() => window.__upload !== null")
+    sent = await app_page.evaluate("() => decodeURIComponent(window.__upload)")
+    assert '"cidr":"192.168.1.0/24"' in sent and '"name":"eth0"' in sent
+    # Done with: the next upload starts clean.
+    assert not await app_page.is_checked("#upload-multi-iface")
+
+
+def window_upload_is_none(value):
+    return value is None
+
+
+async def test_skipping_the_mapping_unticks_the_box(app_page):
+    await _capture_panel(app_page)
+    await app_page.click("#btn-upload-toggle")
+    await app_page.check("#upload-multi-iface")
+    await app_page.wait_for_selector("#subnet-map-dialog[open]")
+    await app_page.click("#subnet-map-dialog [data-close-dialog]")
+    # The dialog's close event fires after the click returns.
+    await app_page.wait_for_function("() => !document.getElementById('upload-multi-iface').checked")
+
+
+async def test_the_diagram_windows_can_be_resized(app_page):
+    await _open_named(app_page)
+    assert await app_page.evaluate("() => getComputedStyle(document.getElementById('topology-dialog')).resize") == "both"
+    before = await app_page.evaluate("() => topologyState.width")
+    await app_page.evaluate("() => { document.getElementById('topology-dialog').style.width = '700px'; }")
+    await app_page.wait_for_function(f"() => topologyState.width < {before}")

@@ -262,17 +262,17 @@ async def test_get_diagram_packets_rejects_hostile_filter_before_running_any_too
 @needs_tshark
 async def test_get_diagram_packets_counts_every_match_but_keeps_only_the_cap():
     data = _build_minimal_pcap(num_packets=7)
-    packets, total = await packet_parser.get_diagram_packets(BytesSource(data), 10)
+    packets, total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 10)
     assert total == 7 and [p["number"] for p in packets] == list(range(1, 8))
     assert packets[0]["source"] == "10.0.0.1" and packets[0]["destination"] == "10.0.0.2"
-    over, total = await packet_parser.get_diagram_packets(BytesSource(data), 5)
+    over, total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 5)
     assert over == [] and total == 7
 
 
 @needs_tshark
 async def test_get_diagram_packets_counts_the_filters_matches_not_the_capture():
     data = _build_minimal_pcap(num_packets=4)
-    none, total = await packet_parser.get_diagram_packets(
+    none, total, _names = await packet_parser.get_diagram_packets(
         BytesSource(data), 10, display_filter="udp.port == 9999"
     )
     assert none == [] and total == 0
@@ -1036,16 +1036,20 @@ async def test_packet_list_leaves_addresses_alone_when_resolution_is_off():
 
 
 @needs_tshark
-async def test_conversations_resolves_names_too_rather_than_only_claiming_to():
+async def test_conversations_names_hosts_but_keys_them_by_address():
+    """Nodes are addresses with resolution on, and the name rides along.
+
+    Keyed by name, a diagram built `ip.addr == "host.example.com"` from a
+    click, and tshark refuses a hostname there ("IPv4 address cannot be
+    converted from a string").
+    """
     convs, endpoints = await packet_parser.get_conversations(
         BytesSource(_dns_then_traffic_pcap()), resolve_names=True,
     )
-    addresses = {e.address for e in endpoints}
-    assert "host.example.com" in addresses
-    assert "10.0.0.9" not in addresses
-    # The pair, too -- not just the endpoint list, which is built from the
-    # same fields but aggregated separately.
-    assert any("host.example.com" in (c.a, c.b) for c in convs)
+    by_addr = {e.address: e.name for e in endpoints}
+    assert by_addr["10.0.0.9"] == "host.example.com"
+    assert "host.example.com" not in by_addr
+    assert any("10.0.0.9" in (c.a, c.b) for c in convs)
 
 
 @needs_tshark
@@ -1054,28 +1058,52 @@ async def test_conversations_keeps_addresses_when_resolution_is_off():
         BytesSource(_dns_then_traffic_pcap()), resolve_names=False,
     )
     assert {"10.0.0.1", "10.0.0.5", "10.0.0.9"} == {e.address for e in endpoints}
+    assert all(e.name == "" for e in endpoints)
+
+
+@needs_tshark
+async def test_packet_list_keeps_the_address_beside_the_resolved_name():
+    """The viewer's IP columns: with names on, source/destination are names
+    and source_addr/destination_addr are still the addresses."""
+    packets = await packet_parser.get_packet_list(
+        BytesSource(_dns_then_traffic_pcap()), resolve_names=True,
+    )
+    assert packets[1].destination == "host.example.com"
+    assert packets[1].destination_addr == "10.0.0.9"
+    assert packets[1].source_addr == "10.0.0.1"
+
+
+@needs_tshark
+async def test_diagram_packets_are_keyed_by_address_with_names_beside_them():
+    packets, total, names = await packet_parser.get_diagram_packets(
+        BytesSource(_dns_then_traffic_pcap()), 10, resolve_names=True,
+    )
+    assert total == 2
+    assert packets[1]["destination"] == "10.0.0.9"
+    assert names["10.0.0.9"] == "host.example.com"
 
 
 @needs_tshark
 @pytest.mark.parametrize("resolve", [False, True])
-async def test_conversations_and_packet_list_agree_on_every_host_name(resolve):
+async def test_conversations_and_diagram_packets_agree_on_every_host(resolve):
     """THE Traffic Diagram regression, stated as the invariant it depends on.
 
     diagrams.js builds its nodes from get_conversations and its animated
-    packets from get_packet_list, then looks each packet's source and
-    destination up in the node map BY STRING. So every endpoint name the
-    packet list reports must be one the conversations route also reports --
-    with resolution on and with it off. When that broke, nothing in the
-    diagram moved, and no unit test noticed because each route was correct on
-    its own.
+    packets from get_diagram_packets, then looks each packet's source and
+    destination up in the node map BY STRING. So every IP packet's endpoints
+    must be ones the conversations route also reports -- with resolution on
+    and with it off. When that broke, nothing in the diagram moved, and no
+    unit test noticed because each route was correct on its own.
     """
     data = _dns_then_traffic_pcap()
     _convs, endpoints = await packet_parser.get_conversations(
         BytesSource(data), resolve_names=resolve,
     )
-    packets = await packet_parser.get_packet_list(BytesSource(data), resolve_names=resolve)
+    packets, _total, _names = await packet_parser.get_diagram_packets(
+        BytesSource(data), 10, resolve_names=resolve,
+    )
     nodes = {e.address for e in endpoints}
-    from_packets = {p.source for p in packets} | {p.destination for p in packets}
+    from_packets = {p["source"] for p in packets} | {p["destination"] for p in packets}
     assert from_packets <= nodes, (
         "the diagram's packet-to-node lookup would miss on: "
         f"{sorted(from_packets - nodes)}"
@@ -1130,3 +1158,68 @@ async def test_packet_list_carries_the_tcp_stream_index_per_row():
     assert packets[7].tcp_stream is None
     assert packets[7].udp_stream == 0
     assert all(p.udp_stream is None for p in packets[:7])
+
+
+# --- subnet -> interface mapping (uploads) ---------------------------------
+
+
+def test_subnet_map_places_packets_like_a_capture_on_the_box():
+    smap = packet_parser.SubnetMap([
+        {"cidr": "10.42.0.0/16", "name": "cni0"},
+        {"cidr": "192.168.1.0/24", "name": "eth0"},
+        {"cidr": "10.42.7.0/24", "name": "veth7"},
+    ])
+    # Leaving toward a mapped subnet: out on its interface.
+    assert smap.place("8.8.8.8", "192.168.1.5", "") == ("eth0", "out")
+    # Arriving from one, bound for somewhere unmapped: in on its interface.
+    assert smap.place("192.168.1.5", "8.8.8.8", "") == ("eth0", "in")
+    # Routed between two mapped subnets: where it leaves, out.
+    assert smap.place("192.168.1.5", "10.42.0.9", "") == ("cni0", "out")
+    # Most specific subnet wins.
+    assert smap.place("192.168.1.5", "10.42.7.3", "") == ("veth7", "out")
+    # A direction the pcapng recorded wins; the subnets only name the interface.
+    assert smap.place("192.168.1.5", "10.42.0.9", "in") == ("eth0", "in")
+    # Nothing mapped: no interface, the recorded direction kept.
+    assert smap.place("8.8.8.8", "1.1.1.1", "out") == ("", "out")
+    assert smap.place("", "", "") == ("", "")
+
+
+def test_the_cooked_header_beats_the_subnet_map():
+    smap = packet_parser.SubnetMap([{"cidr": "10.0.0.0/8", "name": "cni0"}])
+    assert packet_parser._place_packet(2, "4", {2: "ens18"}, "", "", "10.0.0.1", "10.0.0.2", smap) == ("ens18", "out")
+    assert packet_parser._place_packet(0, "", {}, "1", "", "10.0.0.1", "10.0.0.2", smap) == ("cni0", "in")
+    # No map: the pcapng's own interface name and direction.
+    assert packet_parser._place_packet(0, "", {}, "2", "eth1", "1.1.1.1", "2.2.2.2", None) == ("eth1", "out")
+
+
+def test_a_bad_mapping_row_is_skipped_not_fatal():
+    smap = packet_parser.SubnetMap([{"cidr": "nonsense", "name": "x"}, {"name": "y"}])
+    assert not smap
+
+
+@needs_tshark
+async def test_an_uploaded_capture_gets_interfaces_from_its_subnet_map():
+    data = _build_minimal_pcap(num_packets=2)  # 10.0.0.1 -> 10.0.0.2
+    mapping = [{"cidr": "10.0.0.2/32", "name": "eth1"}]
+    packets = await packet_parser.get_packet_list(BytesSource(data), subnet_map=mapping)
+    assert packets[0].interface == "eth1" and packets[0].direction == "out"
+    diagram, _total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 10, subnet_map=mapping)
+    assert diagram[0]["interface"] == "eth1" and diagram[0]["direction"] == "out"
+
+
+@needs_tshark
+async def test_both_fragments_are_flagged_even_the_one_that_reads_like_a_normal_packet():
+    """The last fragment's Info is the reassembled datagram's summary, so only
+    the IP header can say it is a fragment."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import preview_pcap
+    data = preview_pcap.build()
+    frag = "ip.flags.mf == 1 || ip.frag_offset > 0"
+    listed = await packet_parser.get_packet_list(BytesSource(data), display_filter=frag, limit=100)
+    assert len(listed) >= 2 and all(p.fragment for p in listed)
+    diagram, _total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 1000, display_filter=frag)
+    assert diagram and all(p["fragment"] for p in diagram)
+    plain = await packet_parser.get_packet_list(BytesSource(data), display_filter="dns", limit=5)
+    assert plain and not any(p.fragment for p in plain)

@@ -488,6 +488,9 @@ function enterApp() {
     renderFilterLibrary();
     loadCustomFilters();
     loadDisplayFilters();
+    initDiagramOptimize();
+    loadCapturePresets();
+    initSubnetMapDialog();
     // Before the first capture is opened: the Viewer draws its headings from
     // this, and the default columns flashing into the operator's own layout
     // is exactly the kind of jump a stored preference should not cause.
@@ -1834,6 +1837,9 @@ function renderCustomFilterGroup(q) {
                     <td class="filter-use">
                         <button type="button" class="btn btn-sm btn-secondary"
                                 data-action="use-library-filter" data-id="${escHtml(f.expression)}">Use</button>
+                        <button type="button" class="btn btn-sm btn-secondary btn-not"
+                                data-action="exclude-library-filter" data-id="${escHtml(f.expression)}"
+                                title="Leave this traffic OUT: adds 'and not (...)' to the field, or 'not (...)' when it is empty">Not</button>
                         <button type="button" class="btn btn-sm btn-danger"
                                 data-action="delete-custom-filter" data-id="${escHtml(f.id)}"
                                 title="Forget this saved filter. Captures already taken with it are untouched.">&times;</button>
@@ -1875,6 +1881,9 @@ function renderFilterLibrary() {
                     <td class="filter-use">
                         <button type="button" class="btn btn-sm btn-secondary"
                                 data-action="use-library-filter" data-id="${escHtml(expr)}">Use</button>
+                        <button type="button" class="btn btn-sm btn-secondary btn-not"
+                                data-action="exclude-library-filter" data-id="${escHtml(expr)}"
+                                title="Leave this traffic OUT: adds 'and not (...)' to the field, or 'not (...)' when it is empty">Not</button>
                     </td>
                 </tr>`).join("")}
             </table>
@@ -1904,8 +1913,12 @@ function renderFilterLibrary() {
 // "tcp port 80 and host 10.0.0.1" silently rebinds the whole expression:
 // `a and b or c` is `(a and b) or c`, which is not what anyone picking a
 // second filter off a list is asking for.
+//
+// "andnot" is how something is left OUT: `(what you have) and not (this)`,
+// or just `not (this)` on an empty field -- "everything except ARP".
 function combineBpf(current, expr, mode) {
     current = (current || "").trim();
+    if (mode === "andnot") return current ? `(${current}) and not (${expr})` : `not (${expr})`;
     if (mode === "replace" || !current) return expr;
     if (mode === "not") return `not (${expr})`;
     return `(${current}) ${mode} (${expr})`;
@@ -2185,6 +2198,7 @@ function bpfMenuItems(expr) {
             run: () => applyBpfFilter(expr, "and"),
         },
         { label: "  \u2026or this", hint: "or", run: () => applyBpfFilter(expr, "or") },
+        { label: "  \u2026and NOT this", hint: "and not", run: () => applyBpfFilter(expr, "andnot") },
         { label: "  Replace with NOT this", hint: "not", run: () => applyBpfFilter(expr, "not") },
     ];
 }
@@ -2482,6 +2496,205 @@ function describeCapture(body, serverName) {
     return lines.join("\n");
 }
 
+// --- Optimize for diagrams ------------------------------------------------------
+//
+// The Capture tab's two diagram checkboxes are a macro: ticking one fits the
+// capture to that diagram, so one capture gets as many useful packets as the
+// diagram can draw. Max packets goes to the diagram's cap (the lower one with
+// both ticked), Snap length to a header-only size, and the noisy protocols
+// ticked in the list are left out through the BPF filter.
+//
+// The catalog below is the only place exclusion BPF comes from. A saved
+// preset stores catalog KEYS (server-validated to that shape), never BPF text.
+const DIAGRAM_CAPS = [
+    { box: "topology-cap-enabled", cap: 100000, name: "Traffic Diagram" },
+    { box: "sequence-cap-enabled", cap: 10000, name: "Sequence Diagram" },
+];
+
+// 256 bytes holds every header a diagram reads (cooked + IPv6 + TCP with
+// options is ~120) and the start of the payload the protocol dissectors
+// identify traffic by. It does not raise the packet cap, but it cuts the file
+// and the transfer back to a fraction of full packets.
+const DIAGRAM_SNAPLEN = 256;
+
+const NOISE_EXCLUSIONS = [
+    { key: "arp", label: "ARP", bpf: "arp", rec: true },
+    { key: "stp", label: "Spanning tree (STP)", bpf: "stp", rec: true },
+    { key: "lldp", label: "LLDP / CDP", bpf: "ether proto 0x88cc or ether host 01:00:0c:cc:cc:cc", rec: true },
+    { key: "mdns", label: "mDNS (5353)", bpf: "udp port 5353", rec: true },
+    { key: "ssdp", label: "SSDP / UPnP (1900)", bpf: "udp port 1900", rec: true },
+    { key: "llmnr", label: "LLMNR (5355)", bpf: "udp port 5355", rec: true },
+    { key: "netbios", label: "NetBIOS name / datagram (137, 138)", bpf: "udp port 137 or udp port 138", rec: true },
+    { key: "wsd", label: "WS-Discovery (3702)", bpf: "udp port 3702", rec: true },
+    { key: "igmp", label: "IGMP", bpf: "igmp", rec: true },
+    { key: "ipv6-nd", label: "IPv6 neighbour / router discovery", bpf: "icmp6 and ip6[40] >= 133 and ip6[40] <= 137", rec: true },
+    { key: "dhcp", label: "DHCP (67, 68)", bpf: "udp port 67 or udp port 68", rec: false },
+    { key: "ntp", label: "NTP (123)", bpf: "udp port 123", rec: false },
+    { key: "broadcast", label: "All other broadcast", bpf: "broadcast", rec: false },
+    { key: "multicast", label: "All other multicast", bpf: "multicast", rec: false },
+    { key: "ssh", label: "SSH (22), including this app's own session", bpf: "tcp port 22", rec: false },
+];
+
+let capturePresets = [];
+// What Apply last wrote into the BPF field, and what the field held before
+// it, so a second Apply replaces its own clause instead of stacking another.
+let lastOptimize = null;
+
+// At most one is ticked (initDiagramOptimize keeps them exclusive); the
+// lower cap is still taken if a page somehow has both, so the stricter wins.
+function tickedDiagramCap() {
+    const caps = DIAGRAM_CAPS.filter((d) => $(d.box)?.checked);
+    return caps.length ? caps.reduce((a, b) => (b.cap < a.cap ? b : a)) : null;
+}
+
+function chosenExclusions() {
+    return [...document.querySelectorAll("#optimize-exclusions input:checked")].map((el) => el.value);
+}
+
+function exclusionClause(keys) {
+    const parts = NOISE_EXCLUSIONS.filter((x) => keys.includes(x.key)).map((x) => x.bpf);
+    return parts.length ? parts.map((b) => (/ (or|and) /.test(b) ? `(${b})` : b)).join(" or ") : "";
+}
+
+function renderExclusions(keys) {
+    const el = $("optimize-exclusions");
+    if (!el) return;
+    el.innerHTML = NOISE_EXCLUSIONS.map((x) => `
+        <label class="optimize-exclusion" title="${escHtml(x.bpf)}">
+            <input type="checkbox" value="${escHtml(x.key)}"${keys.includes(x.key) ? " checked" : ""}>
+            ${escHtml(x.label)}${x.rec ? ' <span class="optimize-rec">recommended</span>' : ""}
+        </label>`).join("");
+}
+
+function updateOptimizeSummary() {
+    const cap = tickedDiagramCap();
+    const panel = $("optimize-panel");
+    if (panel) panel.hidden = !cap;
+    const el = $("optimize-summary");
+    if (!el || !cap) return;
+    const n = chosenExclusions().length;
+    el.textContent = `Max packets ${cap.cap.toLocaleString()} (${cap.name}), snap length ${DIAGRAM_SNAPLEN} bytes, ` +
+        `${n} kind${n === 1 ? "" : "s"} of noise left out.`;
+}
+
+// Writes the optimized settings into the form. The BPF field keeps whatever
+// the operator wrote; the exclusions go after it as `and not (...)`.
+function applyDiagramOptimization(settings = {}) {
+    const cap = tickedDiagramCap();
+    if (!cap) return;
+    const max = settings.max_packets || cap.cap;
+    const count = $("cap-count");
+    // Blank, above the cap, or still the other diagram's cap (switching from
+    // Sequence to Traffic): set to this one's.
+    const current = parseInt(count?.value);
+    const otherCaps = DIAGRAM_CAPS.map((d) => d.cap);
+    if (count && (!current || current > max || otherCaps.includes(current))) count.value = String(Math.min(max, cap.cap));
+    const snap = $("cap-snaplen");
+    if (snap) snap.value = String(settings.snaplen || DIAGRAM_SNAPLEN);
+    const box = $("cap-bpf");
+    if (box) {
+        const base = lastOptimize && box.value === lastOptimize.written ? lastOptimize.before : box.value.trim();
+        const clause = exclusionClause(chosenExclusions());
+        const written = clause ? combineBpf(base, clause, "andnot") : base;
+        box.value = written;
+        lastOptimize = { before: base, written };
+        onBpfFilterChanged();
+    }
+    updateOptimizeSummary();
+}
+
+async function loadCapturePresets(selectId = "") {
+    const sel = $("optimize-preset");
+    if (!sel) return;
+    try {
+        capturePresets = await api("/api/capture-presets");
+    } catch {
+        capturePresets = [];
+    }
+    sel.textContent = "";
+    sel.append(new Option("Recommended", ""));
+    for (const p of capturePresets) sel.append(new Option(p.label, p.id));
+    sel.value = capturePresets.some((p) => p.id === selectId) ? selectId : "";
+    $("btn-optimize-delete").disabled = !sel.value;
+}
+
+function onCapturePresetPick() {
+    const id = $("optimize-preset").value;
+    $("btn-optimize-delete").disabled = !id;
+    const preset = capturePresets.find((p) => p.id === id);
+    const keys = preset ? preset.settings.exclusions : NOISE_EXCLUSIONS.filter((x) => x.rec).map((x) => x.key);
+    renderExclusions(keys);
+    applyDiagramOptimization(preset ? preset.settings : {});
+}
+
+async function saveCapturePreset() {
+    const msg = $("optimize-msg");
+    const label = prompt("Name for these capture settings", "");
+    if (!label || !label.trim()) return;
+    const snap = parseInt($("cap-snaplen").value);
+    const count = parseInt($("cap-count").value);
+    const settings = {
+        exclusions: chosenExclusions(),
+        snaplen: snap >= 64 ? snap : null,
+        max_packets: count > 0 ? count : null,
+    };
+    try {
+        const saved = await api("/api/capture-presets", {
+            method: "POST", body: JSON.stringify({ label: label.trim(), settings }),
+        });
+        await loadCapturePresets(saved.id);
+        msg.textContent = `Saved "${saved.label}".`;
+    } catch (e) {
+        msg.textContent = e.message;
+    }
+}
+
+async function deleteCapturePreset() {
+    const id = $("optimize-preset").value;
+    const preset = capturePresets.find((p) => p.id === id);
+    if (!preset || !confirm(`Delete the preset "${preset.label}"?`)) return;
+    try {
+        await api(`/api/capture-presets/${encodeURIComponent(id)}`, { method: "DELETE" });
+        await loadCapturePresets();
+        $("optimize-msg").textContent = `Deleted "${preset.label}".`;
+    } catch (e) {
+        $("optimize-msg").textContent = e.message;
+    }
+}
+
+let diagramOptimizeReady = false;
+
+function initDiagramOptimize() {
+    // Once per page: signing in again must not stack a second set of listeners.
+    if (!$("optimize-panel") || diagramOptimizeReady) return;
+    diagramOptimizeReady = true;
+    renderExclusions(NOISE_EXCLUSIONS.filter((x) => x.rec).map((x) => x.key));
+    for (const d of DIAGRAM_CAPS) {
+        // A tick is the macro; an untick just stops enforcing that cap. One
+        // diagram per capture: ticking one unticks the other, like a radio
+        // pair that can also be left with neither.
+        $(d.box)?.addEventListener("change", (ev) => {
+            if (ev.target.checked) {
+                for (const other of DIAGRAM_CAPS) if (other.box !== d.box) $(other.box).checked = false;
+                applyDiagramOptimization();
+            } else {
+                updateOptimizeSummary();
+            }
+        });
+    }
+    $("optimize-exclusions").addEventListener("change", () => {
+        // Live while a clause of ours is still the field's content; otherwise
+        // wait for Apply rather than rewrite something the operator typed.
+        if (lastOptimize && $("cap-bpf").value === lastOptimize.written) applyDiagramOptimization();
+        else updateOptimizeSummary();
+    });
+    $("btn-optimize-apply").addEventListener("click", () => applyDiagramOptimization());
+    $("optimize-preset").addEventListener("change", onCapturePresetPick);
+    $("btn-optimize-save").addEventListener("click", saveCapturePreset);
+    $("btn-optimize-delete").addEventListener("click", deleteCapturePreset);
+    updateOptimizeSummary();
+}
+
 async function startCapture() {
     const serverId = $("cap-server").value;
     if (!serverId) return alert("Add a server first");
@@ -2520,6 +2733,20 @@ async function startCapture() {
 
     const count = parseInt($("cap-count").value);
     if (count > 0) body.count = count;
+    // The diagram checkboxes are enforced here, not just suggested: with one
+    // ticked, the capture never asks for more packets than that diagram can
+    // draw, and a blank Max packets means exactly its cap.
+    const diagramCap = tickedDiagramCap();
+    if (diagramCap) {
+        if (!body.count) {
+            body.count = diagramCap.cap;
+        } else if (body.count > diagramCap.cap) {
+            const keep = !confirm(`Max packets ${body.count.toLocaleString()} is more than the ${diagramCap.name} ` +
+                `can draw (${diagramCap.cap.toLocaleString()}).\n\nOK: capture ${diagramCap.cap.toLocaleString()}. ` +
+                "Cancel: keep your number (untick the diagram to stop this check).");
+            if (!keep) body.count = diagramCap.cap;
+        }
+    }
     const dur = parseInt($("cap-duration").value);
     if (dur > 0) body.duration_seconds = dur;
     const snap = parseInt($("cap-snaplen").value);
@@ -2612,6 +2839,147 @@ function onUploadFilePicked() {
     $("upload-msg").classList.remove("upload-msg-error");
 }
 
+// --- Interfaces dialog: subnet -> interface name -----------------------------
+
+let subnetMapCaptureId = null;
+// The mapping chosen for the next upload, before the file is sent: it goes up
+// in the same request (the upload route's subnet_map).
+let pendingUploadSubnets = [];
+
+function subnetMapRow(cidr = "", name = "") {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+        <td><input type="text" class="subnet-cidr" placeholder="192.168.1.0/24" spellcheck="false" aria-label="Subnet"></td>
+        <td><input type="text" class="subnet-name" placeholder="eth0" spellcheck="false" maxlength="32" aria-label="Interface name"></td>
+        <td><button type="button" class="btn btn-sm btn-danger btn-quiet subnet-remove" aria-label="Remove this subnet">&times;</button></td>`;
+    tr.querySelector(".subnet-cidr").value = cidr;
+    tr.querySelector(".subnet-name").value = name;
+    tr.querySelector(".subnet-remove").addEventListener("click", () => tr.remove());
+    return tr;
+}
+
+// Private IPv4 addresses in the capture, grouped into /24s: the subnets most
+// likely to sit behind an interface of their own, offered with no name so
+// only the ones named are kept.
+async function suggestSubnets(captureId) {
+    let data;
+    try {
+        data = await api(`/api/captures/${encodeURIComponent(captureId)}/conversations`);
+    } catch {
+        return [];
+    }
+    const seen = new Map();
+    for (const e of data.endpoints || []) {
+        const v4 = parseIPv4(e.address);
+        if (v4 === null || addressZone(e.address, false) !== "lan") continue;
+        if (inV4Net(v4, "224.0.0.0", 4) || inV4Net(v4, "255.255.255.255", 32) || inV4Net(v4, "0.0.0.0", 8)) continue;
+        const net = e.address.split(".").slice(0, 3).join(".") + ".0/24";
+        seen.set(net, (seen.get(net) || 0) + e.packets);
+    }
+    return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([net]) => net);
+}
+
+// With a capture id: that capture's mapping, saved to it. With none: the
+// mapping for the upload about to be sent, kept until Upload is pressed.
+async function openSubnetMapDialog(captureId = null) {
+    const c = captureId ? captures.find((x) => x.id === captureId) : null;
+    subnetMapCaptureId = captureId;
+    const rows = $("subnet-map-rows");
+    rows.textContent = "";
+    $("subnet-map-msg").textContent = "";
+    const file = $("upload-file")?.files?.[0];
+    $("subnet-map-capture").innerHTML = c
+        ? `<span class="diagram-context-capture">${escHtml(c.name || c.id)}</span>`
+        : `<span class="diagram-context-capture">${escHtml(file ? file.name : "the next upload")}</span>`;
+    $("btn-subnet-map-save").textContent = captureId ? "Save interfaces" : "Use for this upload";
+    const existing = captureId ? ((c && c.subnet_map) || []) : pendingUploadSubnets;
+    for (const m of existing) rows.append(subnetMapRow(m.cidr, m.name));
+    $("subnet-map-dialog").showModal();
+    if (!captureId) {
+        // Nothing to look in yet: the file has not been sent.
+        if (!existing.length) { rows.append(subnetMapRow()); rows.append(subnetMapRow()); }
+        rows.querySelector(".subnet-cidr")?.focus();
+        return;
+    }
+    if (!existing.length) {
+        $("subnet-map-msg").textContent = "Looking for subnets in the capture\u2026";
+        const nets = await suggestSubnets(captureId);
+        if (subnetMapCaptureId !== captureId) return;
+        for (const net of nets) rows.append(subnetMapRow(net, ""));
+        if (!nets.length) rows.append(subnetMapRow());
+        $("subnet-map-msg").textContent = nets.length
+            ? `Found ${nets.length} subnet${nets.length === 1 ? "" : "s"} in the capture -- name the ones you captured on.`
+            : "";
+    }
+    rows.querySelector(".subnet-name")?.focus();
+}
+
+async function saveSubnetMapDialog() {
+    const msg = $("subnet-map-msg");
+    const mappings = [];
+    for (const tr of $("subnet-map-rows").children) {
+        const cidr = tr.querySelector(".subnet-cidr").value.trim();
+        const name = tr.querySelector(".subnet-name").value.trim();
+        if (!cidr && !name) continue;
+        if (!name) continue;  // offered but not named: skipped, as the hint says
+        if (!cidr) {
+            msg.textContent = `"${name}" needs a subnet, like 192.168.1.0/24.`;
+            return;
+        }
+        mappings.push({ cidr, name });
+    }
+    const captureId = subnetMapCaptureId;
+    if (!captureId) {
+        pendingUploadSubnets = mappings;
+        $("subnet-map-dialog").close();
+        renderUploadSubnets();
+        return;
+    }
+    try {
+        await api(`/api/captures/${encodeURIComponent(captureId)}/subnet-map`, {
+            method: "PUT", body: JSON.stringify({ mappings }),
+        });
+    } catch (e) {
+        msg.textContent = `Not saved: ${e.message}`;
+        return;
+    }
+    $("subnet-map-dialog").close();
+    await loadCaptures();
+    if (viewingCaptureId === captureId) loadPackets(captureId, $("display-filter").value);
+}
+
+let subnetMapDialogReady = false;
+
+function renderUploadSubnets() {
+    const box = $("upload-multi-iface");
+    if (box && !pendingUploadSubnets.length) box.checked = false;
+    const summary = $("upload-subnet-summary");
+    if (!summary) return;
+    summary.hidden = !pendingUploadSubnets.length;
+    $("upload-subnet-list").textContent = pendingUploadSubnets.map((m) => `${m.name} ${m.cidr}`).join(" \u00b7 ");
+}
+
+function initSubnetMapDialog() {
+    const dialog = $("subnet-map-dialog");
+    if (!dialog || subnetMapDialogReady) return;
+    subnetMapDialogReady = true;
+    dialog.addEventListener("click", (e) => { if (e.target.closest("[data-close-dialog]")) dialog.close(); });
+    $("btn-subnet-map-add").addEventListener("click", () => {
+        const tr = subnetMapRow();
+        $("subnet-map-rows").append(tr);
+        tr.querySelector(".subnet-cidr").focus();
+    });
+    $("btn-subnet-map-save").addEventListener("click", saveSubnetMapDialog);
+    // Closed without "Use for this upload" (Skip, Esc): an upload with no
+    // mapping un-ticks the box, so what it says matches what will be sent.
+    dialog.addEventListener("close", () => { if (!subnetMapCaptureId) renderUploadSubnets(); });
+    $("upload-multi-iface")?.addEventListener("change", (ev) => {
+        if (ev.target.checked) openSubnetMapDialog(null);
+        else { pendingUploadSubnets = []; renderUploadSubnets(); }
+    });
+    $("btn-upload-subnets-edit")?.addEventListener("click", () => openSubnetMapDialog(null));
+}
+
 async function onUploadCaptureClick() {
     const input = $("upload-file");
     const file = input && input.files && input.files[0];
@@ -2625,8 +2993,12 @@ async function onUploadCaptureClick() {
     // this does.
     msg.textContent = `Uploading ${file.name} (${formatBytes(file.size)})\u2026`;
     try {
+        const params = new URLSearchParams({ filename: file.name });
+        if ($("upload-multi-iface")?.checked && pendingUploadSubnets.length) {
+            params.set("subnet_map", JSON.stringify({ mappings: pendingUploadSubnets }));
+        }
         const info = await api(
-            `/api/captures/upload?filename=${encodeURIComponent(file.name)}`,
+            `/api/captures/upload?${params}`,
             {
                 method: "POST",
                 body: file,
@@ -2636,6 +3008,12 @@ async function onUploadCaptureClick() {
         );
         input.value = "";
         msg.textContent = `Uploaded ${Number(info.packet_count).toLocaleString()} packets.`;
+        if ((info.subnet_map || []).length) {
+            msg.textContent += ` Interfaces: ${info.subnet_map.map((m) => m.name).join(", ")}.`;
+        }
+        // The mapping was for that file; the next upload starts clean.
+        pendingUploadSubnets = [];
+        renderUploadSubnets();
         await loadCaptures();
     } catch (e) {
         msg.textContent = `Upload failed: ${e.message}`;
@@ -2694,6 +3072,13 @@ function captureActions(c, id) {
                    ${dl}`;
     }
     actions += ` <button class="btn btn-sm btn-secondary" data-action="rename-capture" data-id="${id}">Rename</button>`;
+    // A capture whose packets carry no interface (an upload, or one named
+    // interface) can be told which subnet is behind which.
+    if (c.interface !== ANY_INTERFACE && c.status === "completed") {
+        const n = (c.subnet_map || []).length;
+        actions += ` <button class="btn btn-sm btn-secondary" data-action="map-subnets" data-id="${id}"
+            title="Say which subnet is behind which interface: packets then show an interface and in/out">Interfaces${n ? ` (${n})` : ""}</button>`;
+    }
     actions += ` <button class="btn btn-sm btn-danger btn-quiet" data-action="delete-capture" data-id="${id}">Delete</button>`;
     return actions;
 }
@@ -3560,7 +3945,12 @@ const PACKET_RULES = [
     {
         cls: "pkt-bad",
         label: "Problem",
-        test: (p, info) => /retransmission|dup ack|out-of-order|zerowindow|window full|previous segment|port numbers reused|malformed|bad checksum|unreachable|time exceeded/i.test(info),
+        // The Traffic Diagram's own problem kinds (diagrams.js PROBLEM_KINDS),
+        // so the list and the diagram never disagree about what is trouble --
+        // this list used to keep a copy, which never learned about fragments.
+        // Resets have their own color, next.
+        test: (p, info) => p.fragment || PROBLEM_KINDS.some((k) => k.key !== "reset" && k.test.test(info)) ||
+            /port numbers reused/i.test(info),
     },
     { cls: "pkt-reset", label: "Reset", test: (p, info) => /\brst\b/i.test(info) },
     { cls: "pkt-session", label: "Open / close", test: (p, info) => /\b(syn|fin)\b/i.test(info) },
@@ -4054,6 +4444,8 @@ const BUILTIN_COLUMNS = {
     time: { title: "Time", cls: "col-time", shows: "Timestamp, in the format the view flags choose" },
     source: { title: "Source", cls: "col-src", shows: "Source address" },
     destination: { title: "Destination", cls: "col-dst", shows: "Destination address" },
+    src_ip: { title: "Source IP", cls: "col-src-ip", shows: "Source IP address, unresolved -- added beside Source while names are resolved" },
+    dst_ip: { title: "Destination IP", cls: "col-dst-ip", shows: "Destination IP address, unresolved -- added beside Destination while names are resolved" },
     interface: { title: "Interface", cls: "col-iface", shows: "Which interface the packet crossed (\"any\" captures only)" },
     src_mac: { title: "Src MAC", cls: "col-mac", shows: "Sender's link-layer address" },
     dst_mac: { title: "Dst MAC", cls: "col-mac", shows: "Destination link-layer address" },
@@ -4070,6 +4462,10 @@ const DEFAULT_COLUMN_IDS = [
     "protocol", "length", "info",
 ];
 const MAC_COLUMN_IDS = ["src_mac", "dst_mac"];
+// With names resolved, Source and Destination show names; each gets its
+// address beside it, the way -e brings the MAC columns in, without editing the
+// saved layout.
+const IP_COLUMN_FOR = { source: "src_ip", destination: "dst_ip" };
 
 // Mirrors CUSTOM_COLUMN_PREFIX and the two caps in models.py. A layout the
 // server would refuse is one this side should never have sent.
@@ -4163,12 +4559,21 @@ function effectiveColumns(flags) {
             (id) => ({ id, title: BUILTIN_COLUMNS[id].title, field: "" }),
         ));
     }
+    if (resolveNamesEnabled()) {
+        for (const [anchorId, ipId] of Object.entries(IP_COLUMN_FOR)) {
+            if (layout.some((c) => c.id === ipId)) continue;
+            const anchor = layout.findIndex((c) => c.id === anchorId);
+            if (anchor < 0) continue;
+            layout.splice(anchor + 1, 0, { id: ipId, title: BUILTIN_COLUMNS[ipId].title, field: "" });
+        }
+    }
     // Only a capture on "any" says which interface each packet crossed: it is
     // read from the Linux cooked header, which a capture of one named
     // interface does not have. The column is hidden there rather than left to
     // print nothing on every row.
     const capture = captures.find((c) => c.id === viewingCaptureId);
-    const isAny = Boolean(capture && capture.interface === ANY_INTERFACE);
+    // ...or one whose subnets were mapped to interfaces (an upload).
+    const isAny = Boolean(capture && (capture.interface === ANY_INTERFACE || (capture.subnet_map || []).length));
     return layout.map((c) => ({
         id: c.id,
         title: c.title || BUILTIN_COLUMNS[c.id]?.title || c.field || c.id,
@@ -4619,7 +5024,8 @@ function interfaceCellHtml(p) {
     if (p.interface) {
         parts.push(p.interface.startsWith("#")
             ? `interface index ${p.ifindex} (its name was not recorded)`
-            : `${p.interface} (index ${p.ifindex})`);
+            : p.ifindex ? `${p.interface} (index ${p.ifindex})`
+                : `${p.interface} (from the capture's subnet mapping, or the pcapng's own record)`);
     }
     if (long) parts.push(long);
     if (p.ifindex) parts.push(`filter: sll.ifindex == ${p.ifindex}`);
@@ -4654,9 +5060,13 @@ function packetCellHtml(p, col, cols) {
             return `<td ${attrs} title="${escHtml(local ? LOCAL_ZONE : p.timestamp)}">${escHtml(shown)}</td>`;
         }
         case "source":
-            return `<td ${attrs} title="${escHtml(p.source)}">${escHtml(p.source)}</td>`;
+            return `<td ${attrs} data-addr="${escHtml(p.source_addr || "")}" title="${escHtml(p.source)}">${escHtml(p.source)}</td>`;
         case "destination":
-            return `<td ${attrs} title="${escHtml(p.destination)}">${escHtml(p.destination)}</td>`;
+            return `<td ${attrs} data-addr="${escHtml(p.destination_addr || "")}" title="${escHtml(p.destination)}">${escHtml(p.destination)}</td>`;
+        case "src_ip":
+            return `<td ${attrs} data-addr="${escHtml(p.source_addr || "")}">${escHtml(p.source_addr || "")}</td>`;
+        case "dst_ip":
+            return `<td ${attrs} data-addr="${escHtml(p.destination_addr || "")}">${escHtml(p.destination_addr || "")}</td>`;
         case "interface":
             return `<td ${attrs} data-ifindex="${p.ifindex || ""}" data-iface-name="${escHtml(p.interface || "")}">${interfaceCellHtml(p)}</td>`;
         case "src_mac":
@@ -5298,21 +5708,26 @@ function onPacketRowContextMenu(ev) {
         // carries the field it was drawn from, so the filter is exact instead
         // of being guessed back out of the value's shape.
         items.push(...filterMenuItems(buildFieldFilter(cell.dataset.field, text), text));
-    } else if ((cell.classList.contains("col-src") || cell.classList.contains("col-dst")) && text) {
+    } else if (["col-src", "col-dst", "col-src-ip", "col-dst-ip"].some((c) => cell.classList.contains(c)) && text) {
         // Source and Destination are synthesized display columns (an address
         // can arrive as ip, ipv6 or eth depending on the frame), so there is
         // no dataset.field to read the way the MAC columns have -- the field
         // has to be recovered from the value's shape, same as addressField
         // does below, but pointed at this specific side of the packet
         // (ip.src, not just ip.addr) so "as source" is actually offered.
-        const base = addressField(text);
+        //
+        // With names resolved the cell shows a name, which no address field
+        // accepts; the row carries the address itself in data-addr for that.
+        const addr = cell.dataset.addr || text;
+        const base = addressField(addr);
         if (base) {
-            const directional = base.replace("addr", cell.classList.contains("col-src") ? "src" : "dst");
-            items.push(...filterMenuItems(buildFieldFilter(directional, text), text));
+            const isSrc = cell.classList.contains("col-src") || cell.classList.contains("col-src-ip");
+            const directional = base.replace("addr", isSrc ? "src" : "dst");
+            items.push(...filterMenuItems(buildFieldFilter(directional, addr), text));
             items.push({ separator: true });
             // Either direction still has its place -- kept as a second,
             // clearly separate option rather than dropped.
-            items.push(...filterMenuItems(buildFieldFilter(base, text), text));
+            items.push(...filterMenuItems(buildFieldFilter(base, addr), text));
         }
     } else {
         const field = addressField(text);
@@ -5321,8 +5736,9 @@ function onPacketRowContextMenu(ev) {
 
     // Wireshark's Conversation Filter, which is the reason most right-clicks on
     // a row happen at all: both endpoints of this exchange and nothing else.
-    const src = row.querySelector(".col-src")?.textContent.trim() || "";
-    const dst = row.querySelector(".col-dst")?.textContent.trim() || "";
+    const srcCell = row.querySelector(".col-src"), dstCell = row.querySelector(".col-dst");
+    const src = srcCell?.dataset.addr || srcCell?.textContent.trim() || "";
+    const dst = dstCell?.dataset.addr || dstCell?.textContent.trim() || "";
     const sf = addressField(src);
     if (sf && sf === addressField(dst)) {
         const conv = `${buildFieldFilter(sf, src)} && ${buildFieldFilter(sf, dst)}`;
@@ -6526,6 +6942,7 @@ function initEventDelegation() {
         "download-capture": (id) => downloadCaptureById(id),
         "sanitize-capture": (id) => openSanitizeDialog(id),
         "rename-capture": (id) => renameCapture(id),
+        "map-subnets": (id) => openSubnetMapDialog(id),
         "delete-capture": (id) => deleteCapture(id),
     });
     delegate("admin-user-list", {
@@ -6572,6 +6989,7 @@ function initEventDelegation() {
     });
     delegate("filter-library", {
         "use-library-filter": (expr, el, ev) => useLibraryFilter(expr, el, ev),
+        "exclude-library-filter": (expr) => applyBpfFilter(expr, "andnot"),
         "delete-custom-filter": (id) => deleteCustomFilter(id),
     });
     delegate("display-own-filters", {

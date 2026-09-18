@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -213,7 +214,111 @@ MAX_EXTRA_COLUMNS = 12
 
 # Fields the built-in columns need, up to and including _ws.col.Info. The MAC
 # fields follow when -e is set, and the operator's own columns after those.
-_BASE_FIELD_COUNT = 11
+_BASE_FIELD_COUNT = 20
+
+# The network-layer address fields, IPv4 then IPv6. These never resolve,
+# whatever -N says (the resolved value lives in the separate *_host fields), so
+# with names on they are what a row's "Source IP" column and every filter built
+# from a diagram read: a display filter has to compare ip.addr to an address,
+# and a hostname there is a filter tshark refuses.
+_ADDRESS_FIELDS = ["-e", "ip.src", "-e", "ip.dst", "-e", "ipv6.src", "-e", "ipv6.dst"]
+
+
+# A pcapng file (what Wireshark saves) can say, per packet, which interface it
+# was captured on and which way it went. Read beside the Linux cooked header's
+# own fields: an upload has those instead of sll.ifindex/sll.pkttype.
+_PCAPNG_FIELDS = ["-e", "frame.packet_flags_direction", "-e", "frame.interface_name"]
+_PCAPNG_DIRECTION = {"1": "in", "2": "out"}
+
+# Whether a packet is an IP fragment, from the header itself. Info cannot say:
+# on the fragment that completes a datagram, tshark prints the reassembled
+# datagram's summary ("5004 -> 5004 Len=2000"), which reads like any packet.
+_FRAGMENT_FIELDS = ["-e", "ip.flags.mf", "-e", "ip.frag_offset", "-e", "ipv6.fraghdr.nxt"]
+
+
+def _is_fragment(mf: str, offset: str, v6_fraghdr: str) -> bool:
+    return mf in ("1", "True") or offset not in ("", "0") or bool(v6_fraghdr)
+
+
+class SubnetMap:
+    """The operator's subnet -> interface table for a capture (models.SubnetMapping).
+
+    For a packet with no interface of its own, the interface is the one whose
+    subnet the packet's addresses sit in, most specific subnet first, and its
+    direction is what a capture on the box itself would have said: leaving
+    toward a mapped subnet is "out" on that subnet's interface, arriving from
+    one is "in". A packet routed between two mapped subnets is shown where it
+    leaves -- out on the destination's. A direction the pcapng recorded wins
+    over that guess; the subnets then only say which interface.
+    """
+
+    def __init__(self, mappings: list[dict] | None):
+        nets = []
+        for m in mappings or []:
+            try:
+                nets.append((ipaddress.ip_network(m["cidr"], strict=False), str(m["name"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        self._nets = sorted(nets, key=lambda n: n[0].prefixlen, reverse=True)
+        self._cache: dict[str, str] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._nets)
+
+    def name_for(self, address: str) -> str:
+        if not address:
+            return ""
+        if address in self._cache:
+            return self._cache[address]
+        name = ""
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            ip = None
+        if ip is not None:
+            for net, iface in self._nets:
+                if ip.version == net.version and ip in net:
+                    name = iface
+                    break
+        if len(self._cache) < 50000:
+            self._cache[address] = name
+        return name
+
+    def place(self, src: str, dst: str, recorded: str) -> tuple[str, str]:
+        """(interface, direction) for one packet, or ("", recorded) unmapped."""
+        s, d = self.name_for(src), self.name_for(dst)
+        if recorded == "out" and (d or s):
+            return d or s, "out"
+        if recorded == "in" and (s or d):
+            return s or d, "in"
+        if d:
+            return d, "out"
+        if s:
+            return s, "in"
+        return "", recorded
+
+
+def _place_packet(
+    ifindex: int, pkttype: str, names: dict[int, str], flag: str, pcapng_iface: str,
+    src_addr: str, dst_addr: str, smap: SubnetMap | None,
+) -> tuple[str, str]:
+    """A packet's interface and direction, from the best evidence it carries:
+    the Linux cooked header ("any" captures), then the subnet map, then what a
+    pcapng recorded."""
+    if ifindex:
+        return _interface(ifindex, names), _SLL_DIRECTION.get(pkttype, "")
+    # Cooked v1 records a direction but no interface; pcapng may record one.
+    recorded = _SLL_DIRECTION.get(pkttype, "") or _PCAPNG_DIRECTION.get(flag, "")
+    if smap:
+        iface, direction = smap.place(src_addr, dst_addr, recorded)
+        if iface:
+            return iface, direction
+    return pcapng_iface[:64], recorded
+
+
+def _address_pair(v4src: str, v4dst: str, v6src: str, v6dst: str) -> tuple[str, str]:
+    """A packet's source and destination address, or ("", "") without an IP layer."""
+    return (v4src or v6src), (v4dst or v6dst)
 
 # How tshark complains about a `-e` it does not recognise: "Some fields aren't
 # valid: nope.nope" on current builds, "isn't a valid field" on older ones.
@@ -366,6 +471,7 @@ async def get_packet_list(
     resolve_names: bool = False,
     interface_names: dict[int, str] | None = None,
     extra_fields: list[str] | None = None,
+    subnet_map: list[dict] | None = None,
 ) -> list[PacketSummary]:
     flags = set(view_flags or [])
     extra = validate_column_fields(list(extra_fields or []))
@@ -395,6 +501,9 @@ async def get_packet_list(
         # empty on every packet outside a TCP or UDP conversation.
         "-e", "tcp.stream",
         "-e", "udp.stream",
+        *_ADDRESS_FIELDS,
+        *_PCAPNG_FIELDS,
+        *_FRAGMENT_FIELDS,
         "-e", "_ws.col.Info",
     ]
     if show_mac:
@@ -436,6 +545,7 @@ async def get_packet_list(
             raise DisplayFilterError(_filter_rejection(stderr))
 
     expected = _BASE_FIELD_COUNT + (3 if show_mac else 0) + len(extra)
+    smap = SubnetMap(subnet_map)
     packets = []
     for line in stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
@@ -460,6 +570,10 @@ async def get_packet_list(
         protocol = parts[4].split(":")[-1] if parts[4] else "?"
         # Empty unless the capture is Linux cooked v2, which is "any".
         ifindex = int(parts[6]) if parts[6].isascii() and parts[6].isdigit() else 0
+        src_addr, dst_addr = _address_pair(*parts[10:14])
+        iface, direction = _place_packet(
+            ifindex, parts[7], interface_names or {}, parts[14], parts[15], src_addr, dst_addr, smap,
+        )
         packets.append(PacketSummary(
             number=num,
             timestamp=parts[1] if show_time else "",
@@ -467,12 +581,15 @@ async def get_packet_list(
             destination=parts[3] or "N/A",
             protocol=protocol.upper(),
             length=int(parts[5]) if parts[5] else 0,
-            info=parts[10],
-            src_mac=_mac(parts, 11, 13) if show_mac else "",
-            dst_mac=_mac(parts, 12) if show_mac else "",
-            interface=_interface(ifindex, interface_names or {}),
+            info=parts[19],
+            fragment=_is_fragment(*parts[16:19]),
+            src_mac=_mac(parts, 20, 22) if show_mac else "",
+            dst_mac=_mac(parts, 21) if show_mac else "",
+            source_addr=src_addr,
+            destination_addr=dst_addr,
+            interface=iface,
             ifindex=ifindex,
-            direction=_SLL_DIRECTION.get(parts[7], ""),
+            direction=direction,
             tcp_stream=int(parts[8]) if parts[8].isdigit() else None,
             udp_stream=int(parts[9]) if parts[9].isdigit() else None,
             values=values,
@@ -497,13 +614,21 @@ async def get_diagram_packets(
     display_filter: str = "",
     resolve_names: bool = False,
     interface_names: dict[int, str] | None = None,
-) -> tuple[list[dict], int]:
-    """Up to `cap` packets matching the filter, and how many matched in all.
+    subnet_map: list[dict] | None = None,
+) -> tuple[list[dict], int, dict[str, str]]:
+    """Up to `cap` packets matching the filter, how many matched in all, and names.
 
     Every match is counted, but only the first `cap` are kept, so memory is
     bounded by the cap and not by the capture. Over the cap the caller gets
     the count alone -- a diagram of the first N packets would draw a picture of
     something other than what was asked for.
+
+    A packet with an IP layer is keyed by its ADDRESSES, with resolution on or
+    off, exactly as get_conversations keys its nodes: a diagram builds display
+    filters from these, and `ip.addr == "ec2-...amazonaws.com"` is a filter
+    tshark refuses. What resolution found comes back beside them, as a map
+    from address to name. Anything without an IP layer (ARP, STP) keeps the
+    Source/Destination column's own text.
     """
     cmd = ["tshark", "-r", "-"]
     cmd += _name_resolution_args(resolve_names)
@@ -515,6 +640,13 @@ async def get_diagram_packets(
         "-e", "frame.protocols",
         "-e", "frame.len",
         "-e", "sll.ifindex",
+        # Which way the packet went, on "any" captures: what tells the
+        # diagram which addresses are the capturing box's own (see
+        # diagrams.js detectEgress).
+        "-e", "sll.pkttype",
+        *_ADDRESS_FIELDS,
+        *_PCAPNG_FIELDS,
+        *_FRAGMENT_FIELDS,
         # Last: the one free-text column, so a tab inside it shifts nothing.
         "-e", "_ws.col.Info",
         "-E", "separator=\t",
@@ -525,8 +657,10 @@ async def get_diagram_packets(
         _validate_display_filter(display_filter)
         cmd += ["-Y", display_filter]
 
-    names = interface_names or {}
+    ifnames = interface_names or {}
+    smap = SubnetMap(subnet_map)
     packets: list[dict] = []
+    names: dict[str, str] = {}
     matched = 0
     # An Info column can run long; the default 64 KiB line bound is not the
     # thing that should decide whether a diagram loads.
@@ -536,22 +670,32 @@ async def get_diagram_packets(
     stderr_task = asyncio.create_task(proc.stderr.read())
     try:
         while line := await proc.stdout.readline():
-            parts = line.decode(errors="replace").rstrip("\n").split("\t", 6)
-            if len(parts) < 7 or not parts[0].isdigit():
+            parts = line.decode(errors="replace").rstrip("\n").split("\t", 16)
+            if len(parts) < 17 or not parts[0].isdigit():
                 continue
             matched += 1
             if matched > cap:
                 continue
             protocol = parts[3].split(":")[-1] if parts[3] else "?"
             ifindex = int(parts[5]) if parts[5].isascii() and parts[5].isdigit() else 0
+            src, dst = parts[1] or "N/A", parts[2] or "N/A"
+            src_addr, dst_addr = _address_pair(*parts[7:11])
+            iface, direction = _place_packet(
+                ifindex, parts[6], ifnames, parts[11], parts[12], src_addr, dst_addr, smap,
+            )
+            if resolve_names:
+                _note_name(names, src_addr, src)
+                _note_name(names, dst_addr, dst)
             packets.append({
                 "number": int(parts[0]),
-                "source": parts[1] or "N/A",
-                "destination": parts[2] or "N/A",
+                "source": src_addr or src,
+                "destination": dst_addr or dst,
                 "protocol": protocol.upper(),
                 "length": int(parts[4]) if parts[4].isdigit() else 0,
-                "interface": _interface(ifindex, names),
-                "info": parts[6][:DIAGRAM_INFO_MAX],
+                "interface": iface,
+                "direction": direction,
+                "fragment": _is_fragment(*parts[13:16]),
+                "info": parts[16][:DIAGRAM_INFO_MAX],
             })
         stderr = await stderr_task
         await proc.wait()
@@ -565,7 +709,21 @@ async def get_diagram_packets(
         if display_filter:
             raise DisplayFilterError(_filter_rejection(stderr))
         raise RuntimeError("tshark failed listing diagram packets")
-    return (packets if matched <= cap else []), matched
+    if matched > cap:
+        return [], matched, {}
+    return packets, matched, names
+
+
+# One name per address, and only a real one: a column that printed the address
+# itself (nothing resolved) or nothing at all adds no entry. Bounded, like the
+# diagram's own node cap, so a capture of a million distinct hosts cannot grow
+# the map without limit.
+_NAMES_MAX = 20000
+
+
+def _note_name(names: dict[str, str], address: str, shown: str) -> None:
+    if address and shown and shown != address and address not in names and len(names) < _NAMES_MAX:
+        names[address] = shown
 
 
 # The kernel's PACKET_* types as tshark prints sll.pkttype under -T fields.
@@ -665,29 +823,21 @@ async def get_conversations(
     since turning it on sends a reverse-DNS query for every address in the
     capture.
 
-    It reads DIFFERENT FIELDS when it is on, which the previous version of this
-    docstring denied: it claimed -e ip.src/ip.dst resolve to whatever
-    _ws.col.Source holds, "same mechanism either way". They do not. ip.src is
-    the address field and prints the address whatever the resolution settings
-    say; the resolved value lives in the separate ip.src_host / ip.dst_host
-    fields (ipv6.src_host / ipv6.dst_host for v6), which is where Wireshark's
-    own Source column gets it from.
-
-    That was not a cosmetic error. The Traffic Diagram builds its nodes from
-    this route and its animated packets from get_packet_list, then matches the
-    two by string. With resolution on, the nodes were addresses and the packets
-    were names, so every lookup missed and the playback drew nothing at all.
-    Reading the _host fields here is what makes the two agree.
+    Pairs and endpoints are always keyed by ADDRESS (ip.src / ipv6.src,
+    which never resolve). With resolution on, the resolved names come from the
+    separate ip.src_host / ipv6.src_host fields and ride along on each
+    endpoint as `name`. That is what lets the Traffic Diagram label a host by
+    name while every filter it builds still says ip.addr == <address>: keying
+    by name, as this used to, produced `ip.addr == "ec2-...amazonaws.com"`,
+    which tshark refuses. get_diagram_packets keys its packets the same way,
+    so the diagram's packet-to-node lookup still matches by string.
     """
     cmd = ["tshark", "-r", "-"]
     cmd += _name_resolution_args(resolve_names)
-    src, dst = ("ip.src_host", "ip.dst_host") if resolve_names else ("ip.src", "ip.dst")
-    v6src, v6dst = (
-        ("ipv6.src_host", "ipv6.dst_host") if resolve_names else ("ipv6.src", "ipv6.dst")
-    )
-    cmd += ["-T", "fields",
-           "-e", src, "-e", dst, "-e", v6src, "-e", v6dst,
-           "-e", "frame.len", "-E", "separator=\t", "-E", "occurrence=f"]
+    cmd += ["-T", "fields", *_ADDRESS_FIELDS, "-e", "frame.len"]
+    if resolve_names:
+        cmd += ["-e", "ip.src_host", "-e", "ip.dst_host", "-e", "ipv6.src_host", "-e", "ipv6.dst_host"]
+    cmd += ["-E", "separator=\t", "-E", "occurrence=f"]
     if display_filter:
         _validate_display_filter(display_filter)
         cmd += ["-Y", display_filter]
@@ -704,15 +854,19 @@ async def get_conversations(
     # baked into the key.
     pairs: dict[tuple[str, str], dict[str, int]] = {}
     endpoints: dict[str, dict[str, int]] = {}
+    names: dict[str, str] = {}
     for line in stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
         if len(parts) < 5:
             continue
-        src = parts[0] or parts[2]
-        dst = parts[1] or parts[3]
+        src, dst = _address_pair(*parts[:4])
         length = int(parts[4]) if parts[4] else 0
         if not src or not dst:
             continue
+        if resolve_names and len(parts) >= 9:
+            host_src, host_dst = _address_pair(*parts[5:9])
+            _note_name(names, src, host_src)
+            _note_name(names, dst, host_dst)
 
         for addr in (src, dst):
             ep = endpoints.setdefault(addr, {"packets": 0, "bytes": 0})
@@ -735,7 +889,8 @@ async def get_conversations(
         Conversation(a=a, b=b, **totals) for (a, b), totals in pairs.items()
     ]
     endpoint_list = [
-        ConversationEndpoint(address=addr, **totals) for addr, totals in endpoints.items()
+        ConversationEndpoint(address=addr, name=names.get(addr, ""), **totals)
+        for addr, totals in endpoints.items()
     ]
     return conversations, endpoint_list
 
