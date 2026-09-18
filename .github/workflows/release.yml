@@ -162,16 +162,24 @@ jobs:
           # a real failure and is handled below, not explained away by an
           # ancestor.
           accept_tested_ancestor_or_die() {
-            local patterns pattern base candidate ancestors changed file prefix matched
+            local patterns pattern base candidate depth changed file prefix matched
 
             # Read the ignore list out of check.yml at the tagged commit rather
             # than restating it here, so the two cannot drift apart. The first
-            # sed takes the block, the second unwraps each list item.
+            # sed takes the blocks, the second unwraps each list item.
+            #
+            # Blocks, plural: check.yml carries the same list twice, once under
+            # push and once under pull_request, because GitHub Actions has no
+            # YAML anchors to define it once. sed's range restarts on the second
+            # `paths-ignore:`, so both are read and sort -u collapses them. A
+            # duplicate would match the same file twice and change nothing, but
+            # it would show up twice in this step's own output.
             patterns="$(
               gh api -H 'Accept: application/vnd.github.raw' \
                 "repos/${REPO}/contents/.github/workflows/check.yml?ref=${SHA}" \
                 | sed -n '/^[[:space:]]*paths-ignore:[[:space:]]*$/,/^[[:space:]]*[a-z_-]*:/p' \
-                | sed -n "s/^[[:space:]]*-[[:space:]]*['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}[[:space:]]*\$/\1/p"
+                | sed -n "s/^[[:space:]]*-[[:space:]]*['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}[[:space:]]*\$/\1/p" \
+                | sort -u
             )"
 
             if [ -z "$patterns" ]; then
@@ -194,24 +202,38 @@ jobs:
               esac
             done <<< "$patterns"
 
-            # Commits reachable from the tagged one, newest first. The tagged
-            # commit heads that list and is dropped -- it is the one already
-            # known to have no run. 50 is far more than the handful of docs
-            # commits that can realistically sit on top of a tested one, and
-            # bounds this to a single page.
-            ancestors="$(gh api "repos/${REPO}/commits?sha=${SHA}&per_page=50" --jq '.[].sha' | tail -n +2)"
-
+            # FIRST parents only, one commit at a time.
+            #
+            # This used to read /commits?sha=, which follows every parent in
+            # date order -- so a merged PR's own commits were interleaved with
+            # the default branch's. That was harmless while check.yml ran on
+            # every branch, because those commits had push runs of their own.
+            # It stopped being harmless when check.yml narrowed its push
+            # trigger to main: a PR long enough to fill the window would leave
+            # this refusing a release for want of looking one commit further
+            # back along main, at a commit that did have a run.
+            #
+            # First-parent from a merge commit is the previous head of the
+            # default branch, so 20 steps is 20 of ITS commits, not 20 of
+            # anyone's. The realistic depth is one -- a docs-only merge sitting
+            # directly on a tested one.
             base=""
-            while read -r candidate; do
-              [ -n "$candidate" ] || continue
+            candidate="${SHA}"
+            depth=0
+            while [ "$depth" -lt 20 ]; do
+              depth=$(( depth + 1 ))
+              # // empty rather than a null, so a root commit ends the walk
+              # instead of turning into the string "null" and 404ing next time.
+              candidate="$(gh api "repos/${REPO}/commits/${candidate}" --jq '.parents[0].sha // empty')"
+              [ -n "$candidate" ] || break
               if push_runs_for "$candidate" | passed; then
                 base="$candidate"
                 break
               fi
-            done <<< "$ancestors"
+            done
 
             if [ -z "$base" ]; then
-              echo "::error::Check has no run for ${SHA}, and no commit among the 50 before it has a passing push run either. Nothing establishes that this tree was ever tested. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
+              echo "::error::Check has no run for ${SHA}, and none of its 20 nearest first-parent ancestors has a passing push run either. Nothing establishes that this tree was ever tested. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
               exit 1
             fi
 
@@ -416,6 +438,126 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # Built into the runner's own daemon first, NOT pushed. Everything below
+      # this point used to be one build-push step: `docker build` exiting 0 was
+      # the only thing between a broken image and GHCR. The suite proves the
+      # code; nothing proved the artifact. A missing COPY, a dependency the
+      # venv has and the image does not, a bad edit to entrypoint.sh -- each
+      # builds clean and dies on start, and every release record in
+      # .claude/dev-skills-gates.md that caught one of those caught it by hand,
+      # locally, before tagging. CI never did.
+      #
+      # Single-platform, so `load: true` works; this repo has never set
+      # `platforms:`, and a multi-arch build could not be loaded into the local
+      # daemon at all.
+      - name: Build the image for the smoke test
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: pcap-server-smoke:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prove the image runs before publishing it
+        env:
+          IMAGE: pcap-server-smoke:${{ steps.meta.outputs.version }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          work="$(mktemp -d)"
+          cid=""
+
+          # Always show the container's own log on the way out. A smoke failure
+          # with no log is a re-run to find out what happened.
+          cleanup() {
+            if [ -n "$cid" ]; then
+              echo "::group::container log"
+              docker logs "$cid" 2>&1 || true
+              echo "::endgroup::"
+              docker rm -f "$cid" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # A real throwaway key rather than ALLOW_UNENCRYPTED_CAPTURES: the
+          # encryption path is what docker-compose.yml actually ships, so it is
+          # the one worth proving boots.
+          head -c 32 /dev/urandom | base64 > "$work/master.key"
+
+          # No bind mounts for data/, captures/ or ssh-keys/. The Dockerfile
+          # already creates them owned by appuser, and mounting host
+          # directories instead is how an earlier by-hand smoke run failed for
+          # reasons that had nothing to do with the image (root-owned mount
+          # sources, and entrypoint.sh keys its chown off those same vars).
+          cid=$(docker run -d -p 18080:8080 \
+            -e MASTER_KEY_FILE=/run/secrets/master.key \
+            -v "$work/master.key:/run/secrets/master.key:ro" \
+            "$IMAGE")
+
+          # Up to 60s. A cold start is a couple of seconds; anything near the
+          # deadline is itself worth knowing about.
+          deadline=$(( $(date +%s) + 60 ))
+          until code=$(curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ 2>/dev/null) \
+             && [ "$code" = "200" ]; do
+            if ! docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null | grep -q true; then
+              echo "::error::The container exited before serving anything."
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::The image never served / within 60s."
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "/ answered 200."
+
+          # The auth gate is wired, not just the process alive: a public route
+          # answers, a protected one refuses.
+          # No -f here or below: curl exits non-zero on a 4xx/5xx with it, and
+          # under `set -e` that aborts the step with curl's error instead of
+          # the message naming the code we actually got.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/auth/status)
+          [ "$status" = "200" ] || { echo "::error::/api/auth/status returned ${status}, want 200."; exit 1; }
+
+          servers=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/servers)
+          [ "$servers" = "401" ] || { echo "::error::/api/servers returned ${servers} unauthenticated, want 401."; exit 1; }
+          echo "Auth gate wired: /api/auth/status 200, /api/servers 401."
+
+          # What the tag claims, checked against the code INSIDE the image
+          # rather than against the repo. The gate job already compared the tag
+          # with APP_VERSION at the tagged commit; this is the independent
+          # half -- it catches a Dockerfile that copied the wrong tree, which
+          # a source-level check cannot see. v1.0.0 once published code
+          # reporting 0.1.0-dev.40, and this is the layer that would have
+          # caught it even if the tag had been right.
+          in_image=$(docker exec "$cid" sed -n 's/^APP_VERSION = "\([^"]*\)"$/\1/p' /app/backend/main.py)
+          if [ "$in_image" != "$VERSION" ]; then
+            echo "::error::The image reports APP_VERSION ${in_image}, but this release is ${VERSION}."
+            exit 1
+          fi
+          echo "In-image APP_VERSION is ${in_image}."
+
+          # A route can answer 200 while the app logs a stack trace behind it.
+          log="$(docker logs "$cid" 2>&1)"
+          if printf '%s\n' "$log" | grep -q 'Traceback (most recent call last)'; then
+            echo "::error::The image logged a traceback during startup."
+            exit 1
+          fi
+
+          # Proves the vault actually opened, rather than the app having fallen
+          # back to running unencrypted.
+          if ! printf '%s\n' "$log" | grep -qi 'encryption enabled'; then
+            echo "::error::The image did not report encryption enabled; the vault did not open."
+            exit 1
+          fi
+
+          echo "Smoke test passed for ${IMAGE}."
+
+      # Cache-hit rebuild of the exact tree just smoke-tested, so this is
+      # seconds rather than a second full build. cache-to lives on the build
+      # above; repeating it here would just race that export.
       - name: Build and push image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -423,7 +565,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
