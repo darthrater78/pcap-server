@@ -1,7 +1,9 @@
 # Dev Skills gate state
 
-## Work commit: release.yml gate fallback (2026-09-18)
-Track: work commit. Branch: claude/dev-skills-beta-workflow-cwzvx5.
+## Release sequence: release.yml gate fallback -> finish v1.1.0-beta.2 (2026-09-18)
+Track: started as a work commit; became a release sequence when the user
+asked to move the tag and unblock beta.2, which needs the fix on main.
+Branch: claude/dev-skills-beta-workflow-cwzvx5.
 Environment: remote container (Claude executes git; tag pushes go to the user).
 User: "fix the issue with the .2 beta release workflow".
 
@@ -11,19 +13,38 @@ check.yml's paths-ignore skips .claude/**, so the docs-only merge that became
 main's head got no Check run, and the gate had no fallback. Nothing was
 published; :1.1.0-beta.2 does not exist on ghcr.io.
 
-🔢 VERSION    ➖ N/A -- work commit track, no version bump (APP_VERSION stays
-              1.1.0-beta.2).
-🔨 BUILD      ✅ No app code touched, so no image to build. The purpose-built
-              check for these files is lint-workflows.yml: actionlint 1.7.12
-              (repo's pinned version + checksum) with shellcheck 0.9 on PATH,
-              exit 0 over all three workflows. Plus a local harness that runs
-              the gate step's own script against a gh stub backed by this
-              repo's real history: 7 scenarios -- docs-only above a tested
-              push run (pass), tree identical to ancestor (pass), own run
-              passing (pass), own run failed (refuse, no fallback), code file
-              differs from ancestor (refuse, names backend/main.py), ancestor
-              tested only by a pull_request run (refuse), unparseable and
-              unreasonable paths-ignore (refuse).
+🔢 VERSION    ✅ 1.1.0-beta.2, unchanged -- this completes the ship that
+              PR #14 started rather than bumping past it. All refs agree:
+              backend/main.py APP_VERSION, docker-compose.yml image tag,
+              README beta block, CHANGELOG heading. Prior version
+              v1.1.0-beta.1 confirmed tagged on remote (ed4ba63). The tag
+              being moved keeps naming the version the commit declares, so
+              release.yml's own APP_VERSION check still matches.
+🔨 BUILD      ✅ No app code touched, so no image to build. actionlint 1.7.12
+              (repo's pinned version + checksum) with shellcheck on PATH, exit
+              0 over all three workflows; lint-workflows.yml run 35298127820
+              green on the pushed commit.
+
+              The first pass on this verified the step with a throwaway
+              harness in a scratch dir, having missed that
+              tests/test_release_workflow.py already does exactly this for the
+              APP_VERSION step -- lifts the `run:` body out of release.yml as
+              text and runs it against a stub gh. The 13 new cases now live
+              there in that same style: own run passing, own run failed
+              (refuse, and asserts the ancestor lookup is never reached), the
+              real beta.2 shape against the real check.yml, identical tree,
+              code file differing from the ancestor, nearest-ancestor
+              selection, ancestor tested only by a pull_request run, no tested
+              ancestor, unreadable paths-ignore, a glob the step will not
+              guess at, an unreadable compare, and a guard on check.yml's
+              paths-ignore keeping the shape the step's sed expects.
+              23 passed. Checked against HEAD~1's release.yml that 8 of the
+              new cases fail without the fix, so they discriminate.
+
+              Full suite via scripts/check.sh: 1591 passed, 3 skipped, exit 0,
+              542.91s, with real tshark/tcpdump/capinfos and chromium. 1594
+              collected = the 1581 at beta.2 plus these 13. The 3 skips are
+              test_entrypoint.py's pre-existing root-writes-0500 cases.
 🔒 SECURITY   ✅ 0 Critical, 0 High. Reviewed as a gate-weakening question,
               not a code-injection one. The fallback publishes only when the
               diff from a tested ancestor is confined to check.yml's own
@@ -40,12 +61,23 @@ published; :1.1.0-beta.2 does not exist on ghcr.io.
 📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry gains a "Releases" bullet; the
               reasoning is in release.yml's own comments, as the rest of that
               file's decisions are.
-📦 RELEASE    ⬜
+📦 RELEASE    ⏳ user approved opening a PR to main ("yes open the PR").
 🚀 SHIP       ⬜ -- v1.1.0-beta.2 is tagged on 0038140 but was never
-              published; run 35296493378 refused it. Unblocking it needs the
-              tag moved onto a commit carrying this fix (a re-push, so the
-              user's block per SKILL.md 5.8), or a manual Check dispatch on
-              main followed by a re-run of 35296493378.
+              published; run 35296493378 refused it. Once the PR merges, the
+              tag moves onto the new main head, which carries the fix (a tag
+              push runs release.yml as of the TAGGED ref, so re-running
+              35296493378 could never have picked it up).
+
+              Note the merge commit will touch tests/, which is not in
+              paths-ignore -- so Check runs on it normally and this release
+              will satisfy the gate's PRIMARY lookup. The fallback added here
+              is not exercised by it; the first release that really leans on
+              it will be a future docs-only one.
+
+              The tag re-push is the user's block to run (SKILL.md 5.8:
+              delete + create, never Claude's, in any environment). SHIP stays
+              ⏳ until git ls-remote --tags origin confirms the tag on the
+              merge commit AND the release run publishes the image.
 
 ## Release sequence: 1.1.0-beta.2 (2026-09-17)
 Track: release sequence. User: "tag and release this as the next beta" for
