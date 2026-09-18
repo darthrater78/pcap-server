@@ -2556,6 +2556,63 @@ async function loadCaptures() {
     renderCaptures();
 }
 
+// --- uploading a capture ----------------------------------------------------
+//
+// The body is the file itself, not a multipart form: the route reads the raw
+// stream so the plaintext pcap is sealed as it arrives and never becomes a
+// temp file, and so its size cap can be counted off the stream rather than
+// trusted from a header. See backend/capture.py import_upload.
+//
+// fetch() with a File as the body sets neither a boundary nor a name, so the
+// filename rides in the query string -- where it is only ever a label, since
+// the stored file is named by a server-generated UUID.
+
+function onUploadFilePicked() {
+    const input = $("upload-file");
+    const picked = input && input.files && input.files.length === 1;
+    $("btn-upload-capture").disabled = !picked;
+    // Clears a message left over from a previous attempt, so a stale "failed"
+    // is not sitting beside a freshly chosen file.
+    $("upload-msg").textContent = picked ? input.files[0].name : "";
+    $("upload-msg").classList.remove("upload-msg-error");
+}
+
+async function onUploadCaptureClick() {
+    const input = $("upload-file");
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    const button = $("btn-upload-capture");
+    const msg = $("upload-msg");
+    button.disabled = true;
+    msg.classList.remove("upload-msg-error");
+    // No progress bar: fetch() cannot report upload progress without moving to
+    // XHR, and a bar that only ever shows 0% then 100% tells the user less than
+    // this does.
+    msg.textContent = `Uploading ${file.name} (${formatBytes(file.size)})\u2026`;
+    try {
+        const info = await api(
+            `/api/captures/upload?filename=${encodeURIComponent(file.name)}`,
+            {
+                method: "POST",
+                body: file,
+                // Overrides api()'s JSON default. The body is packet bytes.
+                headers: { "Content-Type": "application/octet-stream" },
+            },
+        );
+        input.value = "";
+        msg.textContent = `Uploaded ${Number(info.packet_count).toLocaleString()} packets.`;
+        await loadCaptures();
+    } catch (e) {
+        msg.textContent = `Upload failed: ${e.message}`;
+        msg.classList.add("upload-msg-error");
+    } finally {
+        // Re-read the input rather than assuming: a successful upload cleared
+        // it, so the button must go back to disabled, and a failed one left the
+        // file in place so it can be retried.
+        onUploadFilePicked();
+    }
+}
+
 // "512.0 KB" for half a megabyte made every size in the list read as KB, and
 // a multi-gigabyte capture as a seven-digit number of them.
 function formatBytes(n) {
@@ -2627,7 +2684,14 @@ function renderCaptures() {
             const status = escHtml(c.status);
             const id = escHtml(c.id);
             const actions = captureActions(c, id);
-            const origin = `${escHtml(srvName)} &mdash; ${escHtml(c.command || "")}`;
+            // An upload has no server and no command, so the line that would
+            // name them says what it actually is instead. Printing the usual
+            // "server -- command" with both halves empty would read as a
+            // capture whose origin had been lost.
+            const uploaded = c.origin === "upload";
+            const origin = uploaded
+                ? "Uploaded &mdash; not captured by this server"
+                : `${escHtml(srvName)} &mdash; ${escHtml(c.command || "")}`;
             // A running capture reports its own count, so 0 there means "none
             // yet" rather than "not counted" and is worth showing.
             const live = c.status === "running";
@@ -2637,10 +2701,16 @@ function renderCaptures() {
                 stats.push(captureStat("packets", `${Number(c.packet_count).toLocaleString()}${live ? " so far" : ""}`));
             }
             if (c.file_size) stats.push(captureStat("size", formatBytes(c.file_size)));
-            const took = captureDuration(c);
+            // "took" is how long tcpdump ran. On an upload the two timestamps
+            // are a few milliseconds of transfer, which measures this server's
+            // disk and says nothing about the capture -- so it is left off.
+            const took = uploaded ? "" : captureDuration(c);
             if (took) stats.push(captureStat("took", took));
             if (c.started_at) {
-                stats.push(captureStat("started", escHtml(formatStoredAt(c.started_at))));
+                stats.push(captureStat(
+                    uploaded ? "uploaded" : "started",
+                    escHtml(formatStoredAt(c.started_at)),
+                ));
             }
             // The full id is still one hover away, and selectable there; eight
             // characters are enough to tell two captures apart at a glance.
@@ -2654,6 +2724,7 @@ function renderCaptures() {
                     ${c.error ? `<div class="capture-error">${escHtml(c.error)}</div>` : ""}
                 </div>
                 <div class="capture-badges">
+                    ${uploaded ? '<span class="status-badge badge-upload" title="This pcap was uploaded. It is stored and encrypted exactly like a capture taken here, but this server did not record it -- so it has no interface, capture filter or command of its own.">upload</span>' : ""}
                     ${c.bpf_filter ? filterBadge(c.bpf_filter) : ""}
                     <span class="status-badge status-${status}">${status}</span>
                 </div>
@@ -2850,6 +2921,10 @@ function setViewerLabel(id) {
     // Where this capture came from, and what it was selecting for -- a filter
     // narrower than you remember reads exactly like a quiet network otherwise.
     const parts = [];
+    // Said first and said plainly. Every other item on this line is something
+    // this server observed; on an upload there is nothing here it observed, and
+    // an empty origin line would let the packets read as its own capture.
+    if (c.origin === "upload") parts.push("uploaded pcap");
     if (c.server_label) parts.push(escHtml(c.server_label));
     if (c.interface) parts.push(escHtml(c.interface));
     // Empty is not the same claim as "no filter": a capture taken before the
@@ -5633,6 +5708,8 @@ const SETTING_LABELS = {
     rate_limit_lockout_minutes: "Rate limit lockout (minutes)",
     rate_limit_packets_per_min: "Packet list requests per minute",
     rate_limit_captures_per_min: "Capture start requests per minute",
+    max_upload_mb: "Max uploaded capture size (MB)",
+    rate_limit_uploads_per_min: "Capture uploads per minute",
 };
 
 async function loadAdminSettings() {
@@ -6377,6 +6454,8 @@ function initStaticHandlers() {
     $("btn-add-username")?.addEventListener("click", addStoredUsername);
     $("btn-admin-upload-key")?.addEventListener("click", adminUploadKey);
     $("btn-admin-paste-key")?.addEventListener("click", adminPasteKey);
+    $("upload-file")?.addEventListener("change", onUploadFilePicked);
+    $("btn-upload-capture")?.addEventListener("click", onUploadCaptureClick);
 }
 
 // The containers themselves exist from page load even though their contents

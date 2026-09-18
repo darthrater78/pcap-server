@@ -1,5 +1,156 @@
 # Dev Skills gate state
 
+## IN PROGRESS: pcap upload + traffic-diagram fixes (2026-09-18)
+Track: work commit (branch only). No version bump, no tag, no artifact, nothing
+published. Flagged to the user; they can call it a release instead.
+Branch: claude/dev-skills-beta-workflow-cwzvx5, restarted from origin/main.
+Environment: remote container. Claude executes git; tag pushes go to the user.
+User asked for: upload a pcap to view it, sealed and encrypted exactly as a
+capture is and marked as an upload; DNS resolution fixed in the traffic
+diagram; more protocols shown there.
+
+🔢 VERSION    ⬜ not owed on a work commit. APP_VERSION stays 1.1.0-beta.2,
+              which is what ghcr actually holds.
+🔨 BUILD      ⬜ handoff n/a (remote container; no docker here). Full suite via
+              scripts/check.sh was RUNNING when the session was told to stop,
+              so its result is NOT recorded as a pass -- see the note below.
+              Not required on this track.
+🔒 SECURITY   ✅ 0 Critical, 0 High. One High found and fixed in this session's
+              own new code; one pre-existing twin raised and left open. Detail
+              below.
+📄 DOCS       ⬜ no CHANGELOG entry, correct for a work commit (dev.33/34
+              precedent). A release owes one.
+📦 RELEASE    ⬜ no PR opened.
+🚀 SHIP       ⬜ nothing tagged, nothing published.
+
+STOPPED MID-TASK on the user's instruction: "Stop the work for now, commit
+what's done and write a handoff to the repo." The features work and are
+verified by hand; the tests that would guard them are NOT written. Full state
+in .claude/upload-diagrams-handoff.md, which is the file to start from.
+
+SECURITY GATE, in full.
+
+Code: 0 Critical, 0 High.
+ * ONE HIGH, FOUND BY THIS GATE AND FIXED, in code written this session. A
+   locked vault presents cryptor=None, indistinguishable from "encryption is
+   disabled", so an upload arriving while the vault waited for its passphrase
+   was written IN THE CLEAR -- stored as <uuid>.pcap with no .enc suffix, on an
+   installation whose whole premise is encryption at rest. This is the
+   fail-open vault.py refuses to start up into, reached by another door.
+   Reproduced before fixing: the pcap magic was the first four bytes on disk.
+   Now refused fail-closed before anything is written, as a 503, because the
+   remedy is an admin unlocking and the same request then working.
+ * Path handling: the client-supplied filename NEVER becomes a path. The stored
+   file is named by a server-generated uuid4 via vault.stored_path(); the
+   filename is only a display label, allowlisted, and dropped rather than
+   rewritten if it does not match. Traversal is structurally impossible here
+   rather than filtered.
+ * Resource bound: the upload cap is counted off the request stream, so a
+   chunked body with no Content-Length cannot bypass it -- verified live (400
+   from the route, with nothing left on disk). This CLOSES the residual the
+   _body_limit comment used to state, for the one route where it mattered.
+   The middleware's Content-Length check remains as the cheap early refusal.
+   Own rate limiter as well, lower than capture starts, because unlike a
+   capture start nothing else bounds how fast one user can fill the volume.
+ * File mode: os.open(..., O_CREAT|O_EXCL, 0o600), so there is no window
+   between creation and a chmod, and no reuse of an existing path.
+ * Partial writes: sealed into <name>.partial and moved into place only after
+   the whole body has arrived and capinfos has read it back; removed on every
+   failure path. Verified no .partial survives any of the six refusals.
+ * XSS: the one new innerHTML attribute interpolation (the legend swatch's
+   fill/stroke/stroke-dasharray) takes values only from the module-level
+   PROTOCOL_SLOTS constant, never from server or user data. The protocol name
+   beside it is escHtml'd as before. Every new upload message is written with
+   textContent; the filename reaches the URL through encodeURIComponent.
+ * Transport: HTTPS enforced twice -- the read-only-over-HTTP middleware and an
+   explicit _require_secure_transport, kept deliberately rather than trimmed,
+   because this body is packet data.
+ * No new dependency, no new subprocess, no new shell, no eval, no pickle, no
+   new permission. capinfos runs through the existing vault source, as the
+   capture path already does.
+
+Dependencies: pip-audit 2.10.1 (installed into the throwaway .venv for this,
+which is gitignored). backend/requirements.txt and requirements-dev.txt both
+"No known vulnerabilities found". 0 Critical, 0 High. .github/dependabot.yml
+already exists, so nothing to recommend there.
+
+OPEN, RAISED, NOT FIXED -- the pre-existing twin of the High above. Nothing
+anywhere refuses a WRITE while vault.locked is true: the only `locked` checks
+in main.py are the status field and the unlock route's own guard. _collect
+passes `self._vault.cryptor if self._vault else None` to fetch_file, and
+_store_ssh_key does the same for keys, so a capture completing -- or an SSH key
+uploaded -- while the vault is locked looks like it lands unencrypted too. NOT
+verified, only reasoned from the code; only the upload path was actually
+reproduced. Left out because it is a vault-wide change across three write
+paths, wants its own tests, and the session was stopped. Verify it the same way
+before fixing. If it reproduces it is a High.
+
+Quality review of the changed code:
+ * FIXED: _write_sealed_upload nested 5 deep, over the 3-level limit. Split
+   into _check_upload_size, _header_looks_like_a_capture, _write_upload_chunk
+   and _check_upload_finished; now 33 non-comment lines at depth 3, and each
+   piece has a name saying what it decides.
+ * FIXED: import_upload ran long. The record construction moved to
+   _upload_record. Now 54 non-comment lines at depth 2 -- still longer than the
+   ~40 guideline, ACCEPTED rather than split further: what remains is three
+   named phases plus two try/except blocks whose only job is removing a partial
+   file, and separating those from what they clean up would make the failure
+   handling harder to follow, not easier.
+ * No N+1, no blocking I/O added on the event loop beyond what
+   SSHManager._download already does inline for the same work and for the
+   reason stated there, no unbounded cache, no listener without teardown, no
+   new index needed (the new column is never queried on).
+ * No new import, so no dependency-file drift and nothing owed in the
+   Dockerfile.
+
+Verified by hand, not by committed tests -- THIS IS THE GAP:
+ * upload sealed on disk, download byte-identical round trip, packets route
+   reads it, appears in the capture list
+ * refusals: not a pcap, empty, under four bytes, pcap header on garbage,
+   oversize declared (413), oversize chunked (400), plain HTTP (403),
+   rate limited (429), locked vault (503)
+ * DNS: both routes return host.example.com with resolution on, addresses with
+   it off, and every playback lookup resolves
+ * 5 new parser tests, confirmed to discriminate: 3 fail against the pre-fix
+   parser, and the agreement test fails against a deliberately half-fixed tree
+   (flags fixed, conversations not) -- which is the trap the fix walks into.
+
+Findings so far, all checked against real tshark 4.2.2 output in this
+container rather than inferred from the code:
+
+Finding 1. backend/packet_parser.py's _RESOLVE_ON passes `-N mnt`. Those
+letters are the complete set of resolutions tshark will perform, so leaving
+`d` out actively disables the one source that works on a stored pcap: names
+learned from the capture's own DNS answers. External reverse-DNS is asked for
+and, in a container behind no resolver, answers nothing. Proven on a two-frame
+pcap built from tests/packet_builders.py -- a DNS A answer for
+host.example.com plus a TCP frame to that address. Under `-N mnt` the
+destination column reads 10.0.0.9; under `-N mntd` it reads host.example.com.
+This affects the packet list too, not only the diagrams.
+
+Finding 2. get_conversations reads `-e ip.src` / `-e ip.dst`, which never
+resolve, whatever the flags say. Its docstring claims otherwise. The resolved
+values live in the separate `ip.src_host` / `ip.dst_host` fields, confirmed on
+the same pcap: `ip.dst` gives 10.0.0.9 while `ip.dst_host` gives
+host.example.com, matching _ws.col.Destination exactly.
+
+Finding 3, corrected after measuring rather than reasoning. The first write-up
+of this said playback already drew nothing. It does not. Because finding 1
+means NOTHING resolved anywhere, both routes returned addresses and agreed with
+each other, so playback worked and simply never showed a name -- which is the
+symptom as reported, no more. The mismatch is a trap the fix walks into: fixing
+the flags alone gives /packets names while /conversations keeps addresses, and
+then drawTopologyFrame's `byId.get(p.source)` misses on every packet, hits
+`if (!a || !b) continue`, and the animation goes blank. So the two fixes are
+one change and neither ships without the other.
+Verified on the two-frame pcap through the real routes: with both fixes and
+resolution on, /conversations returns host.example.com and /packets returns
+host.example.com, and every playback lookup resolves.
+
+Finding 4. The diagram palette caps at three protocols, in style.css and in
+diagrams.js rankProtocols. Everything past the third shares one grey "Other"
+swatch. This is the "more protocols" ask.
+
 ## SHIPPED: v1.1.0-beta.2 (2026-09-18) -- the interrupted ship, finished
 
 🚀 SHIP ✅ CLOSED AND SHIPPED. All four post-ship checks:

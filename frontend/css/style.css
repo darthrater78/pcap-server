@@ -60,9 +60,16 @@
        band). This is the dataviz skill's validated default palette's first
        three slots -- the only ones that clear its stricter all-pairs gate,
        which a node-link diagram and a swimlane need since any two colors can
-       end up adjacent, unlike a stacked bar's fixed order. Past three
-       protocols, --diagram-other (an existing neutral, not a new hue) takes
-       over -- see diagrams.js rankProtocols(). */
+       end up adjacent, unlike a stacked bar's fixed order.
+
+       STILL THREE HUES, now carrying eight protocol slots. The diagrams got a
+       second, non-color channel (mark shape, and stroke dash where a line has
+       no shape) so identity is hue x shape, not hue alone -- eight hues cannot
+       be had here, and four is the measured ceiling. The reasoning, the
+       validator output and the slot table are in diagrams.js PROTOCOL_SLOTS;
+       adding a fourth variable here would not buy a fourth protocol.
+       --diagram-other (an existing neutral, not a new hue) still takes over
+       past the cap. */
     --diagram-cat-1: #3987e5;
     --diagram-cat-2: #d95926;
     --diagram-cat-3: #199e70;
@@ -932,6 +939,56 @@ body {
     border-width: 5px 0 5px 8px;
     border-color: transparent transparent transparent currentColor;
 }
+
+/* The upload row. Same card frame as .capture-card so the two read as two
+   ways of doing the same thing, but with no body -- there is nothing to
+   configure about an upload, so it is a head and one row. */
+.upload-card {
+    flex-shrink: 0;
+    margin: 0 16px 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+
+.upload-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    padding: 14px 16px 0;
+}
+.upload-head .hint { font-size: 0.8125rem; }
+.upload-head h2 {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.upload-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 12px 16px 16px;
+}
+/* min-width:0 so a long filename in the picker shrinks rather than pushing the
+   button off the row. */
+.upload-row input[type="file"] {
+    flex: 1 1 14rem;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+}
+/* .btn-secondary is not width:100%, but the file input's flex-basis can still
+   leave this squeezed on a narrow panel. */
+.upload-row .btn { white-space: nowrap; flex: none; }
+.upload-row .hint { flex: 1 1 100%; }
+/* A failed upload's message is the one thing on this row that must not be
+   read as quiet supplementary text. */
+.upload-msg-error { color: var(--danger); }
 
 .captures-head {
     display: flex;
@@ -3016,6 +3073,14 @@ body {
     font-size: 0.625rem;
 }
 
+/* An uploaded capture. The accent, not a status color: it is a statement about
+   where the pcap came from, not about whether anything went right or wrong,
+   and green/amber/red here would read as the latter. */
+.badge-upload {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+}
+
 /* --- sanitize dialog --- */
 
 .sanitize-dialog {
@@ -3305,11 +3370,15 @@ body {
 
 .diagram-legend-item { display: flex; align-items: center; gap: 5px; }
 
+/* Now an <svg> that draws the slot's real mark -- its dash on a line with its
+   shape on top -- rather than a colored dot. The fill and stroke come from the
+   element's own attributes (diagrams.js slotSwatch), so this rule only has to
+   size it and keep it from being squeezed by the flex row. */
 .diagram-legend-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
+    width: 18px;
+    height: 14px;
     flex: none;
+    overflow: visible;
 }
 
 .diagram-playback {

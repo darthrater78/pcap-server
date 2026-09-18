@@ -370,6 +370,23 @@ class CaptureStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class CaptureOrigin(str, enum.Enum):
+    """Where the pcap in a capture record came from.
+
+    Not cosmetic. Everything on a CAPTURE record is something this server
+    watched happen: the interface it read, the filter it ran, the host it ran
+    on, the command, the timings. On an UPLOAD none of that is known -- the
+    file was recorded somewhere else, by something else, and the only honest
+    thing to say about its provenance is the name of the file someone handed
+    over. Marking which kind a record is keeps the viewer from presenting an
+    uploaded pcap's blank interface and empty filter as though this server had
+    captured it unfiltered on an unnamed link.
+    """
+
+    CAPTURE = "capture"
+    UPLOAD = "upload"
+
+
 # A capture is always written with `tcpdump -w`, which makes tcpdump a writer
 # rather than a printer. Everything tcpdump does with -v/-q/-A/-X/-e/-t/-n is
 # formatting for text it never emits under -w, so those flags cannot change one
@@ -662,7 +679,10 @@ class CaptureInfo(BaseModel):
     # Operator-chosen label. Empty until someone renames the capture, at which
     # point it replaces the bare UUID everywhere the capture is listed.
     name: str = ""
-    server_id: str
+    # Empty on an upload, which ran against no server at all. Kept required in
+    # spirit -- every capture this server takes sets it -- but defaulted so an
+    # upload does not have to invent an id for a machine that was never involved.
+    server_id: str = ""
     # Denormalised on purpose: a capture must still say where it came from after
     # the server it ran against has been deleted.
     server_label: str = ""
@@ -694,6 +714,11 @@ class CaptureInfo(BaseModel):
     # be asked -- the viewer then shows the bare index.
     interface_names: dict[int, str] = Field(default_factory=dict)
     status: CaptureStatus
+    # Whether this server recorded the pcap or someone uploaded it. Defaults to
+    # CAPTURE, which is what every record written before uploads existed is --
+    # the migration in database.py backfills the column with the same value, so
+    # there is no third "unknown" state to handle anywhere.
+    origin: CaptureOrigin = CaptureOrigin.CAPTURE
     started_at: datetime | None = None
     stopped_at: datetime | None = None
     command: str = ""

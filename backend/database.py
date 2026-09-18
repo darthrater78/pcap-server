@@ -136,7 +136,8 @@ class Database:
                 server_label TEXT NOT NULL DEFAULT '',
                 interface TEXT NOT NULL DEFAULT '',
                 bpf_filter TEXT NOT NULL DEFAULT '',
-                interface_names TEXT NOT NULL DEFAULT ''
+                interface_names TEXT NOT NULL DEFAULT '',
+                origin TEXT NOT NULL DEFAULT 'capture'
             );
 
             CREATE TABLE IF NOT EXISTS known_usernames (
@@ -314,6 +315,12 @@ class Database:
         if "interface_names" not in capture_columns:
             # '' reads back as no table, so older captures show bare indexes.
             conn.execute("ALTER TABLE captures ADD COLUMN interface_names TEXT NOT NULL DEFAULT ''")
+        if "origin" not in capture_columns:
+            # 'capture' rather than '': every row that predates uploads IS a
+            # capture this server took, so the backfill is a fact, not a guess.
+            # That is why this column gets a real default while bpf_filter got
+            # an empty one -- there is nothing unknown to represent here.
+            conn.execute("ALTER TABLE captures ADD COLUMN origin TEXT NOT NULL DEFAULT 'capture'")
         self._fold_saved_servers(conn)
         conn.commit()
 
@@ -716,10 +723,10 @@ class Database:
             """INSERT OR REPLACE INTO captures
                (id, name, user_id, server_id, server_label, status, started_at, stopped_at, command,
                 remote_path, local_path, packet_count, file_size, error, interface,
-                bpf_filter, interface_names)
+                bpf_filter, interface_names, origin)
                VALUES (:id, :name, :user_id, :server_id, :server_label, :status, :started_at, :stopped_at, :command,
                        :remote_path, :local_path, :packet_count, :file_size, :error, :interface,
-                       :bpf_filter, :interface_names)""",
+                       :bpf_filter, :interface_names, :origin)""",
             row,
         )
         self._conn().commit()
@@ -1013,6 +1020,15 @@ class Database:
         "rate_limit_lockout_minutes": "15",
         "rate_limit_packets_per_min": "30",
         "rate_limit_captures_per_min": "10",
+        # Ceiling on one uploaded pcap, in MB. Sized for a capture someone
+        # actually wants to read in a browser rather than for the largest file
+        # the disk would hold: the viewer's own diagram caps refuse above 5,000
+        # packets, and a 512 MB pcap is far past anything the packet list is
+        # pleasant on. Raise it if you have a big capture to triage; the cost
+        # is disk on the captures volume, counted off the request as it
+        # arrives rather than trusted from a header.
+        "max_upload_mb": "512",
+        "rate_limit_uploads_per_min": "6",
     }
 
     def get_setting(self, key: str) -> str:

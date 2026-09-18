@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
@@ -9,10 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from backend.crypto import CHUNK_SIZE, CryptoError
 from backend.models import (
     ANY_INTERFACE,
     assert_no_forbidden_flags,
     CaptureInfo,
+    CaptureOrigin,
     CaptureRequest,
     CaptureStatus,
     ServerInfo,
@@ -85,6 +88,10 @@ class _LiveCount:
             self._persist(self._info)
 
 
+class UploadRejected(Exception):
+    """An uploaded file is not something this server will store as a capture."""
+
+
 class CaptureLimitExceeded(Exception):
     """Raised when starting a capture would exceed max_concurrent_captures."""
 
@@ -110,6 +117,7 @@ def server_label(server: ServerInfo) -> str:
 def _row(info: CaptureInfo) -> dict:
     row = info.model_dump()
     row["status"] = info.status.value
+    row["origin"] = info.origin.value
     for key in ("started_at", "stopped_at"):
         row[key] = row[key].isoformat() if row[key] else None
     return row
@@ -357,6 +365,253 @@ class CaptureManager:
         self._tasks[capture_id] = task
 
         return info
+
+    # --- uploads ---------------------------------------------------------
+    #
+    # A pcap recorded elsewhere, stored under exactly the protections a capture
+    # taken here gets: sealed with the same vault key, named by the same
+    # stored_path() rule, opened by the same source_for() reader, listed,
+    # viewed, filtered, sanitized, downloaded and deleted by the same code. The
+    # only thing that differs is the record's origin field, which says this
+    # server did not watch it happen.
+    #
+    # Read off the raw request body, NOT a multipart form. That is the whole
+    # design, for two reasons:
+    #
+    #   1. Starlette spools an UploadFile's bytes to a temp file as it parses
+    #      the multipart, which for a pcap would mean writing the plaintext
+    #      capture to disk unencrypted and only sealing it afterwards. This
+    #      repo has held the opposite invariant since captures were first
+    #      encrypted -- a plaintext pcap never becomes a file (see
+    #      SSHManager._download, which seals over SFTP for the same reason) --
+    #      and an upload route is no place to break it.
+    #   2. A multipart file part has no size cap at all before it is parsed, so
+    #      the existing Content-Length middleware is the only thing in front of
+    #      it, and a chunked request carries no Content-Length. Counting bytes
+    #      off the stream here closes that for this route by construction
+    #      instead of trusting a header.
+
+    # pcap (both byte orders, microsecond and nanosecond) and pcapng's Section
+    # Header Block. Checked because tshark will be pointed at whatever is
+    # stored, and a file that is not a capture at all should be refused while
+    # it is still four bytes rather than after a subprocess has chewed on it.
+    # NOT a substitute for the capinfos check below, which is what actually
+    # establishes that the file is readable -- this only rejects the obvious.
+    _PCAP_MAGICS = (
+        b"\xa1\xb2\xc3\xd4",  # pcap, microseconds, big-endian
+        b"\xd4\xc3\xb2\xa1",  # pcap, microseconds, little-endian
+        b"\xa1\xb2\x3c\x4d",  # pcap, nanoseconds, big-endian
+        b"\x4d\x3c\xb2\xa1",  # pcap, nanoseconds, little-endian
+        b"\x0a\x0d\x0d\x0a",  # pcapng Section Header Block
+    )
+
+    async def import_upload(
+        self,
+        user_id: str,
+        filename: str,
+        chunks,
+        max_bytes: int,
+    ) -> CaptureInfo:
+        """Seal an uploaded pcap into the captures volume and record it.
+
+        `chunks` is an async iterator of raw body bytes. Nothing is trusted
+        about its length: the cap is enforced as the bytes arrive, and the
+        moment it is passed the partial file is removed and the request
+        refused, so a client that lies about Content-Length -- or sends no
+        Content-Length at all -- cannot fill the volume.
+        """
+        # FAIL CLOSED BEFORE ANYTHING IS WRITTEN. A locked vault presents
+        # cryptor=None, which is indistinguishable from "encryption is
+        # disabled" -- so without this check an upload arriving while the vault
+        # waits for its passphrase would be written in the clear, under a name
+        # with no .enc suffix, on an installation whose entire premise is that
+        # captures are encrypted at rest. That is the fail-open vault.py
+        # refuses to start up into, arriving by a different door.
+        #
+        # Reproduced before it was fixed: the file landed as <uuid>.pcap with
+        # the pcap magic as its first four bytes. 503 rather than 400, via the
+        # route's handler, because the remedy is an admin unlocking the vault
+        # and then this exact request working.
+        if self._vault and self._vault.enabled and self._vault.locked:
+            raise CryptoError(
+                "the vault is locked, so an uploaded capture cannot be encrypted -- "
+                "unlock encryption first rather than storing this pcap in the clear"
+            )
+
+        capture_id = str(uuid.uuid4())
+        target = (
+            self._vault.stored_path(capture_id) if self._vault
+            else self._captures_dir / f"{capture_id}.pcap"
+        )
+        # Written beside the real name and moved into place only once the whole
+        # body has arrived and sealed cleanly. A half-written upload is never a
+        # file the vault's startup scan or the capture list can find -- the same
+        # reason CaptureVault.migrate_plaintext works this way.
+        partial = target.with_name(target.name + ".partial")
+        started = datetime.now(timezone.utc)
+
+        try:
+            total = await self._write_sealed_upload(partial, chunks, max_bytes)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+
+        try:
+            partial.replace(target)
+            # capinfos is the real gate: it is the same tool the capture path
+            # counts packets with, reading through the same vault source, so a
+            # file that survives it is one the viewer can actually open. A pcap
+            # header on 40 bytes of noise gets this far and fails here.
+            try:
+                packet_count = await get_packet_count(self._pcap_source(target))
+            except Exception as exc:
+                raise UploadRejected(
+                    "this file has a capture file header but could not be read as one "
+                    f"({str(exc)[:200]})"
+                ) from exc
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+            raise
+
+        info = self._upload_record(
+            capture_id, user_id, filename, target, started, packet_count,
+        )
+        self._captures[capture_id] = info
+        self._persist(info)
+        logger.info(
+            "stored uploaded capture %s (%d bytes on the wire, %d packets) for user %s",
+            capture_id, total, packet_count, user_id,
+        )
+        return info
+
+    @staticmethod
+    def _upload_record(
+        capture_id: str,
+        user_id: str,
+        filename: str,
+        target: Path,
+        started: datetime,
+        packet_count: int,
+    ) -> CaptureInfo:
+        """The record for a stored upload, and what it deliberately leaves empty."""
+        return CaptureInfo(
+            id=capture_id,
+            # The filename is the only thing known about where this came from,
+            # so it becomes the label rather than leaving a list of UUIDs.
+            # Renaming afterwards works exactly as it does for a capture.
+            name=filename,
+            user_id=user_id,
+            origin=CaptureOrigin.UPLOAD,
+            # Deliberately blank, all of them. There was no server, no
+            # interface, no command and no capture filter -- and writing a
+            # plausible-looking value into any of them would be this record
+            # claiming to know something about the file that it does not.
+            server_id="",
+            server_label="",
+            interface="",
+            bpf_filter="",
+            command="",
+            remote_path="",
+            status=CaptureStatus.COMPLETED,
+            # Both timestamps are when the upload happened, not when the
+            # traffic was captured -- which is inside the file and is not this
+            # record's to report. The viewer's own relative timestamps come
+            # from the pcap itself, so nothing here misdates a packet.
+            started_at=started,
+            stopped_at=datetime.now(timezone.utc),
+            local_path=str(target),
+            file_size=target.stat().st_size,
+            packet_count=packet_count,
+        )
+
+    async def _write_sealed_upload(self, partial: Path, chunks, max_bytes: int) -> int:
+        """Seal the body into `partial` as it arrives. Returns plaintext bytes.
+
+        Sealed and written inline, chunk by chunk, exactly as
+        SSHManager._download does for a capture arriving over SFTP -- the same
+        shape of work, and the reason given there holds here: AES-GCM over a
+        64 KiB chunk is microseconds with AES-NI, so it does not meaningfully
+        occupy the event loop, and the writes interleave with awaits on the
+        socket anyway.
+        """
+        cryptor = self._vault.cryptor if self._vault else None
+        sealer = cryptor.sealer() if cryptor else None
+        total = 0
+        head = b""
+        checked = False
+        # 0600 from the moment it exists, not chmod'd afterwards: between
+        # creation and the chmod there is a window where the file is readable
+        # by anything sharing the volume, and a capture is exactly the file
+        # that must not have one.
+        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with open(fd, "wb") as out:
+            if sealer:
+                out.write(sealer.header())
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                total += len(chunk)
+                self._check_upload_size(total, max_bytes)
+                if not checked:
+                    head += chunk
+                    checked = self._header_looks_like_a_capture(head)
+                self._write_upload_chunk(out, sealer, chunk)
+            self._check_upload_finished(total, checked)
+            if sealer:
+                out.write(sealer.finish())
+            out.flush()
+            os.fsync(out.fileno())
+        return total
+
+    @staticmethod
+    def _check_upload_size(total: int, max_bytes: int) -> None:
+        if total > max_bytes:
+            raise UploadRejected(
+                f"upload is larger than the {max_bytes // (1024 * 1024)} MB limit "
+                "(see max_upload_mb in admin settings)"
+            )
+
+    @classmethod
+    def _header_looks_like_a_capture(cls, head: bytes) -> bool:
+        """True once these opening bytes are a known capture header.
+
+        False means "not yet, keep accumulating" -- the magic can straddle a
+        chunk boundary, so the decision waits for four bytes rather than
+        reading past the end of a one-byte first chunk. A file that ends while
+        this is still False is caught by _check_upload_finished.
+        """
+        if len(head) < 4:
+            return False
+        if not head.startswith(cls._PCAP_MAGICS):
+            raise UploadRejected(
+                "this is not a pcap or pcapng file -- it does not start with a "
+                "capture file header. Export from Wireshark or tcpdump as "
+                ".pcap or .pcapng."
+            )
+        return True
+
+    @staticmethod
+    def _write_upload_chunk(out, sealer, chunk: bytes) -> None:
+        """One body read, split to the crypto module's chunk size.
+
+        Cryptor.open_stream refuses any chunk declaring more than CHUNK_SIZE
+        bytes, so a sealed chunk built from a larger body read would write a
+        file that nothing -- including this server -- could ever open.
+        """
+        for i in range(0, len(chunk), CHUNK_SIZE):
+            part = chunk[i:i + CHUNK_SIZE]
+            out.write(sealer.seal(part) if sealer else part)
+
+    @staticmethod
+    def _check_upload_finished(total: int, checked: bool) -> None:
+        """The two things only the end of the body can tell us."""
+        if not total:
+            raise UploadRejected("no file was uploaded (the request body was empty)")
+        if not checked:
+            raise UploadRejected(
+                "this file is too short to be a capture -- it is under four bytes"
+            )
 
     async def stop(self, capture_id: str) -> CaptureInfo:
         info = self._captures.get(capture_id)
