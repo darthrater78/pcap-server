@@ -1,5 +1,41 @@
 # Dev Skills gate state
 
+## SHIPPED: v1.1.0-beta.4 (2026-09-18) + README bump now that it's live
+Track: release-track docs fix, on docs/beta4-live (from origin/main efdfc08).
+Model: Sonnet 5. Shell: Linux bash.
+
+🚀 SHIP CLOSED for v1.1.0-beta.4. All four post-ship checks:
+ * tag v1.1.0-beta.4 -> efdfc08 on the remote (main tip, PR #19 + PR #20 both
+   merged), confirmed by the user running the presented tag block.
+ * PR #19 and PR #20 both MERGED. Merge commit 87754cb (PR #19) had a Check
+   failure on first run -- tests/browser/test_capture_ui.py::test_closing_a_
+   background_tab_leaves_the_open_one_alone, a Playwright click timeout,
+   unrelated to this diff (docs/version-only) and not reproduced in the local
+   full-suite run moments earlier (1672/1672). Reran via `gh run rerun
+   --failed`; run 35353175653 succeeded on retry. efdfc08 (PR #20, README-only)
+   got no Check run by design (README.md is in check.yml's paths-ignore) --
+   the ancestor-fallback case release.yml's gate exists for, exercised live
+   for the first time.
+ * Release run 35355487897 success (Release workflow, triggered by the tag).
+ * GitHub release "v1.1.0-beta.4 (Pre-release)", prerelease: true,
+   2026-09-18T14:20:57Z.
+ * Image ghcr :1.1.0-beta.4 -> sha256:bc2a1756458ae208cb9ec50871559b147ce73842
+   eefbe016dae057dff26c04c9 (a real digest), pulled and verified locally, then
+   removed.
+
+Now closing the loop the process note itself asks for: the image is
+confirmed live, so README's beta line moves from 1.1.0-beta.3 to
+1.1.0-beta.4, in its own commit, per the note added in PR #20.
+
+🔢 VERSION    ➖ N/A -- README pointer only, not a version declaration.
+🔨 BUILD      ➖ N/A -- README.md only.
+🔒 SECURITY   ➖ N/A -- no code.
+📄 DOCS       ✅ this commit IS the doc update -- bumps the beta line now that
+              `docker pull ghcr.io/darthrater78/pcap-server:1.1.0-beta.4`
+              is verified working (see SHIP above).
+📦 RELEASE    ✅ PR #21 open: docs/beta4-live -> main.
+🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
+
 ## Fix: README beta line reverted to the deployed tag (2026-09-18, local)
 Track: release-track fix, on fix/beta-readme-premature-tag (from origin/main
 87754cb, the just-merged 1.1.0-beta.4 PR). Model: Sonnet 5. Shell: Linux bash.
