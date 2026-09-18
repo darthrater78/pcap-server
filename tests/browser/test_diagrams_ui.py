@@ -266,3 +266,94 @@ async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):
     assert "5,001" in await app_page.inner_text("#sequence-cap-warning") \
         or "5001" in await app_page.inner_text("#sequence-cap-warning")
     assert await app_page.is_hidden("#sequence-body")
+
+
+async def test_the_legend_holds_eight_protocols_each_a_distinct_mark(app_page):
+    """Eight slots from three validated hues times three shapes: the ninth
+    protocol and beyond fold into "Other", and no two named entries share
+    both a hue and a shape -- that pairing is what identifies a protocol."""
+    protocols = ["TCP", "UDP", "DNS", "TLS", "HTTP", "ICMP", "ARP", "NTP", "SNMP", "SSH"]
+    packets, n = [], 0
+    # Descending counts, so the ranking (and so the cut at eight) is fixed.
+    for rank, proto in enumerate(protocols):
+        for _ in range(len(protocols) - rank):
+            n += 1
+            packets.append(_packet(n, "10.0.0.1", "10.0.0.2", proto))
+    await _stub_api(app_page, "/packets?", {"packets": packets, "total": len(packets)})
+    await _open_viewer(app_page)
+
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-dialog[open]")
+
+    items = app_page.locator("#sequence-legend .diagram-legend-item")
+    assert await items.count() == 9
+    labels = [t.split(" (")[0] for t in await items.all_inner_texts()]
+    assert labels == protocols[:8] + ["Other"]
+    assert "(3)" in (await items.nth(8).inner_text()), "SNMP (2) + SSH (1) fold into Other"
+
+    marks = await app_page.eval_on_selector_all(
+        "#sequence-legend .diagram-legend-item svg",
+        """els => els.slice(0, 8).map(svg => [
+            svg.getAttribute('fill'),
+            svg.lastElementChild.tagName.toLowerCase() === 'path' ? 'diamond'
+                : svg.lastElementChild.tagName.toLowerCase(),
+        ].join('|'))""",
+    )
+    assert len(set(marks)) == 8, marks
+
+
+async def test_a_long_lane_label_is_shortened_to_fit_and_keeps_its_full_name(app_page):
+    """The leftmost lane sits 80px in, so a resolved hostname centred on it ran
+    off the diagram's left edge. It is cut in the middle, and the full name is
+    one hover away in its <title>."""
+    long_name = "SHIELD-BASEMENT.a-rather-long-internal-domain.example.net"
+    payload = {
+        "packets": [_packet(1, long_name, "10.0.0.2", "DNS"), _packet(2, "10.0.0.2", long_name, "DNS")],
+        "total": 2,
+    }
+    await _stub_api(app_page, "/packets?", payload)
+    await _open_viewer(app_page)
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-dialog[open]")
+
+    label = app_page.locator("#sequence-svg .seq-lane-label").first
+    text = await label.evaluate("el => el.firstChild.textContent")
+    assert "…" in text and text.startswith("SHIELD") and text.endswith("net")
+    assert await label.locator("title").text_content() == long_name
+
+    inside = await app_page.evaluate("""() => {
+        const svg = document.getElementById('sequence-svg').getBoundingClientRect();
+        return [...document.querySelectorAll('#sequence-svg .seq-lane-label')].every(t => {
+            const b = t.getBoundingClientRect();
+            return b.left >= svg.left - 0.5 && b.right <= svg.right + 0.5;
+        });
+    }""")
+    assert inside
+
+
+async def test_a_short_lane_label_is_left_whole(app_page):
+    payload = {"packets": [_packet(1, "10.0.0.1", "10.0.0.2", "TCP")], "total": 1}
+    await _stub_api(app_page, "/packets?", payload)
+    await _open_viewer(app_page)
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-dialog[open]")
+    labels = await app_page.eval_on_selector_all(
+        "#sequence-svg .seq-lane-label", "els => els.map(e => e.textContent)"
+    )
+    assert labels == ["10.0.0.1", "10.0.0.2"]
+    assert await app_page.locator("#sequence-svg .seq-lane-label title").count() == 0
+
+
+async def test_closed_dialogs_are_not_laid_out(app_page):
+    """.stats-dialog's display:flex used to outrank the browser's hiding rule,
+    so every closed dialog was rendered below the app shell -- widening a
+    phone's page and leaving its buttons reachable by Tab."""
+    await app_page.set_viewport_size({"width": 390, "height": 844})
+    shown = await app_page.eval_on_selector_all(
+        "dialog:not([open])", "els => els.filter(d => getComputedStyle(d).display !== 'none').map(d => d.id)"
+    )
+    assert shown == []
+    widths = await app_page.evaluate(
+        "() => [document.scrollingElement.scrollWidth, document.documentElement.clientWidth]"
+    )
+    assert widths[0] <= widths[1], f"page is {widths[0]}px wide in a {widths[1]}px viewport"

@@ -2567,13 +2567,41 @@ async function loadCaptures() {
 // filename rides in the query string -- where it is only ever a label, since
 // the stored file is named by a server-generated UUID.
 
-function onUploadFilePicked() {
+function setUploadFlyout(open) {
+    const flyout = $("upload-flyout");
+    if (!flyout || flyout.hidden === !open) return;
+    flyout.hidden = !open;
+    $("btn-upload-toggle").setAttribute("aria-expanded", String(open));
+    if (open) $("upload-file").focus();
+}
+
+// Not modal, so it closes the way a menu does: Escape, or a click anywhere
+// outside it. Left open after an upload so its result can be read; the new
+// row in the list below is visible either way.
+function initUploadFlyout() {
+    $("btn-upload-toggle")?.addEventListener("click", () => setUploadFlyout($("upload-flyout").hidden));
+    document.addEventListener("click", (ev) => {
+        if (!ev.target.closest(".upload-flyout-anchor")) setUploadFlyout(false);
+    });
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape" || $("upload-flyout")?.hidden !== false) return;
+        setUploadFlyout(false);
+        $("btn-upload-toggle").focus();
+    });
+}
+
+function syncUploadButton() {
     const input = $("upload-file");
-    const picked = input && input.files && input.files.length === 1;
+    const picked = !!(input && input.files && input.files.length === 1);
     $("btn-upload-capture").disabled = !picked;
+    return picked ? input.files[0] : null;
+}
+
+function onUploadFilePicked() {
+    const file = syncUploadButton();
     // Clears a message left over from a previous attempt, so a stale "failed"
     // is not sitting beside a freshly chosen file.
-    $("upload-msg").textContent = picked ? input.files[0].name : "";
+    $("upload-msg").textContent = file ? file.name : "";
     $("upload-msg").classList.remove("upload-msg-error");
 }
 
@@ -2608,8 +2636,9 @@ async function onUploadCaptureClick() {
     } finally {
         // Re-read the input rather than assuming: a successful upload cleared
         // it, so the button must go back to disabled, and a failed one left the
-        // file in place so it can be retried.
-        onUploadFilePicked();
+        // file in place so it can be retried. The button only -- the message
+        // set above is the outcome, and must not be reset to the filename.
+        syncUploadButton();
     }
 }
 
@@ -6456,6 +6485,7 @@ function initStaticHandlers() {
     $("btn-admin-paste-key")?.addEventListener("click", adminPasteKey);
     $("upload-file")?.addEventListener("change", onUploadFilePicked);
     $("btn-upload-capture")?.addEventListener("click", onUploadCaptureClick);
+    initUploadFlyout();
 }
 
 // The containers themselves exist from page load even though their contents

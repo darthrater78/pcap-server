@@ -1039,3 +1039,115 @@ async def test_the_built_in_library_has_no_delete_button(app_page):
         '.filter-group:not(.filter-group-own) [data-action="delete-custom-filter"]'
     ).count()
     assert owned == 0
+
+
+# --- uploading a pcap ----------------------------------------------------------
+#
+# Driven end to end, not stubbed: the browser suite's server is on loopback,
+# which the app treats as secure transport, so the real route seals and stores
+# the file and the list reads it back.
+
+
+def _a_pcap() -> bytes:
+    from tests.packet_builders import ethernet, ip4, ipv4, mac, pcap, udp
+
+    frames = [
+        ethernet(mac("00:00:00:00:00:02"), mac("00:00:00:00:00:01"), 0x0800,
+                 ipv4(ip4("10.0.0.1"), ip4("10.0.0.2"), 17,
+                      udp(ip4("10.0.0.1"), ip4("10.0.0.2"), 5000 + i, 53, b"x")))
+        for i in range(3)
+    ]
+    return pcap(frames)
+
+
+async def _open_upload(page):
+    await _capture_tab(page)
+    await page.click("#btn-upload-toggle")
+    await page.wait_for_selector("#upload-flyout:not([hidden])")
+
+
+@pytest.fixture()
+def no_captures(api_client):
+    def clear():
+        for c in api_client.get("/api/captures").json():
+            api_client.delete(f"/api/captures/{c['id']}")
+    clear()
+    yield
+    clear()
+
+
+async def test_upload_is_disabled_until_a_file_is_chosen(app_page, no_captures):
+    await _open_upload(app_page)
+    assert await app_page.is_disabled("#btn-upload-capture")
+    await app_page.set_input_files("#upload-file", files=[
+        {"name": "trace.pcap", "mimeType": "application/vnd.tcpdump.pcap", "buffer": _a_pcap()},
+    ])
+    assert await app_page.is_enabled("#btn-upload-capture")
+    assert (await app_page.inner_text("#upload-msg")).strip() == "trace.pcap"
+
+
+async def test_an_uploaded_pcap_lands_in_the_list_marked_as_an_upload(app_page, no_captures):
+    await _open_upload(app_page)
+    await app_page.set_input_files("#upload-file", files=[
+        {"name": "office-trace.pcap", "mimeType": "application/vnd.tcpdump.pcap", "buffer": _a_pcap()},
+    ])
+    await app_page.click("#btn-upload-capture")
+    await app_page.wait_for_function(
+        "() => document.getElementById('upload-msg').textContent.startsWith('Uploaded')"
+    )
+    assert "3 packets" in await app_page.inner_text("#upload-msg")
+
+    item = app_page.locator(".capture-item", has_text="office-trace.pcap")
+    await item.wait_for()
+    assert await item.locator(".badge-upload").count() == 1
+    # Cleared after success, so the button is back to waiting for a file --
+    # and the fly-out stays open so the result above can be read.
+    assert await app_page.is_disabled("#btn-upload-capture")
+    assert await app_page.is_visible("#upload-flyout")
+
+
+async def test_a_file_that_is_not_a_pcap_is_refused_with_the_servers_reason(app_page, no_captures):
+    await _open_upload(app_page)
+    await app_page.set_input_files("#upload-file", files=[
+        {"name": "notes.pcap", "mimeType": "application/octet-stream", "buffer": b"just some text, not a capture"},
+    ])
+    await app_page.click("#btn-upload-capture")
+    await app_page.wait_for_selector("#upload-msg.upload-msg-error")
+    msg = await app_page.inner_text("#upload-msg")
+    assert "Upload failed" in msg and "not a pcap or pcapng" in msg
+    # The file stays chosen so it can be retried, which leaves the button live.
+    assert await app_page.is_enabled("#btn-upload-capture")
+    assert await app_page.locator(".capture-item").count() == 0
+
+
+async def test_the_upload_flyout_is_closed_until_asked_for(app_page):
+    """The Capture tab is a full form already; the upload is the occasional
+    case, so it stays behind its button."""
+    await _capture_tab(app_page)
+    assert await app_page.is_hidden("#upload-flyout")
+    assert await app_page.get_attribute("#btn-upload-toggle", "aria-expanded") == "false"
+    await app_page.click("#btn-upload-toggle")
+    assert await app_page.is_visible("#upload-flyout")
+    assert await app_page.get_attribute("#btn-upload-toggle", "aria-expanded") == "true"
+    assert await app_page.evaluate("() => document.activeElement.id") == "upload-file"
+
+
+async def test_escape_closes_the_upload_flyout_and_returns_focus(app_page):
+    await _open_upload(app_page)
+    await app_page.keyboard.press("Escape")
+    assert await app_page.is_hidden("#upload-flyout")
+    assert await app_page.evaluate("() => document.activeElement.id") == "btn-upload-toggle"
+
+
+async def test_a_click_outside_closes_the_upload_flyout_and_inside_does_not(app_page):
+    await _open_upload(app_page)
+    await app_page.click("#upload-flyout h2")
+    assert await app_page.is_visible("#upload-flyout")
+    await app_page.click(".captures-head h2")
+    assert await app_page.is_hidden("#upload-flyout")
+
+
+async def test_the_toggle_closes_an_open_flyout(app_page):
+    await _open_upload(app_page)
+    await app_page.click("#btn-upload-toggle")
+    assert await app_page.is_hidden("#upload-flyout")

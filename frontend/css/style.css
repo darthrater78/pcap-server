@@ -128,6 +128,14 @@ body {
     display: none !important;
 }
 
+/* Same trap for a closed <dialog>: `.stats-dialog { display: flex }` outranked
+   the UA's hiding rule, so every closed dialog was laid out below the 100vh
+   app shell -- out of sight, but widening a phone's page by ~100px and
+   leaving buttons like "Accept and pin" in the tab order. */
+dialog:not([open]) {
+    display: none;
+}
+
 /* --- auth screens --- */
 
 .auth-container {
@@ -940,39 +948,42 @@ body {
     border-color: transparent transparent transparent currentColor;
 }
 
-/* The upload row. Same card frame as .capture-card so the two read as two
-   ways of doing the same thing, but with no body -- there is nothing to
-   configure about an upload, so it is a head and one row. */
-.upload-card {
-    flex-shrink: 0;
-    margin: 0 16px 8px;
+/* The upload fly-out, beside Start capture in the card footer and opening
+   upward over the form -- never over the capture list it adds to. Same frame
+   as .stats-dialog, but not modal. The card's overflow:hidden clips only the
+   shadow's edge; the form above is far taller than the panel. */
+/* Positioned against the footer, not the button: the button sits left of
+   Start capture, and a panel hung off its right edge would run off the left
+   of a phone screen. */
+.capture-card-foot { position: relative; }
+.upload-flyout {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 16px;
+    z-index: 20;
+    /* Against the footer's width, not the viewport's: on a phone the card is
+       inset from the screen edge, and a viewport-sized panel clipped there. */
+    width: min(26rem, calc(100% - 32px));
+    padding: 14px 16px 16px;
+    background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 12px;
-    background: var(--bg-secondary);
-    overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
-
-.upload-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 12px;
-    padding: 14px 16px 0;
-}
-.upload-head .hint { font-size: 0.8125rem; }
-.upload-head h2 {
+.upload-flyout h2 {
     font-size: 0.9375rem;
     font-weight: 600;
     color: var(--text-primary);
-    margin: 0;
+    margin: 0 0 4px;
 }
+.upload-flyout > .hint { font-size: 0.8125rem; margin: 0; }
 
 .upload-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px 12px;
-    padding: 12px 16px 16px;
+    padding-top: 12px;
 }
 /* min-width:0 so a long filename in the picker shrinks rather than pushing the
    button off the row. */
@@ -2263,6 +2274,8 @@ body {
     .captures-head { padding: 12px 10px 4px; }
     .capture-list { padding: 8px 10px; }
     .capture-card-foot .btn-start { flex: 1 1 100%; justify-content: center; }
+    .upload-flyout-anchor { flex: 1 1 100%; }
+    #btn-upload-toggle { width: 100%; }
 }
 
 
@@ -3374,9 +3387,11 @@ body {
    shape on top -- rather than a colored dot. The fill and stroke come from the
    element's own attributes (diagrams.js slotSwatch), so this rule only has to
    size it and keep it from being squeezed by the flex row. */
+/* Drawn larger than the 18x14 viewBox: shape is what separates two protocols
+   that share a hue, and at that size a square and a diamond were a smudge. */
 .diagram-legend-swatch {
-    width: 18px;
-    height: 14px;
+    width: 26px;
+    height: 20px;
     flex: none;
     overflow: visible;
 }

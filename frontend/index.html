@@ -312,33 +312,35 @@
                     </div>
                 </div>
                 <footer class="capture-card-foot">
+                    <!-- Upload a pcap recorded somewhere else: the other way to
+                         get a capture, so it sits beside Start capture. A
+                         fly-out, closed until asked for, because this card is
+                         already a full form and an upload is the occasional
+                         case. It opens upward over the form, never over the
+                         list it adds to.
+
+                         Deliberately NOT a drag-and-drop target: a drop zone
+                         would sit under the pointer for every click in this
+                         panel, and a mis-drop that uploads the wrong file is
+                         not an action with an undo. -->
+                    <div class="upload-flyout-anchor">
+                        <button type="button" id="btn-upload-toggle" class="btn btn-secondary"
+                                aria-expanded="false" aria-controls="upload-flyout">Upload a pcap</button>
+                        <div id="upload-flyout" class="upload-flyout" role="dialog"
+                             aria-labelledby="upload-flyout-title" hidden>
+                            <h2 id="upload-flyout-title">Upload a capture</h2>
+                            <p class="hint">A .pcap or .pcapng recorded elsewhere. Stored encrypted, exactly like a capture taken here.</p>
+                            <div class="upload-row">
+                                <input type="file" id="upload-file" accept=".pcap,.pcapng,.cap,application/vnd.tcpdump.pcap">
+                                <button id="btn-upload-capture" class="btn btn-secondary" disabled>Upload</button>
+                                <span id="upload-msg" class="hint" role="status" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </div>
                     <button id="btn-start-capture" class="btn btn-primary btn-start">
                         <span class="btn-start-icon" aria-hidden="true"></span>Start capture
                     </button>
                 </footer>
-            </section>
-
-            <!-- Upload a pcap recorded somewhere else. Sits between the
-                 capture form and the list because that is what it is: a second
-                 way to get a row into that list. Kept to one line -- a file
-                 picker and a button -- rather than a card of its own, since
-                 there is nothing to configure: no interface, no filter, no
-                 server. The name comes from the file.
-
-                 Deliberately NOT a drag-and-drop target. A drop zone over the
-                 capture list would sit under the pointer for every click in
-                 this panel, and a mis-drop that uploads the wrong file is not
-                 an action with an undo. -->
-            <section class="upload-card" aria-labelledby="upload-card-title">
-                <div class="upload-head">
-                    <h2 id="upload-card-title">Upload a capture</h2>
-                    <span class="hint">A .pcap or .pcapng recorded elsewhere. Stored encrypted, exactly like a capture taken here.</span>
-                </div>
-                <div class="upload-row">
-                    <input type="file" id="upload-file" accept=".pcap,.pcapng,.cap,application/vnd.tcpdump.pcap">
-                    <button id="btn-upload-capture" class="btn btn-secondary" disabled>Upload</button>
-                    <span id="upload-msg" class="hint" role="status" aria-live="polite"></span>
-                </div>
             </section>
 
             <div class="captures-head">

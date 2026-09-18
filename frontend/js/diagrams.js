@@ -629,7 +629,27 @@ function buildSequenceLayout(packets, width) {
     const laneGap = hosts.length > 1 ? (width - 160) / (hosts.length - 1) : 0;
     hosts.forEach((h, i) => laneX.set(h, 80 + i * laneGap));
     const rowGap = 22, topPad = 44;
-    return { hosts, laneX, rowGap, topPad, totalHeight: topPad + packets.length * rowGap + 30 };
+    return { hosts, laneX, laneGap, rowGap, topPad, totalHeight: topPad + packets.length * rowGap + 30 };
+}
+
+// .seq-lane-label is 11px monospace; a monospace glyph is ~0.6em wide.
+const LANE_LABEL_CHAR_PX = 6.8;
+
+// A centred label may use the gap to its neighbours and twice its distance to
+// either edge -- past that it runs off the diagram (the leftmost lane sits
+// 80px in, so a resolved hostname clipped there) or into the next label.
+function laneLabelRoom(x, width, laneGap) {
+    return Math.min(laneGap - 8, 2 * x - 8, 2 * (width - x) - 8);
+}
+
+// Shortened in the middle, not the end: a hostname is told apart by its first
+// label and an address by its last octets, and a middle cut keeps both. The
+// full name rides in the label's <title>.
+function fitLaneLabel(host, roomPx) {
+    const max = Math.max(5, Math.floor(roomPx / LANE_LABEL_CHAR_PX));
+    if (host.length <= max) return host;
+    const tail = Math.floor((max - 1) / 2);
+    return `${host.slice(0, max - 1 - tail)}…${host.slice(host.length - tail)}`;
 }
 
 function renderSequenceSVG(svg, packets, slotOf) {
@@ -657,7 +677,13 @@ function renderSequenceSVG(svg, packets, slotOf) {
             class: "seq-lane-line", x1: x, y1: layout.topPad - 12, x2: x, y2: layout.totalHeight - 10,
         }));
         const label = svgEl("text", { class: "seq-lane-label", x, y: layout.topPad - 20, "text-anchor": "middle" });
-        label.textContent = host;
+        const room = laneLabelRoom(x, width, layout.hosts.length > 1 ? layout.laneGap : Infinity);
+        label.textContent = fitLaneLabel(host, room);
+        if (label.textContent !== host) {
+            const full = svgEl("title");
+            full.textContent = host;
+            label.append(full);
+        }
         laneLayer.append(label);
     }
 

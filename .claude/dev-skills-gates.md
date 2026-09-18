@@ -1,6 +1,77 @@
 # Dev Skills gate state
 
-## IN PROGRESS: pcap upload + traffic-diagram fixes (2026-09-18)
+## IN PROGRESS: next beta -- upload tests, locked-vault fix, upload fly-out (2026-09-18, local)
+Track: work commit on claude/dev-skills-beta-workflow-cwzvx5 (resumed from the
+upload-diagrams handoff below). dev-skills v2.24.0. Environment: LOCAL (same
+clone as the user's terminal) -- git is presented, not run; the cloud
+session's "remote container" notes below no longer describe where this runs.
+Model: Opus 5 (session switched mid-way); user continued without objection.
+
+Done this session, uncommitted:
+ * tests/test_capture_upload.py -- 25 tests (sealed on disk, 0600, uuid name,
+   round-trip download, packets route, record fields, odd labels, other-user
+   404, 4 refusals, oversize with and without Content-Length, locked 503,
+   plain HTTP 403, rate limit, 401, origin migration backfill). Mutation-
+   checked: chunked-cap and locked-vault tests fail with their guard removed.
+ * HIGH, the pre-existing twin, REPRODUCED then FIXED. With the vault locked
+   (every passphrase-mode restart until unlock): a pasted/uploaded SSH key was
+   written as plaintext and NEVER re-sealed (migrate_plaintext_keys only runs
+   at a startup that has a key -- passphrase mode never does); a collected
+   capture landed as plaintext <id>.pcap until the next unlock. Now
+   CaptureManager._refuse_while_locked (shared with import_upload) guards
+   start() and _collect(); _store_ssh_key refuses 503; start route maps
+   CryptoError -> 503. 4 new tests, all fail against the old code. The
+   existing test_uploaded_key_is_plaintext_when_no_cryptor encoded the bug
+   (it modelled "no key" as a LOCKED vault) -- split into encryption-disabled
+   (plaintext, correct) and locked (503).
+ * UI BUG found by the new browser test: onUploadCaptureClick's finally reset
+   #upload-msg, so "Uploaded N packets" / "Upload failed: ..." were never
+   shown. Fixed (syncUploadButton re-enables without touching the message).
+ * Upload moved into a fly-out off the Captures heading (user: "the capture
+   screen is getting kind of cramped"). Non-modal; Escape (focus back to the
+   toggle), outside click and the toggle close it; stays open after an upload.
+   Screenshotted light/dark/390px.
+ * Browser tests: 3 upload + 4 fly-out in test_capture_ui.py, 8-slot legend in
+   test_diagrams_ui.py.
+
+FOUND, NOT FIXED (asked): .stats-dialog {display:flex} overrides the UA
+dialog:not([open]){display:none}, so every closed stats/host-key dialog is
+rendered below the 100vh app shell -- invisible, but its buttons are likely
+still in the tab order. Pre-existing.
+
+Later the same session, on the user's direction:
+ * Fly-out moved from the Captures heading to the capture card footer beside
+   Start capture, opening upward over the form (user: "looks kind of clumsy";
+   chose the footer via AskUserQuestion). Anchored to the footer, width
+   against the footer, full-width button under 480px.
+ * Sequence Diagram lane labels fitted to their room (gap to neighbours and
+   2x distance to either edge), middle-ellipsised, full name in <title>. The
+   leftmost resolved hostname was clipped off the left edge.
+ * Legend swatches 18x14 -> 26x20 (shape is the channel past three hues).
+ * dialog:not([open]) { display:none } -- the closed-dialog bug above, FIXED
+   (user: "Yes fix it"). Also removed a 108px horizontal overflow at 390px.
+ * 3 more browser tests (label fit, short labels whole, closed dialogs + page
+   width); the two regression ones fail against the pre-fix frontend.
+
+🔢 VERSION    ⬜ not owed yet (next beta will bump to 1.1.0-beta.3)
+🔨 BUILD      ✅ full suite on the FINAL tree: check.sh EXIT=0, 1647 passed,
+              0 failed, 0 skipped, 336s, real tshark/capinfos/chromium. Looked
+              at in a real browser: upload fly-out (desktop dark, 390px light),
+              both diagrams on a real uploaded 83-packet pcap with name
+              resolution. Handoff offered: screenshots sent to the user; no
+              image built (work commit, not a release).
+🔒 SECURITY   ✅ 0 Critical, 0 High on the final diff. One High (locked-vault
+              plaintext writes: SSH keys + captures) fixed in this diff.
+              pip-audit requirements.txt: no known vulnerabilities; no
+              dependency or Dockerfile change. No new innerHTML/eval sinks --
+              lane labels and titles via textContent. Quality: fitLaneLabel /
+              laneLabelRoom small and pure; _refuse_while_locked shared by the
+              three write paths instead of three copies.
+📄 DOCS       ⬜
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜
+
+## (previous) pcap upload + traffic-diagram fixes (2026-09-18)
 Track: work commit (branch only). No version bump, no tag, no artifact, nothing
 published. Flagged to the user; they can call it a release instead.
 Branch: claude/dev-skills-beta-workflow-cwzvx5, restarted from origin/main.
