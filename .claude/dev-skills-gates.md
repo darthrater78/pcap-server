@@ -16,7 +16,11 @@ Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
 🔨 BUILD      ✅ full suite via scripts/check.sh on the tagged tree (75ee7f7):
               1672 passed, 0 failed, 0 skipped, 366.86s, real
               tshark/capinfos/chromium/docker. The prior sanitizer flake did
-              not reproduce this run.
+              not reproduce this run. Handoff offered and verified by hand:
+              docker build localhost/pcap-server:1.1.0-beta.4, run with a
+              throwaway MASTER_KEY_FILE, / 200, /api/auth/status 200,
+              in-image APP_VERSION == 1.1.0-beta.4, encryption enabled, no
+              traceback in the log. Image and smoke key removed after.
 🔒 SECURITY   ✅ carried over -- 0 Critical/High on the code diff (prior
               entry); this commit adds no code, only strings/docs.
 📄 DOCS       ✅ docs/viewer.md Traffic/Sequence Diagram section rewritten:
