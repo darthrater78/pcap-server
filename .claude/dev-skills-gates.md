@@ -1,30 +1,38 @@
 # Dev Skills gate state
 
-## HANDOFF: Traffic Diagram overhaul + preview container (2026-09-18, local)
-Track: work commit on claude/dev-skills-beta-workflow-cwzvx5 (from origin/main
-65bf7d4). Model: Opus 5, user approved ("stay on opus"). Shell: Linux bash.
+## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
+Track: RELEASE SEQUENCE on claude/dev-skills-beta-workflow-cwzvx5 (from
+origin/main 65bf7d4, tip c8dc667). Model: Sonnet 5 (user switched down,
+"no more coding if possible" -- docs/version-only work from here). Shell:
+Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
+(ls-remote, points at 65bf7d4).
 
-🔢 VERSION    ⬜ not owed (work commit; next beta bumps it)
-🔨 BUILD      ⬜ not owed. Diagram browser tests 41/41 pass. LAST FULL check.sh:
-              1 failed / 1663 passed, and code changed after it. The failure,
-              tests/test_sanitizer.py::test_payload_nothing_can_read_is_reported_by_port,
-              is a pre-existing flake (os.urandom payloads sometimes get
-              dissected; passed 3/3 alone). Full suite NOT re-run on the final
-              tree: user: "we can do that after".
-🔒 SECURITY   ✅ 0 Critical, 0 High on the final diff. pip-audit: no known
-              vulnerabilities (requirements unchanged). Every new innerHTML is
-              built from escHtml'd parts; new-window hash params checked
-              against the user's own capture/view ids; BroadcastChannel
-              message type-checked and only lands in the display-filter box;
-              window.open noopener; localStorage wrapped in try/catch.
-              Medium (accepted, dev-only, documented in the script):
-              scripts/preview.sh uses a fixed login, 10-year device trust and
-              no idle timeout, and listens on the LAN. Fake data only.
-              Quality (known debt): diagrams.js is now ~1,700 lines; the
-              topology half could be split into its own file.
-📄 DOCS       ⬜ owed at release: docs/viewer.md diagram section and CHANGELOG
-              need everything below.
-📦 RELEASE    ⬜
+🔢 VERSION    ✅ bumped 1.1.0-beta.3 -> 1.1.0-beta.4 in backend/main.py
+              (APP_VERSION), docker-compose.yml (image tag), README.md (beta
+              badge). docs/security.md's "Before 1.1.0-beta.3" is a historical
+              note, correctly left alone. No other hardcoded refs found (grep).
+              repo/release-notes links unchanged (REPO_URL-derived, already
+              correct pattern). Previous tag v1.1.0-beta.3 verified on remote.
+🔨 BUILD      ⬜ not re-owed by this commit -- no source/test files touched,
+              only APP_VERSION string + compose image tag + docs. Diagram
+              browser tests were 41/41 on the code itself (prior entry).
+              backend/main.py re-parsed clean (ast.parse) after the version
+              edit. Full check.sh NOT re-run (user: "we can do that after";
+              no code changed since).
+🔒 SECURITY   ✅ carried over -- 0 Critical/High on the code diff (prior
+              entry); this commit adds no code, only strings/docs.
+📄 DOCS       ✅ docs/viewer.md Traffic/Sequence Diagram section rewritten:
+              protocol picker, 15 marks (3 hue x 5 shape, was 8), Problems
+              chip/badges/stats, host search, stats pane incl. per-host
+              interfaces, Fit/Spacing/full screen/New window, click-to-filter
+              stays open, rewind-at-end, most-used-protocol badge, window
+              titles. CHANGELOG 1.1.0-beta.4 entry added (Added: picker, 15
+              marks, Problems, search, stats pane, toolbar controls, playback
+              polish; Changed: diagram button is now the lead tool). No
+              removed features to scrub. scripts/preview.sh is a dev-only
+              throwaway tool, not shipped in the image -- intentionally not
+              user-doc'd or changelog'd.
+📦 RELEASE    ⬜ next: sync check, commit approval, push, PR, release notes
 🚀 SHIP       ⬜
 
 What shipped in this commit (frontend + scripts only; no backend change):

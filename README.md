@@ -14,7 +14,7 @@ only reach over SSH.
      comment included, the moment the next non-beta release ships. It exists
      to announce a beta while one is current, not to become a permanent
      fixture nobody remembers to remove. -->
-> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.3` — see
+> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.4` — see
 > [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
 > or the Quick Start below installs; pin this exact tag if you want to try it.
 
