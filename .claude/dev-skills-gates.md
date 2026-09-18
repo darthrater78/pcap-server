@@ -7,7 +7,8 @@ Model: Opus 5 (user approved). Shell: Linux bash.
 🔢 VERSION    ✅ 1.1.0-beta.6
               APP_VERSION + docker-compose image tag + CHANGELOG; README beta line
               waits until the image is live (own commit). v1.1.0-beta.5 tagged on remote.
-🔨 BUILD      ✅ check.sh 1738 passed; preview rebuilt, in-image APP_VERSION ok, 0 tracebacks
+🔨 BUILD      ✅ check.sh 1738 passed; handoff offered, user tried preview
+              preview container built from this branch: in-image APP_VERSION ok, 0 tracebacks
 🔒 SECURITY   ✅ 0 Critical, 0 High
               pip-audit clean; no new deps; new inputs validated/bounded/user-scoped;
               innerHTML sinks escaped; SQL f-strings interpolate a constant only.
