@@ -128,9 +128,28 @@ def _start_server(root: Path) -> tuple[LiveServer, subprocess.Popen]:
     for name in ("data", "captures", "ssh-keys"):
         (root / name).mkdir(parents=True, exist_ok=True)
 
+    # An ssh-keyscan that answers the way the real one does for an address that
+    # never replies -- nothing on stdout, a message on stderr, non-zero -- but
+    # immediately. The real binary waits out its -T 5 timeout, and about a dozen
+    # tests point the form at TEST-NET-3, so each paid five seconds (the
+    # trust-host ones twice) to learn the same thing. The app's own handling of
+    # a failed scan is what is under test; how long the failure took is not.
+    # tests/test_ssh_manager.py and tests/test_servers.py cover the real
+    # command line.
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    keyscan = bin_dir / "ssh-keyscan"
+    keyscan.write_text(
+        "#!/bin/sh\n"
+        'echo "ssh-keyscan: connection timed out (browser-suite stand-in)" >&2\n'
+        "exit 1\n"
+    )
+    keyscan.chmod(0o755)
+
     port = _free_port()
     env = {
         **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "DATA_DIR": str(root / "data"),
         "CAPTURES_DIR": str(root / "captures"),
         "SSH_KEYS_DIR": str(root / "ssh-keys"),
