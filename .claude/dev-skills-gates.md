@@ -1,5 +1,87 @@
 # Dev Skills gate state
 
+## Release sequence: v1.1.0-beta.5 -- large-capture diagrams + label fix (2026-09-18, local)
+Track: release sequence. Branch: feat/large-capture-diagrams (off main cf6fb27).
+LOCAL, bash. Opus approved for this task. Scope answered by user: Traffic
+Diagram > 5,000 (up to max_capture_packets); Sequence keeps 5,000 default;
+fold into beta.5; per-diagram max-packets boxes under View options (tooltips).
+
+🔢 VERSION    ✅ 1.1.0-beta.5 (unchanged; feature folded in)
+🔨 BUILD      ✅ check.sh 1686 passed (checkbox tree); handoff offered, preview up at :8099
+              tree snapshot identical before/after run. Preview rebuilt,
+              18,482-pkt capture plays in Chromium; limit boxes verified.
+🔒 SECURITY   ✅ 0 Critical, 0 High; pip-audit clean (prod + dev)
+              Medium accepted by user ("mem is fine"): ~70 MB per 100k-pkt request.
+📄 DOCS       ✅ CHANGELOG, viewer.md, operating.md, architecture.md
+📦 RELEASE    ⏳ commit approved ("commit"); push + PR in progress
+🚀 SHIP       ⬜
+
+## (folded into the above) v1.1.0-beta.5 -- Traffic Diagram packet-cap mislabel fix (2026-09-18, local)
+Track: release sequence (version bump + fix), still on main pending branch
+creation for commit. Environment: LOCAL (Claude Code CLI, cwd
+/home/serveradmin/pcap-server). Shell: Linux Terminal (bash). dev-skills
+updated to v2.25.0 this session (was v2.24.0).
+
+Bug: user reported "175,260 hosts match the whole capture -- above the 5,000
+this diagram can render" on an "any"-interface capture, correctly suspecting
+no real capture has that many hosts. Root cause found by subagent + verified
+by hand: frontend/js/diagrams.js:1497 (onTopologyPlayClick) calls
+showDiagramCapWarning("topology", result.total, PACKET_DIAGRAM_CAP, ...)
+without an explicit `what` label. result.total there is a PACKET count (from
+fetchPacketsCapped), but the function's default parameter
+(kind === "topology" ? "hosts" : "packets") mislabels it "hosts" since kind
+is "topology". The real host cap (200, endpoints.length vs
+TOPOLOGY_NODE_CAP, line 1419-1420) is separate and unaffected -- confirmed
+not the cause; host identity is address-keyed only (get_conversations,
+backend/packet_parser.py:631), no interface in the key, so per-host-interface
+labeling doesn't inflate node count either. Fix: pass "packets" explicitly at
+line 1497, matching the existing correct pattern at line 1848 (sequence
+diagram). One-line change.
+
+🔢 VERSION    ✅ bumped 1.1.0-beta.4 -> 1.1.0-beta.5 in backend/main.py
+              (APP_VERSION) and docker-compose.yml (image tag). README's
+              beta announcement line deliberately NOT bumped yet -- per this
+              repo's own process note in README.md (added after the
+              dev.40/beta.4 near-miss): bump it only after `docker pull` of
+              the new tag is confirmed working, in its own follow-up commit,
+              same pattern as PR #20 (docs/beta4-live). docs/security.md's
+              "Before 1.1.0-beta.3" note and README's Quick Start/
+              docs/reverse-proxy.md (pinned to last stable, 1.0.0) correctly
+              left alone. repo_url/release_notes_url in backend/main.py are
+              APP_VERSION-derived, no edit needed. Previous version
+              v1.1.0-beta.4 confirmed tagged on remote (git ls-remote).
+🔨 BUILD      ✅ full suite via scripts/check.sh on the fix: 1672 passed, 0
+              failed, 367.29s, real tshark/capinfos/chromium. docker build +
+              run via scripts/preview.sh (rebuilt for the backend/main.py
+              change) -- confirmed up, header shows v1.1.0-beta.5. Loaded an
+              18,482-packet synthetic capture (well above the 5,000 cap,
+              generated via scripts/preview_pcap.py's build() with
+              sessions=3000, uploaded through the real upload API from
+              inside the container) and drove the actual bug through a
+              headless Playwright/Chromium session (.venv already has
+              playwright): Traffic Diagram -> Play with no filter now shows
+              "18,482 packets match the whole capture -- above the 5,000..."
+              -- confirmed fixed, real browser, real DOM, not just code
+              inspection. Handoff: container is up at :8099 (scripts/preview.sh
+              up), offered to the user to look at by hand before shipping.
+🔒 SECURITY   ✅ 0 Critical, 0 High. Diff is two version strings, a
+              CHANGELOG entry, and one JS call-site adding an explicit
+              string literal argument to an existing function -- no new
+              input, no new sink, nothing user/attacker-controlled touched.
+              pip-audit on backend/requirements.txt and requirements-dev.txt:
+              no known vulnerabilities (re-run this gate regardless of no
+              dependency change, per policy). Quality: no structure or
+              performance issues -- the changed line is a single explicit
+              argument, function itself untouched.
+📄 DOCS       ✅ CHANGELOG.md gets a 1.1.0-beta.5 entry (Fixed: the mislabel,
+              phrased for a reader who hit the same warning). docs/viewer.md's
+              existing "5,000 packets for either" line already states the
+              cap correctly and was never wrong -- no edit needed. No
+              removed features, no stale references found (grepped for the
+              old warning shape).
+📦 RELEASE    ⬜ next: create branch, commit (needs approval), push, open PR.
+🚀 SHIP       ⬜
+
 ## SHIPPED: v1.1.0-beta.4 (2026-09-18) + README bump now that it's live
 Track: release-track docs fix, on docs/beta4-live (from origin/main efdfc08).
 Model: Sonnet 5. Shell: Linux bash.

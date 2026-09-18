@@ -88,8 +88,18 @@ const OTHER_SLOT = { color: "var(--diagram-other)", shape: "circle", dash: "2 2"
 
 const TOPOLOGY_NODE_CAP = 200;
 const SEQUENCE_LANE_CAP = 40;
+// Each diagram's packet cap, switchable on the Capture tab
+// (diagramPacketLimit). The Sequence Diagram draws a row per packet, and
+// past a few thousand rows it is no longer something anyone reads. The
+// Traffic Diagram's matches max_capture_packets' default; the server clamps
+// either to that setting as it stands.
 const PACKET_DIAGRAM_CAP = 5000;
+const TOPOLOGY_PACKET_CAP = 100000;
 const TOPOLOGY_PACKETS_PER_SECOND_AT_1X = 40;
+// ...until a play at 1x would outlast this many seconds; past that the rate
+// grows with the capture, so 100,000 packets play in the same two minutes as
+// 5,000 rather than in forty.
+const TOPOLOGY_PLAY_SECONDS_AT_1X = 120;
 // How many times a link can be crossed before its "heat" (opacity/width
 // boost during playback) stops climbing -- a link that carries most of the
 // capture should read as busy, not turn into a solid bar that drowns out
@@ -276,33 +286,60 @@ function renderDiagramContext(kind) {
 // Shared by both diagrams: the display filter's own packet count decides
 // whether this renders at all. Truncating a diagram silently would just draw
 // a wrong picture, so above the cap this returns overCap instead of a
-// partial result.
-async function fetchPacketsCapped(captureId, filter, cap = PACKET_DIAGRAM_CAP) {
-    const pageSize = 1000;
+// partial result. One request, one tshark pass (see the diagram-packets
+// route); the server says what the cap came to, since its ceiling is a
+// setting. `cap` is omitted to take that ceiling as it stands.
+async function fetchPacketsCapped(captureId, filter, cap) {
     // Reads the same page-level "Resolve hostnames" toggle the packet list
     // uses (frontend/index.html's #resolve-names) -- one setting, not a
     // second copy of it in every dialog that fetches packets. It has to be
     // decided before a diagram loads: a reverse-DNS query per address is not
     // something to fire off mid-animation because someone flipped a switch.
-    const resolveNames = resolveNamesEnabled();
-    const params = (offset) => new URLSearchParams({
-        display_filter: filter, offset, limit: pageSize, resolve_names: resolveNames ? "true" : "false",
+    const params = new URLSearchParams({
+        display_filter: filter, resolve_names: resolveNamesEnabled() ? "true" : "false",
     });
-    const first = await api(`/api/captures/${captureId}/packets?${params(0)}`);
-    if (first.total > cap) return { overCap: true, total: first.total };
-    const packets = first.packets.slice();
-    for (let offset = pageSize; offset < first.total; offset += pageSize) {
-        const page = await api(`/api/captures/${captureId}/packets?${params(offset)}`);
-        packets.push(...page.packets);
+    if (cap) params.set("limit", String(cap));
+    const res = await api(`/api/captures/${captureId}/diagram-packets?${params}`);
+    const limit = res.cap || cap || PACKET_DIAGRAM_CAP;
+    if (res.total > limit) return { overCap: true, total: res.total, cap: limit };
+    return { overCap: false, total: res.total, cap: limit, packets: res.packets };
+}
+
+// The Capture tab's two checkboxes: whether each diagram holds to its packet
+// cap (TOPOLOGY_PACKET_CAP, PACKET_DIAGRAM_CAP). Unticked sends no limit, so
+// only the server's max_capture_packets applies. Kept per browser; both
+// start ticked.
+const DIAGRAM_CAP_TOGGLES = ["topology-cap-enabled", "sequence-cap-enabled"];
+
+function diagramPacketLimit(id, cap) {
+    return $(id)?.checked === false ? undefined : cap;
+}
+
+function initDiagramLimits() {
+    for (const id of DIAGRAM_CAP_TOGGLES) {
+        const box = $(id);
+        if (!box) continue;
+        try {
+            box.checked = localStorage.getItem(`diagram-cap-off:${id}`) !== "1";
+        } catch { /* storage blocked: the cap stays on */ }
+        box.addEventListener("change", () => {
+            try {
+                if (box.checked) localStorage.removeItem(`diagram-cap-off:${id}`);
+                else localStorage.setItem(`diagram-cap-off:${id}`, "1");
+            } catch { /* kept for this page only */ }
+        });
     }
-    return { overCap: false, total: first.total, packets };
 }
 
 function showDiagramCapWarning(kind, total, cap, filter, what = kind === "topology" ? "hosts" : "packets") {
     const box = $(`${kind}-cap-warning`);
+    // Only the packet cap is the operator's to lift, and only while its
+    // checkbox is ticked; the host and lane caps are fixed.
+    const lift = what === "packets" && $(`${kind}-cap-enabled`)?.checked;
+    const raise = lift ? ", untick this diagram's max packets on the Capture tab," : "";
     box.textContent = `${total.toLocaleString()} ${what} match ` +
         `${filter ? `"${filter}"` : "the whole capture"} -- above the ${cap.toLocaleString()} this diagram ` +
-        "can render. Narrow the display filter, or open a saved view, and try again.";
+        `can render. Narrow the display filter${raise} or open a saved view, and try again.`;
     box.hidden = false;
     $(`${kind}-body`).hidden = true;
 }
@@ -855,7 +892,7 @@ function renderTopologySVG(svg, nodes, byId, edges, onNodeClick, onEdgeClick) {
 function topologyPackets() {
     if (!topologyState.packetsPromise) {
         const state = topologyState;
-        state.packetsPromise = fetchPacketsCapped(state.captureId, state.filter);
+        state.packetsPromise = fetchPacketsCapped(state.captureId, state.filter, diagramPacketLimit("topology-cap-enabled", TOPOLOGY_PACKET_CAP));
         // A failed fetch is not kept: the next press of Play tries again.
         state.packetsPromise.catch(() => { state.packetsPromise = null; });
     }
@@ -1494,7 +1531,7 @@ async function onTopologyPlayClick() {
         }
         $("btn-topology-play").disabled = false;
         if (result.overCap) {
-            showDiagramCapWarning("topology", result.total, PACKET_DIAGRAM_CAP, topologyState.filter);
+            showDiagramCapWarning("topology", result.total, result.cap, topologyState.filter, "packets");
             return;
         }
         preparePlayback(result.packets);
@@ -1512,18 +1549,38 @@ async function onTopologyPlayClick() {
 }
 
 // Cumulative, not decaying: how many times each link has been crossed by
-// the time playback has reached idx. Recomputed from scratch on every call
-// rather than tracked incrementally, so scrubbing backwards is exactly as
-// correct as playing forwards -- a few thousand additions is nothing for a
-// browser to redo every frame.
+// the time playback has reached idx.
 function computeEdgeHeat(packets, idx) {
     const heat = new Map();
-    for (let i = 0; i <= idx && i < packets.length; i++) {
-        const p = packets[i];
-        const key = p.source <= p.destination ? `${p.source}|${p.destination}` : `${p.destination}|${p.source}`;
-        heat.set(key, (heat.get(key) || 0) + 1);
-    }
+    for (let i = 0; i <= idx && i < packets.length; i++) addEdgeHeat(heat, packets[i]);
     return heat;
+}
+
+function addEdgeHeat(heat, p) {
+    const key = p.source <= p.destination ? `${p.source}|${p.destination}` : `${p.destination}|${p.source}`;
+    heat.set(key, (heat.get(key) || 0) + 1);
+}
+
+// computeEdgeHeat carried forward from the last frame rather than redone from
+// packet 0 every frame: at a hundred thousand packets the recount was the
+// frame. Going backwards (a scrub, a replay) starts over from scratch, so a
+// scrub back is exactly as correct as playing forwards.
+function edgeHeatAt(playback, idx) {
+    let cache = playback.heatCache;
+    if (!cache || cache.packets !== playback.packets || idx < cache.idx) {
+        cache = playback.heatCache = { packets: playback.packets, idx: -1, heat: new Map() };
+    }
+    for (let i = cache.idx + 1; i <= idx && i < playback.packets.length; i++) {
+        addEdgeHeat(cache.heat, playback.packets[i]);
+    }
+    cache.idx = Math.max(cache.idx, Math.min(idx, playback.packets.length - 1));
+    return cache.heat;
+}
+
+// Packets per second at 1x: TOPOLOGY_PACKETS_PER_SECOND_AT_1X, or faster for
+// a capture that would otherwise take longer than TOPOLOGY_PLAY_SECONDS_AT_1X.
+function playbackRate(total) {
+    return Math.max(TOPOLOGY_PACKETS_PER_SECOND_AT_1X, total / TOPOLOGY_PLAY_SECONDS_AT_1X);
 }
 
 // The more a link has carried, the brighter and wider it draws -- capped at
@@ -1547,7 +1604,7 @@ function drawTopologyFrame(ctx, canvas, playback) {
     const progress = playback.finished ? playback.packets.length : playback.progress;
     const idx = Math.floor(progress);
     const view = topologyState.view;
-    applyEdgeHeat(topologyState?.edgeLayer, computeEdgeHeat(playback.packets, idx));
+    applyEdgeHeat(topologyState?.edgeLayer, edgeHeatAt(playback, idx));
     const trailStart = Math.max(0, idx - 20);
     for (let i = trailStart; i <= idx && i < playback.packets.length; i++) {
         const p = playback.packets[i];
@@ -1634,8 +1691,8 @@ function startTopologyAnimation() {
         const dt = (now - last) / 1000;
         last = now;
         const speed = parseFloat($("topology-speed").value) || 1;
-        topologyPlayback.progress += dt * TOPOLOGY_PACKETS_PER_SECOND_AT_1X * speed;
         const total = topologyPlayback.packets.length;
+        topologyPlayback.progress += dt * playbackRate(total) * speed;
         if (topologyPlayback.progress >= total) {
             finishTopologyPlay(topologyPlayback);
             return;
@@ -1843,9 +1900,9 @@ async function openSequenceDialog() {
     $("sequence-svg").innerHTML = "";
     dialog.showModal();
     try {
-        const result = await fetchPacketsCapped(viewingCaptureId, filter);
+        const result = await fetchPacketsCapped(viewingCaptureId, filter, diagramPacketLimit("sequence-cap-enabled", PACKET_DIAGRAM_CAP));
         if (result.overCap) {
-            showDiagramCapWarning("sequence", result.total, PACKET_DIAGRAM_CAP, filter);
+            showDiagramCapWarning("sequence", result.total, result.cap, filter);
             return;
         }
         if (!result.packets.length) {
@@ -1873,6 +1930,7 @@ async function openSequenceDialog() {
 // --- wiring -------------------------------------------------------------
 
 function initDiagramDialogs() {
+    initDiagramLimits();
     for (const id of ["topology-dialog", "sequence-dialog"]) {
         const dialog = $(id);
         dialog?.addEventListener("click", (e) => {

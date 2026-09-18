@@ -152,7 +152,7 @@ async def test_sequence_renders_one_lane_per_host(app_page):
         ],
         "total": 3,
     }
-    await _stub_api(app_page, "/packets?", payload)
+    await _stub_api(app_page, "/diagram-packets?", payload)
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
@@ -166,7 +166,7 @@ async def test_sequence_renders_one_lane_per_host(app_page):
 
 async def test_sequence_arrow_click_opens_the_packet_and_closes(app_page):
     payload = {"packets": [_packet(7, "10.0.0.1", "10.0.0.2")], "total": 1}
-    await _stub_api(app_page, "/packets?", payload)
+    await _stub_api(app_page, "/diagram-packets?", payload)
     await _stub_api(app_page, "/packets/7", {"layers": [], "frame_hex": ""})
     await _open_viewer(app_page)
 
@@ -195,7 +195,7 @@ async def test_topology_and_play_pass_resolve_names_when_checked(app_page):
             window.api = async (path, opts) => {
                 window.__calls.push(path);
                 if (path.includes('/conversations')) return response.conv;
-                if (path.includes('/packets?')) return response.pkts;
+                if (path.includes('/diagram-packets?')) return response.pkts;
                 return real(path, opts);
             };
         }""",
@@ -225,7 +225,7 @@ async def test_topology_and_play_pass_resolve_names_when_checked(app_page):
 
     calls = await app_page.evaluate("() => window.__calls")
     assert any("/conversations" in c and "resolve_names=true" in c for c in calls)
-    assert any("/packets?" in c and "resolve_names=true" in c for c in calls)
+    assert any("/diagram-packets?" in c and "resolve_names=true" in c for c in calls)
 
 
 async def test_sequence_cap_warning_when_hosts_exceed_the_limit(app_page):
@@ -234,7 +234,7 @@ async def test_sequence_cap_warning_when_hosts_exceed_the_limit(app_page):
         "packets": [_packet(i, f"10.0.0.{i}", f"10.0.1.{i}") for i in range(25)],
         "total": 25,
     }
-    await _stub_api(app_page, "/packets?", payload)
+    await _stub_api(app_page, "/diagram-packets?", payload)
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
@@ -271,7 +271,7 @@ async def test_edge_heat_climbs_with_crossings_and_stays_capped(app_page):
 
 
 async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):
-    await _stub_api(app_page, "/packets?", {"packets": [], "total": 5001})
+    await _stub_api(app_page, "/diagram-packets?", {"packets": [], "total": 5001})
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
@@ -294,7 +294,7 @@ async def test_the_legend_holds_eight_protocols_each_a_distinct_mark(app_page):
         for _ in range(len(protocols) - rank):
             n += 1
             packets.append(_packet(n, "10.0.0.1", "10.0.0.2", proto))
-    await _stub_api(app_page, "/packets?", {"packets": packets, "total": len(packets)})
+    await _stub_api(app_page, "/diagram-packets?", {"packets": packets, "total": len(packets)})
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
@@ -326,7 +326,7 @@ async def test_a_long_lane_label_is_shortened_to_fit_and_keeps_its_full_name(app
         "packets": [_packet(1, long_name, "10.0.0.2", "DNS"), _packet(2, "10.0.0.2", long_name, "DNS")],
         "total": 2,
     }
-    await _stub_api(app_page, "/packets?", payload)
+    await _stub_api(app_page, "/diagram-packets?", payload)
     await _open_viewer(app_page)
     await app_page.click("#btn-sequence")
     await app_page.wait_for_selector("#sequence-dialog[open]")
@@ -348,7 +348,7 @@ async def test_a_long_lane_label_is_shortened_to_fit_and_keeps_its_full_name(app
 
 async def test_a_short_lane_label_is_left_whole(app_page):
     payload = {"packets": [_packet(1, "10.0.0.1", "10.0.0.2", "TCP")], "total": 1}
-    await _stub_api(app_page, "/packets?", payload)
+    await _stub_api(app_page, "/diagram-packets?", payload)
     await _open_viewer(app_page)
     await app_page.click("#btn-sequence")
     await app_page.wait_for_selector("#sequence-dialog[open]")
@@ -392,7 +392,7 @@ async def _open_topology_with_packets(page, packets=PLAY_PACKETS):
             const real = window.api;
             window.api = async (path, opts) => {
                 if (path.includes('/conversations')) return response.conv;
-                if (path.includes('/packets?')) return response.pkts;
+                if (path.includes('/diagram-packets?')) return response.pkts;
                 return real(path, opts);
             };
         }""",
@@ -602,7 +602,7 @@ async def test_an_any_capture_labels_each_host_with_its_interfaces(app_page):
             const real = window.api;
             window.api = async (path, opts) => {
                 if (path.includes('/conversations')) return response.conv;
-                if (path.includes('/packets?')) { window.__packetFetches++; return response.pkts; }
+                if (path.includes('/diagram-packets?')) { window.__packetFetches++; return response.pkts; }
                 return real(path, opts);
             };
         }""",
@@ -763,7 +763,7 @@ async def test_picking_protocols_hides_hosts_and_links_they_never_touched(app_pa
     ]
     await app_page.evaluate(
         """(r) => { const real = window.api; window.api = async (path, opts) =>
-            path.includes('/conversations') ? r.conv : path.includes('/packets?') ? r.pkts : real(path, opts); }""",
+            path.includes('/conversations') ? r.conv : path.includes('/diagram-packets?') ? r.pkts : real(path, opts); }""",
         {"conv": THREE_HOSTS, "pkts": {"packets": packets, "total": 3}},
     )
     await _open_viewer(app_page)
@@ -854,7 +854,7 @@ async def test_a_problem_row_filters_the_packet_list(app_page):
 async def test_host_search_highlights_matches_and_steps_through_them(app_page):
     await app_page.evaluate(
         """(r) => { const real = window.api; window.api = async (path, opts) =>
-            path.includes('/conversations') ? r : path.includes('/packets?') ? { packets: [], total: 0 } : real(path, opts); }""",
+            path.includes('/conversations') ? r : path.includes('/diagram-packets?') ? { packets: [], total: 0 } : real(path, opts); }""",
         THREE_HOSTS,
     )
     await _open_viewer(app_page)
@@ -874,3 +874,115 @@ async def test_host_search_highlights_matches_and_steps_through_them(app_page):
     assert await app_page.input_value("#topology-search") == ""
     assert await app_page.locator("#topology-svg .is-dimmed").count() == 0
     assert await app_page.locator("#topology-dialog[open]").count() == 1
+
+
+# --- captures above 5,000 packets ---------------------------------------------
+
+
+async def test_traffic_diagram_plays_a_capture_past_the_sequence_cap(app_page):
+    # 6,000 packets: over the Sequence Diagram's 5,000, under the server's
+    # ceiling (the route reports it as "cap"). The Traffic Diagram draws it.
+    packets = [_packet(i, "10.0.0.1", "10.0.0.2") for i in range(1, 6001)]
+    await app_page.evaluate(
+        """(r) => { const real = window.api; window.api = async (path, opts) =>
+            path.includes('/conversations') ? r.conv
+            : path.includes('/diagram-packets?') ? r.pkts : real(path, opts); }""",
+        {"conv": CONVERSATIONS_PAYLOAD, "pkts": {"packets": packets, "total": 6000, "cap": 100000}},
+    )
+    await _open_viewer(app_page)
+    await app_page.click("#btn-topology")
+    await app_page.wait_for_selector("#topology-svg .diagram-node")
+    await app_page.click("#btn-topology-play")
+    await app_page.wait_for_function(
+        "() => document.getElementById('topology-playback-count').textContent.endsWith('/ 6,000')"
+    )
+    assert await app_page.is_hidden("#topology-cap-warning")
+
+
+async def test_traffic_diagram_warning_reports_the_servers_cap(app_page):
+    await app_page.evaluate(
+        """(r) => { const real = window.api; window.api = async (path, opts) =>
+            path.includes('/conversations') ? r
+            : path.includes('/diagram-packets?') ? { packets: [], total: 150000, cap: 100000 }
+            : real(path, opts); }""",
+        CONVERSATIONS_PAYLOAD,
+    )
+    await _open_viewer(app_page)
+    await app_page.click("#btn-topology")
+    await app_page.wait_for_selector("#topology-svg .diagram-node")
+    await app_page.click("#btn-topology-play")
+    await app_page.wait_for_selector("#topology-cap-warning:not([hidden])")
+    text = await app_page.inner_text("#topology-cap-warning")
+    assert "150,000 packets" in text and "100,000" in text
+
+
+async def test_sequence_diagram_asks_for_its_own_cap(app_page):
+    await app_page.evaluate(
+        """() => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
+            window.__calls.push(path);
+            return path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 5000 } : real(path, opts); }; }"""
+    )
+    await _open_viewer(app_page)
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-dialog[open]")
+    await app_page.wait_for_function("() => window.__calls.some((c) => c.includes('/diagram-packets?'))")
+    calls = await app_page.evaluate("() => window.__calls")
+    assert any("/diagram-packets?" in c and "limit=5000" in c for c in calls)
+
+
+async def test_edge_heat_carried_forward_matches_a_recount(app_page):
+    # edgeHeatAt reuses the last frame's counts; forwards, backwards and
+    # forwards again it must agree with computeEdgeHeat counting from zero.
+    same = await app_page.evaluate(
+        """() => {
+            const hosts = ['a', 'b', 'c'];
+            const packets = Array.from({ length: 200 }, (_, i) =>
+                ({ source: hosts[i % 3], destination: hosts[(i * 7 + 1) % 3] }));
+            const pb = { packets };
+            const plain = (m) => JSON.stringify([...m].sort());
+            return [150, 40, 199, 0, 120].every((idx) =>
+                plain(edgeHeatAt(pb, idx)) === plain(computeEdgeHeat(packets, idx)));
+        }"""
+    )
+    assert same
+
+
+async def test_ticked_caps_reach_each_diagrams_request(app_page):
+    await app_page.evaluate(
+        """(r) => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
+            window.__calls.push(path);
+            return path.includes('/conversations') ? r
+                : path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 1 } : real(path, opts); }; }""",
+        CONVERSATIONS_PAYLOAD,
+    )
+    await app_page.evaluate("() => { $('topology-cap-enabled').checked = true; $('sequence-cap-enabled').checked = true; }")
+    await _open_viewer(app_page)
+    await app_page.click("#btn-topology")
+    await app_page.wait_for_function(
+        "() => window.__calls.some((c) => c.includes('/diagram-packets?') && c.includes('limit=100000'))"
+    )
+    await app_page.evaluate("() => $('topology-dialog').close()")
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_function(
+        "() => window.__calls.some((c) => c.includes('/diagram-packets?') && c.includes('limit=5000'))"
+    )
+
+
+async def test_an_unticked_cap_asks_for_the_servers_maximum(app_page):
+    await app_page.evaluate(
+        """() => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
+            window.__calls.push(path);
+            return path.includes('/diagram-packets?') ? { packets: [], total: 0, cap: 100000 } : real(path, opts); }; }"""
+    )
+    await app_page.evaluate("() => { $('sequence-cap-enabled').checked = false; }")
+    await _open_viewer(app_page)
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_function("() => window.__calls.some((c) => c.includes('/diagram-packets?'))")
+    calls = await app_page.evaluate("() => window.__calls.filter((c) => c.includes('/diagram-packets?'))")
+    assert all("limit=" not in c for c in calls)
+
+
+async def test_the_cap_checkboxes_show_their_max_and_have_tooltips(app_page):
+    for sel, shown in (("label:has(#topology-cap-enabled)", "100,000"), ("label:has(#sequence-cap-enabled)", "5,000")):
+        assert shown in await app_page.inner_text(sel)
+        assert "ticked" in (await app_page.get_attribute(sel, "title")).lower()

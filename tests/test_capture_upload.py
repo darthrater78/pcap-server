@@ -137,6 +137,46 @@ def test_the_viewer_reads_an_upload_through_the_packets_route(secure_client, enr
     assert resp.json()["total"] == 3
 
 
+def test_the_diagram_route_counts_what_the_filter_matched(secure_client, enrolled):
+    """"total" is the filter's match count, not the capture's size -- the
+    number a diagram's cap is judged against."""
+    capture_id = _upload(secure_client, PCAP).json()["id"]
+    url = f"/api/captures/{capture_id}/diagram-packets"
+    everything = secure_client.get(url).json()
+    assert everything["total"] == 3 and len(everything["packets"]) == 3
+    assert everything["cap"] == main.db.get_setting_int("max_capture_packets")
+    one = secure_client.get(url, params={"display_filter": "udp.dstport == 40001"}).json()
+    assert one["total"] == 1 and [p["number"] for p in one["packets"]] == [2]
+
+
+def test_the_diagram_route_over_its_cap_sends_the_count_alone(secure_client, enrolled):
+    capture_id = _upload(secure_client, PCAP).json()["id"]
+    body = secure_client.get(f"/api/captures/{capture_id}/diagram-packets", params={"limit": 2}).json()
+    assert body == {"packets": [], "total": 3, "cap": 2}
+
+
+def test_the_diagram_route_never_exceeds_max_capture_packets(secure_client, enrolled):
+    capture_id = _upload(secure_client, PCAP).json()["id"]
+    before = main.db.get_setting_int("max_capture_packets")
+    main.db.set_setting("max_capture_packets", "2")
+    try:
+        body = secure_client.get(
+            f"/api/captures/{capture_id}/diagram-packets", params={"limit": 1000}
+        ).json()
+    finally:
+        main.db.set_setting("max_capture_packets", str(before))
+    assert body["cap"] == 2 and body["packets"] == []
+
+
+def test_the_diagram_route_reports_a_bad_filter_as_one(secure_client, enrolled):
+    capture_id = _upload(secure_client, PCAP).json()["id"]
+    resp = secure_client.get(
+        f"/api/captures/{capture_id}/diagram-packets", params={"display_filter": "udp.nonsense =="}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "bad_display_filter"
+
+
 # --- the record ---------------------------------------------------------------
 
 

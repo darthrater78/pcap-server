@@ -109,14 +109,14 @@ These are configurable from the Admin tab by the admin user:
 | Setting | Default | Description |
 |---|---|---|
 | Max capture seconds | 300 | Maximum duration for a single capture |
-| Max capture packets | 100000 | Maximum packets per capture |
+| Max capture packets | 100000 | Maximum packets per capture; also the most the Traffic Diagram will draw |
 | Max concurrent captures | 5 | Captures running or finishing up at once, across all users — each holds an SSH connection to a target host plus a local file. Separately, and not configurable: one capture at a time per interface per server, so `eth0` and `eth1` on the same host can run together but a second capture on either is refused |
 | Session duration (hours) | 8 | Login session lifetime |
 | Session idle timeout (minutes) | 60 | Idle window before a session is deleted, independent of the absolute duration above. `0` disables idle expiry |
 | Device trust (days) | 30 | How long a trusted device skips MFA |
 | Rate limit attempts | 5 | Failed login attempts before lockout |
 | Rate limit lockout (minutes) | 15 | Lockout duration after too many failures |
-| Packet list requests per minute | 30 | Per-user cap on `/api/captures/{id}/packets` calls, which spawn tshark |
+| Packet list requests per minute | 30 | Per-user cap on `/api/captures/{id}/packets` and `/diagram-packets` calls, which spawn tshark (a diagram loads with one call) |
 | Capture start requests per minute | 10 | Per-user cap on `/api/captures` (POST), which opens an SSH connection |
 
 ## Sessions

@@ -481,6 +481,93 @@ async def get_packet_list(
     return packets
 
 
+# The Traffic and Sequence diagrams' packets. Their own route rather than the
+# packet list's pages, for two reasons. One pass: the list's offset is a frame
+# number, so a page costs a tshark run over the whole capture regardless, and
+# a 100,000-packet diagram fetched 1,000 at a time was a hundred full passes
+# (and three times the per-minute packet request budget). And a count of what
+# the filter actually matched: the list reports the capture's own total, which
+# made a filtered diagram's cap check measure the wrong thing.
+DIAGRAM_INFO_MAX = 256
+
+
+async def get_diagram_packets(
+    source: PcapSource,
+    cap: int,
+    display_filter: str = "",
+    resolve_names: bool = False,
+    interface_names: dict[int, str] | None = None,
+) -> tuple[list[dict], int]:
+    """Up to `cap` packets matching the filter, and how many matched in all.
+
+    Every match is counted, but only the first `cap` are kept, so memory is
+    bounded by the cap and not by the capture. Over the cap the caller gets
+    the count alone -- a diagram of the first N packets would draw a picture of
+    something other than what was asked for.
+    """
+    cmd = ["tshark", "-r", "-"]
+    cmd += _name_resolution_args(resolve_names)
+    cmd += [
+        "-T", "fields",
+        "-e", "frame.number",
+        "-e", "_ws.col.Source",
+        "-e", "_ws.col.Destination",
+        "-e", "frame.protocols",
+        "-e", "frame.len",
+        "-e", "sll.ifindex",
+        # Last: the one free-text column, so a tab inside it shifts nothing.
+        "-e", "_ws.col.Info",
+        "-E", "separator=\t",
+        "-E", "quote=n",
+        "-E", "occurrence=f",
+    ]
+    if display_filter:
+        _validate_display_filter(display_filter)
+        cmd += ["-Y", display_filter]
+
+    names = interface_names or {}
+    packets: list[dict] = []
+    matched = 0
+    # An Info column can run long; the default 64 KiB line bound is not the
+    # thing that should decide whether a diagram loads.
+    proc, feeder = await spawn_tool(cmd, source, limit=1024 * 1024)
+    # Drained alongside stdout so a chatty stderr can never fill its pipe and
+    # stall the run.
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+        while line := await proc.stdout.readline():
+            parts = line.decode(errors="replace").rstrip("\n").split("\t", 6)
+            if len(parts) < 7 or not parts[0].isdigit():
+                continue
+            matched += 1
+            if matched > cap:
+                continue
+            protocol = parts[3].split(":")[-1] if parts[3] else "?"
+            ifindex = int(parts[5]) if parts[5].isascii() and parts[5].isdigit() else 0
+            packets.append({
+                "number": int(parts[0]),
+                "source": parts[1] or "N/A",
+                "destination": parts[2] or "N/A",
+                "protocol": protocol.upper(),
+                "length": int(parts[4]) if parts[4].isdigit() else 0,
+                "interface": _interface(ifindex, names),
+                "info": parts[6][:DIAGRAM_INFO_MAX],
+            })
+        stderr = await stderr_task
+        await proc.wait()
+    finally:
+        await reap_tool(proc, feeder)
+        if not stderr_task.done():
+            stderr_task.cancel()
+
+    if proc.returncode not in (0, None):
+        logger.warning("tshark stderr: %s", stderr.decode(errors="replace")[:500])
+        if display_filter:
+            raise DisplayFilterError(_filter_rejection(stderr))
+        raise RuntimeError("tshark failed listing diagram packets")
+    return (packets if matched <= cap else []), matched
+
+
 # The kernel's PACKET_* types as tshark prints sll.pkttype under -T fields.
 _SLL_DIRECTION = {"0": "in", "1": "broadcast", "2": "multicast", "3": "other-host", "4": "out"}
 
