@@ -145,8 +145,10 @@ if "/actions/workflows/check.yml/runs?head_sha=" in args:
     sys.stdout.write(f.read_text() if f.exists() else "")
 elif "/contents/.github/workflows/check.yml?ref=" in args:
     sys.stdout.write((D / "check.yml").read_text())
-elif "/commits?sha=" in args:
-    sys.stdout.write((D / "commits").read_text())
+elif "/commits/" in args:
+    sha = args.split("/commits/")[1].split()[0]
+    f = D / "parents" / sha
+    sys.stdout.write(f.read_text() if f.exists() else "")
 elif "/compare/" in args:
     f = D / "compare"
     if not f.exists():
@@ -174,9 +176,9 @@ def _run_check_step(
     """Run the step with the API answering as described.
 
     `runs`/`push_runs` map a SHA to the "<status> <conclusion> <url>" lines the
-    lookup yields; a SHA absent from the mapping has no run. `ancestors` is what
-    the commits endpoint returns, `changed` the compare's filenames -- or None to
-    make compare fail outright.
+    lookup yields; a SHA absent from the mapping has no run. `ancestors` is the
+    first-parent chain below `sha`, `changed` the compare's filenames -- or None
+    to make compare fail outright.
     """
     data = tmp_path / "data"
     (data / "runs").mkdir(parents=True)
@@ -185,7 +187,12 @@ def _run_check_step(
         for run_sha, lines in (mapping or {}).items():
             (data / name / run_sha).write_text(lines, encoding="utf-8")
     (data / "check.yml").write_text(check_yml, encoding="utf-8")
-    (data / "commits").write_text("".join(f"{c}\n" for c in (sha, *ancestors)), encoding="utf-8")
+    # A first-parent chain: sha -> ancestors[0] -> ancestors[1] -> ... The last
+    # one has no parent file, which ends the walk the way a root commit does.
+    (data / "parents").mkdir()
+    chain = (sha, *ancestors)
+    for child, parent in zip(chain, chain[1:]):
+        (data / "parents" / child).write_text(f"{parent}\n", encoding="utf-8")
     if changed is not None:
         (data / "compare").write_text("".join(f"{c}\n" for c in changed), encoding="utf-8")
 
@@ -227,7 +234,7 @@ def test_a_passing_run_on_the_tagged_commit_passes(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "Check passed for tagged." in result.stdout
     # The fallback is not consulted when the commit has a run of its own.
-    assert "/commits?sha=" not in result.calls
+    assert "/commits/" not in result.calls
 
 
 def test_a_failed_run_on_the_tagged_commit_is_refused(tmp_path):
@@ -237,7 +244,7 @@ def test_a_failed_run_on_the_tagged_commit_is_refused(tmp_path):
     )
     assert result.returncode == 1
     assert "did not pass" in result.stdout
-    assert "/commits?sha=" not in result.calls
+    assert "/commits/" not in result.calls
 
 
 def test_a_docs_only_commit_above_a_tested_one_passes(tmp_path):
@@ -288,7 +295,7 @@ def test_an_ancestor_tested_only_by_a_pull_request_run_is_refused(tmp_path):
         tmp_path, runs={"parent": PASSED}, ancestors=("parent",), changed=("docs/x.md",)
     )
     assert result.returncode == 1
-    assert "no commit among the 50 before it has a passing push run" in result.stdout
+    assert "none of its 20 nearest first-parent ancestors has a passing push run" in result.stdout
 
 
 def test_no_tested_ancestor_at_all_is_refused(tmp_path):
@@ -377,3 +384,43 @@ def test_check_yml_never_cancels_a_run_on_the_default_branch():
     """A cancelled run is not a passing one, so cancelling on main would strand
     a merge commit as untaggable until someone re-ran Check by hand."""
     assert "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}" in REAL_CHECK_YML
+
+
+def test_the_walk_asks_for_first_parents_not_a_flat_commit_list(tmp_path):
+    """/commits?sha= follows every parent in date order, so a merged PR's own
+    commits landed in the window. Harmless while check.yml ran on every branch
+    -- those commits had push runs. Once its push trigger narrowed to main they
+    stopped having them, and a long enough PR could fill the window with
+    commits that can never match, refusing a release for want of looking one
+    more step back along the default branch."""
+    result = _run_check_step(
+        tmp_path,
+        push_runs={"parent": PASSED},
+        ancestors=("parent",),
+        changed=("docs/x.md",),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "/commits?sha=" not in result.calls, "still pulling the date-ordered list"
+    assert "/commits/tagged" in result.calls
+
+
+def test_the_first_parent_walk_is_bounded(tmp_path):
+    """A tested commit further back than the bound refuses rather than walking
+    the whole history one API call at a time."""
+    chain = tuple(f"c{i}" for i in range(25))
+    result = _run_check_step(
+        tmp_path,
+        push_runs={chain[-1]: PASSED},
+        ancestors=chain,
+        changed=("docs/x.md",),
+    )
+    assert result.returncode == 1
+    assert "none of its 20 nearest first-parent ancestors" in result.stdout
+
+
+def test_a_root_commit_ends_the_walk_instead_of_looping(tmp_path):
+    """`// empty` on parents[0], so a commit with no parent stops the walk
+    rather than becoming the string "null" and 404ing on the next request."""
+    result = _run_check_step(tmp_path, ancestors=())
+    assert result.returncode == 1
+    assert "Nothing establishes that this tree was ever tested" in result.stdout

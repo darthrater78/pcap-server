@@ -162,7 +162,7 @@ jobs:
           # a real failure and is handled below, not explained away by an
           # ancestor.
           accept_tested_ancestor_or_die() {
-            local patterns pattern base candidate ancestors changed file prefix matched
+            local patterns pattern base candidate depth changed file prefix matched
 
             # Read the ignore list out of check.yml at the tagged commit rather
             # than restating it here, so the two cannot drift apart. The first
@@ -202,24 +202,38 @@ jobs:
               esac
             done <<< "$patterns"
 
-            # Commits reachable from the tagged one, newest first. The tagged
-            # commit heads that list and is dropped -- it is the one already
-            # known to have no run. 50 is far more than the handful of docs
-            # commits that can realistically sit on top of a tested one, and
-            # bounds this to a single page.
-            ancestors="$(gh api "repos/${REPO}/commits?sha=${SHA}&per_page=50" --jq '.[].sha' | tail -n +2)"
-
+            # FIRST parents only, one commit at a time.
+            #
+            # This used to read /commits?sha=, which follows every parent in
+            # date order -- so a merged PR's own commits were interleaved with
+            # the default branch's. That was harmless while check.yml ran on
+            # every branch, because those commits had push runs of their own.
+            # It stopped being harmless when check.yml narrowed its push
+            # trigger to main: a PR long enough to fill the window would leave
+            # this refusing a release for want of looking one commit further
+            # back along main, at a commit that did have a run.
+            #
+            # First-parent from a merge commit is the previous head of the
+            # default branch, so 20 steps is 20 of ITS commits, not 20 of
+            # anyone's. The realistic depth is one -- a docs-only merge sitting
+            # directly on a tested one.
             base=""
-            while read -r candidate; do
-              [ -n "$candidate" ] || continue
+            candidate="${SHA}"
+            depth=0
+            while [ "$depth" -lt 20 ]; do
+              depth=$(( depth + 1 ))
+              # // empty rather than a null, so a root commit ends the walk
+              # instead of turning into the string "null" and 404ing next time.
+              candidate="$(gh api "repos/${REPO}/commits/${candidate}" --jq '.parents[0].sha // empty')"
+              [ -n "$candidate" ] || break
               if push_runs_for "$candidate" | passed; then
                 base="$candidate"
                 break
               fi
-            done <<< "$ancestors"
+            done
 
             if [ -z "$base" ]; then
-              echo "::error::Check has no run for ${SHA}, and no commit among the 50 before it has a passing push run either. Nothing establishes that this tree was ever tested. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
+              echo "::error::Check has no run for ${SHA}, and none of its 20 nearest first-parent ancestors has a passing push run either. Nothing establishes that this tree was ever tested. Run Check by hand against ${SHA} (Actions -> Check -> Run workflow) and re-run this release."
               exit 1
             fi
 

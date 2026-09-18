@@ -127,6 +127,28 @@ session on commits containing no code.
               workflows. The 4 new workflow-shape tests were checked against
               8c2e1bf's check.yml and 3 of them fail there, so they
               discriminate.
+              FIFTH ITEM, on the user's "do the first-parent fix": the ancestor
+              search walked /commits?sha=, which follows EVERY parent in date
+              order. That was harmless while check.yml ran on all branches --
+              a merged PR's own commits had push runs of their own. Narrowing
+              the push trigger to main (item 3, same session) made it a defect:
+              those commits stopped having push runs, so a long enough PR could
+              fill the 50-commit window with commits that can never match, and
+              the release would refuse for want of looking one step further
+              back along main. Self-inflicted, caught before it shipped.
+              Now walks parents[0] one commit at a time, bounded at 20 -- and
+              20 first-parent steps is 20 of main's OWN commits, where the
+              realistic depth is one. `// empty` so a root commit ends the walk
+              rather than becoming the string "null".
+              3 new tests (first-parent not a flat list, the bound, the root
+              commit). 29 pass. shellcheck caught a stale `local ancestors` on
+              the way through.
+              Scope: grepped -- tests/test_release_workflow.py is the only test
+              that reads release.yml, so those 29 are the complete affected set
+              on this tree. The full suite (1594 passed) ran on the tree before
+              this fix; the PR's own Check run covers it after, since tests/ is
+              deliberately NOT in the new paths-ignore.
+
 🔒 SECURITY   ✅ 0 Critical, 0 High. Triggers and concurrency add no execution
               surface -- they only narrow which pushes start a run; no new
               action, no new SHA, no permissions change anywhere.
