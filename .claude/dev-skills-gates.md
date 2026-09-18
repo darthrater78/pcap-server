@@ -13,12 +13,10 @@ Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
               note, correctly left alone. No other hardcoded refs found (grep).
               repo/release-notes links unchanged (REPO_URL-derived, already
               correct pattern). Previous tag v1.1.0-beta.3 verified on remote.
-🔨 BUILD      ⬜ not re-owed by this commit -- no source/test files touched,
-              only APP_VERSION string + compose image tag + docs. Diagram
-              browser tests were 41/41 on the code itself (prior entry).
-              backend/main.py re-parsed clean (ast.parse) after the version
-              edit. Full check.sh NOT re-run (user: "we can do that after";
-              no code changed since).
+🔨 BUILD      ✅ full suite via scripts/check.sh on the tagged tree (75ee7f7):
+              1672 passed, 0 failed, 0 skipped, 366.86s, real
+              tshark/capinfos/chromium/docker. The prior sanitizer flake did
+              not reproduce this run.
 🔒 SECURITY   ✅ carried over -- 0 Critical/High on the code diff (prior
               entry); this commit adds no code, only strings/docs.
 📄 DOCS       ✅ docs/viewer.md Traffic/Sequence Diagram section rewritten:
