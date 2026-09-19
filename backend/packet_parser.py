@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from array import array
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -472,6 +473,7 @@ async def get_packet_list(
     interface_names: dict[int, str] | None = None,
     extra_fields: list[str] | None = None,
     subnet_map: list[dict] | None = None,
+    copies: InterfaceCopies | None = None,
 ) -> list[PacketSummary]:
     flags = set(view_flags or [])
     extra = validate_column_fields(list(extra_fields or []))
@@ -574,6 +576,9 @@ async def get_packet_list(
         iface, direction = _place_packet(
             ifindex, parts[7], interface_names or {}, parts[14], parts[15], src_addr, dst_addr, smap,
         )
+        # An unchanged copy reads as its own link would show it, not as the
+        # retransmission tshark's whole-file analysis took it for.
+        link_info = copies.info_on_link(num, parts[19]) if copies else None
         packets.append(PacketSummary(
             number=num,
             timestamp=parts[1] if show_time else "",
@@ -581,7 +586,7 @@ async def get_packet_list(
             destination=parts[3] or "N/A",
             protocol=protocol.upper(),
             length=int(parts[5]) if parts[5] else 0,
-            info=parts[19],
+            info=parts[19] if link_info is None else link_info,
             fragment=_is_fragment(*parts[16:19]),
             src_mac=_mac(parts, 20, 22) if show_mac else "",
             dst_mac=_mac(parts, 21) if show_mac else "",
@@ -592,10 +597,257 @@ async def get_packet_list(
             direction=direction,
             tcp_stream=int(parts[8]) if parts[8].isdigit() else None,
             udp_stream=int(parts[9]) if parts[9].isdigit() else None,
+            copy_of=copies.original(num) if copies else 0,
+            copy_nat=copies.translated(num) if copies else False,
+            copy_link_view=link_info is not None,
             values=values,
         ))
 
     return packets
+
+
+# --- one packet, seen on more than one interface ------------------------------
+#
+# A capture on several interfaces -- or on "any" -- sees a routed or bridged
+# packet once per link it crosses: in on eth0, out on eth1. tshark's TCP
+# analysis has no notion of interfaces, so it reads the second sighting as a
+# retransmission (a data segment) or a duplicate ACK (a bare ACK), and a
+# healthy routed conversation came out of the Traffic Diagram as half
+# problems. Measured on a hand-built SLL2 capture of a forwarded HTTP fetch:
+# every forwarded frame was flagged.
+#
+# A sighting is a copy when an IP packet identical in everything a router
+# leaves alone -- addresses, IP ID, length, ports, TCP sequence, ack, flags,
+# transport checksum -- was seen on a DIFFERENT interface moments before. The
+# interface set is kept per instance: a sighting on an interface that already
+# saw this instance starts a new one, which is what a genuine retransmission
+# or repeated duplicate ACK is (IPv6 has no IP ID to tell them apart, and
+# needs none this way).
+#
+# NAT rewrites one address (and the checksums with it), so a NATed hop is
+# matched separately: IPv4 only, by IP ID (which NAT keeps), length, protocol
+# and TCP sequence, ack and flags, with the untranslated address the same on
+# both. tshark reads each side as a conversation of its own, so its flags on
+# a translated copy are right for that side -- but the same duplicate ACK is
+# not two duplicate ACKs. A zero IP ID says nothing on its own, so outside
+# TCP it is never matched.
+_COPY_WINDOW_SECONDS = 1.0
+_COPY_PRUNE_EVERY = 50_000
+_COPY_FIELDS = [
+    "-e", "frame.number", "-e", "frame.time_epoch",
+    "-e", "sll.ifindex", "-e", "frame.interface_id",
+    *_ADDRESS_FIELDS,
+    "-e", "ip.id", "-e", "ip.len", "-e", "ipv6.plen", "-e", "ip.proto", "-e", "ipv6.nxt",
+    "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "tcp.seq_raw", "-e", "tcp.ack_raw",
+    "-e", "tcp.flags", "-e", "tcp.checksum",
+    "-e", "udp.srcport", "-e", "udp.dstport", "-e", "udp.checksum",
+    "-e", "icmp.checksum", "-e", "icmpv6.checksum",
+]
+
+
+_TRANSLATED = 1 << 31
+
+
+class InterfaceCopies:
+    """Which frames of a capture are second sightings, and of which frame.
+
+    One unsigned int per frame (0: not a copy; the top bit marks a copy whose
+    addresses NAT rewrote), so a million-frame capture is 4 MB, whatever
+    display filter a caller later reads it through.
+
+    And, for an unchanged copy, what tshark says about it on its own link
+    (find_interface_copies): `link_view` marks the frames that were read that
+    way, `link_info` holds the Info of those it flagged.
+    """
+
+    __slots__ = ("_of", "count", "link_view", "link_info")
+
+    def __init__(self, originals: "array", count: int) -> None:
+        self._of = originals
+        self.count = count
+        self.link_view = bytearray()
+        self.link_info: dict[int, str] = {}
+
+    def info_on_link(self, number: int, combined: str) -> str | None:
+        """An unchanged copy's Info as a capture of its own link reads it, or
+        None when that was not worked out (the combined Info then stands)."""
+        if number >= len(self.link_view) or not self.link_view[number]:
+            return None
+        return self.link_info.get(number) or _ANALYSIS_PREFIX.sub("", combined)
+
+    def _raw(self, number: int) -> int:
+        return self._of[number] if 0 <= number < len(self._of) else 0
+
+    def original(self, number: int) -> int:
+        return self._raw(number) & ~_TRANSLATED
+
+    def translated(self, number: int) -> bool:
+        return bool(self._raw(number) & _TRANSLATED)
+
+
+# tshark's own analysis notes at the start of Info: "[TCP Retransmission] ".
+_ANALYSIS_PREFIX = re.compile(r"^(?:\[TCP [^\]]*\] )+")
+
+# Links read on their own for their copies' sake; past this many the copies
+# fall back to their first sighting's verdict.
+_LINK_VIEWS_MAX = 8
+
+
+class _LinkSource(PcapSource):
+    """One link's packets of a capture, as a capture of their own."""
+
+    def __init__(self, source: PcapSource, display_filter: str) -> None:
+        self._source = source
+        self._filter = display_filter
+
+    async def chunks(self):
+        async for chunk in stream_filtered_pcap(self._source, self._filter):
+            yield chunk
+
+    async def size(self) -> int:
+        raise NotImplementedError
+
+
+async def _read_link_views(
+    source: PcapSource, copies: InterfaceCopies, frames: dict[str, "array"], links: set[str],
+) -> None:
+    """What tshark says about each unchanged copy on its own link.
+
+    Its analysis of the whole file is wrong about them (see above); a capture
+    of just that link is what it would have had to go on, and on the
+    downstream link it is the only thing that sees a segment the box dropped
+    ("previous segment not captured"). One filtered pass per link that has
+    copies; the link's k-th packet is the k-th frame the copy pass saw on it.
+    """
+    for link in sorted(links)[:_LINK_VIEWS_MAX]:
+        kind, value = link[0], int(link[1:])
+        link_filter = f"sll.ifindex == {value}" if kind == "i" else f"frame.interface_id == {value}"
+        numbers = frames[link]
+        cmd = ["tshark", "-r", "-", "-n", "-T", "fields", "-e", "_ws.col.Info",
+               "-E", "separator=\t", "-E", "quote=n"]
+        proc, feeder = await spawn_tool(cmd, _LinkSource(source, link_filter), limit=1024 * 1024)
+        stderr_task = asyncio.create_task(proc.stderr.read())
+        try:
+            k = 0
+            while (line := await proc.stdout.readline()) and k < len(numbers):
+                number = numbers[k]
+                k += 1
+                raw = copies._raw(number)
+                if not raw or raw & _TRANSLATED:
+                    continue
+                if number >= len(copies.link_view):
+                    copies.link_view.extend(bytes(number + 1 - len(copies.link_view)))
+                copies.link_view[number] = 1
+                info = line.decode(errors="replace").rstrip("\n")
+                if info.startswith("[TCP "):
+                    copies.link_info[number] = info[:DIAGRAM_INFO_MAX]
+            await stderr_task
+            await proc.wait()
+        finally:
+            await reap_tool(proc, feeder)
+            if not stderr_task.done():
+                stderr_task.cancel()
+
+
+async def find_interface_copies(source: PcapSource) -> InterfaceCopies:
+    """One pass over the whole capture, never through a display filter: a
+    filter that keeps the copy and drops the first sighting (`sll.ifindex ==
+    3`, `tcp.analysis.retransmission`) must still see it marked a copy.
+
+    Reassembly is off: each frame is judged by its own headers, and the pass
+    costs less. Then each link that carries copies is read on its own
+    (_read_link_views).
+    """
+    cmd = [
+        "tshark", "-r", "-", "-n",
+        "-o", "tcp.analyze_sequence_numbers:FALSE",
+        "-o", "tcp.desegment_tcp_streams:FALSE",
+        "-o", "ip.defragment:FALSE",
+        "-o", "ipv6.defragment:FALSE",
+        "-T", "fields", *_COPY_FIELDS,
+        "-E", "separator=\t", "-E", "quote=n", "-E", "occurrence=f",
+    ]
+    originals = array("I", [0])
+    count = 0
+    # key -> [last seen, first frame of this instance, interfaces it was seen on]
+    seen: dict[tuple, list] = {}
+    # The same for NAT, keyed without addresses; the instance also keeps them.
+    nat_seen: dict[tuple, list] = {}
+    # Every frame's number, per link, in order: how a link's own capture is
+    # lined up with this one afterwards.
+    frames: dict[str, array] = {}
+    copy_links: set[str] = set()
+    lines = 0
+    proc, feeder = await spawn_tool(cmd, source)
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+        while line := await proc.stdout.readline():
+            parts = line.decode(errors="replace").rstrip("\n").split("\t")
+            if len(parts) < len(_COPY_FIELDS) // 2 or not parts[0].isdigit():
+                continue
+            number = int(parts[0])
+            if number >= 2**32:
+                continue
+            while len(originals) <= number:
+                originals.append(0)
+            iface = f"i{parts[2]}" if parts[2].isdigit() else f"n{parts[3] if parts[3].isdigit() else 0}"
+            frames.setdefault(iface, array("I")).append(number)
+            src, dst = _address_pair(*parts[4:8])
+            if not src:
+                continue
+            try:
+                when = float(parts[1])
+            except ValueError:
+                continue
+            key = (src, dst, *parts[8:])
+            state = seen.get(key)
+            # ip.id, ip.len, ip.proto, then tcp seq, ack and flags. ip.src
+            # set means IPv4 (occurrence=f: the outer header of a tunnel).
+            # A zero IP ID (Linux sends SYN-ACKs so) is matched only on TCP,
+            # whose sequence and ack numbers say enough on their own.
+            nat_key = (parts[8], parts[9], parts[11], *parts[15:18]) \
+                if parts[4] and parts[8] and (int(parts[8], 0) or parts[15]) else None
+            nat = nat_seen.get(nat_key) if nat_key else None
+            if state and when - state[0] <= _COPY_WINDOW_SECONDS and iface not in state[2]:
+                originals[number] = state[1]
+                count += 1
+                state[0] = when
+                state[2].add(iface)
+                copy_links.add(iface)
+            elif (nat and when - nat[0] <= _COPY_WINDOW_SECONDS and iface not in nat[2]
+                  and (src, dst) != (nat[3], nat[4]) and (src == nat[3] or dst == nat[4])):
+                originals[number] = nat[1] | _TRANSLATED
+                count += 1
+                nat[0] = when
+                nat[2].add(iface)
+            else:
+                seen[key] = [when, number, {iface}]
+                if nat_key:
+                    nat_seen[nat_key] = [when, number, {iface}, src, dst]
+            lines += 1
+            if lines % _COPY_PRUNE_EVERY == 0:
+                seen = {k: v for k, v in seen.items() if when - v[0] <= _COPY_WINDOW_SECONDS}
+                nat_seen = {k: v for k, v in nat_seen.items() if when - v[0] <= _COPY_WINDOW_SECONDS}
+        stderr = await stderr_task
+        await proc.wait()
+    finally:
+        await reap_tool(proc, feeder)
+        if not stderr_task.done():
+            stderr_task.cancel()
+    if proc.returncode not in (0, None):
+        logger.warning("tshark stderr: %s", stderr.decode(errors="replace")[:500])
+        raise RuntimeError("tshark failed reading the capture for repeat sightings")
+    copies = InterfaceCopies(originals, count)
+    if copy_links:
+        try:
+            await _read_link_views(source, copies, frames, copy_links)
+        except Exception:
+            # The marks stand without it; copies then keep their first
+            # sighting's verdict.
+            logger.warning("could not read links on their own for repeat sightings", exc_info=True)
+            copies.link_view = bytearray()
+            copies.link_info = {}
+    return copies
 
 
 # The Traffic and Sequence diagrams' packets. Their own route rather than the
@@ -615,6 +867,7 @@ async def get_diagram_packets(
     resolve_names: bool = False,
     interface_names: dict[int, str] | None = None,
     subnet_map: list[dict] | None = None,
+    copies: InterfaceCopies | None = None,
 ) -> tuple[list[dict], int, dict[str, str]]:
     """Up to `cap` packets matching the filter, how many matched in all, and names.
 
@@ -686,8 +939,10 @@ async def get_diagram_packets(
             if resolve_names:
                 _note_name(names, src_addr, src)
                 _note_name(names, dst_addr, dst)
+            number = int(parts[0])
+            link_info = copies.info_on_link(number, parts[16]) if copies else None
             packets.append({
-                "number": int(parts[0]),
+                "number": number,
                 "source": src_addr or src,
                 "destination": dst_addr or dst,
                 "protocol": protocol.upper(),
@@ -695,7 +950,10 @@ async def get_diagram_packets(
                 "interface": iface,
                 "direction": direction,
                 "fragment": _is_fragment(*parts[13:16]),
-                "info": parts[16][:DIAGRAM_INFO_MAX],
+                "copy_of": copies.original(number) if copies else 0,
+                "copy_nat": copies.translated(number) if copies else False,
+                "copy_link_view": link_info is not None,
+                "info": (parts[16] if link_info is None else link_info)[:DIAGRAM_INFO_MAX],
             })
         stderr = await stderr_task
         await proc.wait()
@@ -806,6 +1064,7 @@ async def get_protocol_hierarchy(
 
 async def get_conversations(
     source: PcapSource, display_filter: str = "", resolve_names: bool = False,
+    copies: InterfaceCopies | None = None,
 ) -> tuple[list[Conversation], list[ConversationEndpoint]]:
     """Wireshark's Conversations and Endpoints tabs, from one tshark pass.
 
@@ -831,10 +1090,15 @@ async def get_conversations(
     by name, as this used to, produced `ip.addr == "ec2-...amazonaws.com"`,
     which tshark refuses. get_diagram_packets keys its packets the same way,
     so the diagram's packet-to-node lookup still matches by string.
+
+    A packet seen unchanged on two interfaces (`copies`) is one packet
+    between its two hosts, so it counts once -- unless the filter dropped its
+    first sighting, in which case the copy is the only one there is. A NATed
+    copy is between a different pair, and counts there.
     """
     cmd = ["tshark", "-r", "-"]
     cmd += _name_resolution_args(resolve_names)
-    cmd += ["-T", "fields", *_ADDRESS_FIELDS, "-e", "frame.len"]
+    cmd += ["-T", "fields", *_ADDRESS_FIELDS, "-e", "frame.len", "-e", "frame.number"]
     if resolve_names:
         cmd += ["-e", "ip.src_host", "-e", "ip.dst_host", "-e", "ipv6.src_host", "-e", "ipv6.dst_host"]
     cmd += ["-E", "separator=\t", "-E", "occurrence=f"]
@@ -855,16 +1119,29 @@ async def get_conversations(
     pairs: dict[tuple[str, str], dict[str, int]] = {}
     endpoints: dict[str, dict[str, int]] = {}
     names: dict[str, str] = {}
+    # Frames counted so far, one byte each -- only kept when there are
+    # copies to decide about.
+    counted = bytearray()
     for line in stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
-        if len(parts) < 5:
+        if len(parts) < 6:
             continue
         src, dst = _address_pair(*parts[:4])
         length = int(parts[4]) if parts[4] else 0
         if not src or not dst:
             continue
-        if resolve_names and len(parts) >= 9:
-            host_src, host_dst = _address_pair(*parts[5:9])
+        if copies and copies.count and parts[5].isdigit():
+            number = int(parts[5])
+            original = copies.original(number)
+            # A NATed copy is a pair of addresses of its own on the wire, and
+            # stays; only an exact copy is the same packet counted twice.
+            if original and not copies.translated(number) and original < len(counted) and counted[original]:
+                continue
+            if number >= len(counted):
+                counted.extend(bytes(number + 1 - len(counted)))
+            counted[number] = 1
+        if resolve_names and len(parts) >= 10:
+            host_src, host_dst = _address_pair(*parts[6:10])
             _note_name(names, src, host_src)
             _note_name(names, dst, host_dst)
 

@@ -45,8 +45,8 @@ def _pseudo(src: bytes, dst: bytes, proto: int, length: int) -> bytes:
 
 
 def tcp(src: bytes, dst: bytes, sport: int, dport: int, payload: bytes = b"",
-        seq: int = 1, flags: int = 0x18) -> bytes:
-    segment = struct.pack("!HHIIBBHHH", sport, dport, seq, 1, 0x50, flags, 65535, 0, 0) + payload
+        seq: int = 1, flags: int = 0x18, ack: int = 1) -> bytes:
+    segment = struct.pack("!HHIIBBHHH", sport, dport, seq, ack, 0x50, flags, 65535, 0, 0) + payload
     return _with_checksum(segment, 16, _pseudo(src, dst, 6, len(segment)))
 
 
@@ -69,13 +69,13 @@ def icmpv6(src: bytes, dst: bytes, kind: int, code: int, body: bytes) -> bytes:
 
 
 def ipv4(src: bytes, dst: bytes, proto: int, payload: bytes, *,
-         frag: int = 0, ident: int = 1) -> bytes:
-    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), ident, frag, 64, proto, 0, src, dst)
+         frag: int = 0, ident: int = 1, ttl: int = 64) -> bytes:
+    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), ident, frag, ttl, proto, 0, src, dst)
     return _with_checksum(header, 10, b"") + payload
 
 
-def ipv6(src: bytes, dst: bytes, next_header: int, payload: bytes) -> bytes:
-    return struct.pack("!IHBB16s16s", 0x60000000, len(payload), next_header, 64, src, dst) + payload
+def ipv6(src: bytes, dst: bytes, next_header: int, payload: bytes, hop_limit: int = 64) -> bytes:
+    return struct.pack("!IHBB16s16s", 0x60000000, len(payload), next_header, hop_limit, src, dst) + payload
 
 
 def ethernet(dst: bytes, src: bytes, ethertype: int, payload: bytes, vlan: int | None = None) -> bytes:
@@ -83,8 +83,8 @@ def ethernet(dst: bytes, src: bytes, ethertype: int, payload: bytes, vlan: int |
     return dst + src + tag + struct.pack("!H", ethertype) + payload
 
 
-def sll2(src_mac: bytes, ethertype: int, payload: bytes) -> bytes:
-    return struct.pack("!HHiHBB8s", ethertype, 0, 2, 1, 0, 6, src_mac + b"\x00\x00") + payload
+def sll2(src_mac: bytes, ethertype: int, payload: bytes, ifindex: int = 2, pkttype: int = 0) -> bytes:
+    return struct.pack("!HHiHBB8s", ethertype, 0, ifindex, 1, pkttype, 6, src_mac + b"\x00\x00") + payload
 
 
 def sll(src_mac: bytes, ethertype: int, payload: bytes) -> bytes:
@@ -92,11 +92,14 @@ def sll(src_mac: bytes, ethertype: int, payload: bytes) -> bytes:
 
 
 def pcap(frames: list[bytes], linktype: int = 1, snaplen: int = 65535,
-         orig_lengths: list[int] | None = None) -> bytes:
+         orig_lengths: list[int] | None = None, times: list[float] | None = None) -> bytes:
+    """One record per frame, a second apart unless `times` (epoch seconds) says otherwise."""
     out = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, snaplen, linktype)
     for i, frame in enumerate(frames):
         orig = orig_lengths[i] if orig_lengths else len(frame)
-        out += struct.pack("<IIII", i, 0, len(frame), orig) + frame
+        when = times[i] if times else i
+        sec = int(when)
+        out += struct.pack("<IIII", sec, round((when - sec) * 1e6), len(frame), orig) + frame
     return out
 
 

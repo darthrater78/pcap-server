@@ -125,6 +125,23 @@ def ifindex_clause(indexes: list[int], bpf_filter: str) -> str:
     return f"{clause} and ({rest})" if rest else clause
 
 
+def _covered(interface: str, names: frozenset[str] | None) -> frozenset[str] | None:
+    """The links a capture reads: None for every one of them (plain "any")."""
+    if names:
+        return names
+    return None if interface == ANY_INTERFACE else frozenset((interface,))
+
+
+def _overlap(a: frozenset[str] | None, b: frozenset[str] | None) -> frozenset[str] | None:
+    """The links two captures would both read, or None when that is all of
+    them. Empty when they do not overlap."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a & b
+
+
 def server_label(server: ServerInfo) -> str:
     """A human-readable stamp of where a capture ran, frozen at start time."""
     endpoint = f"{server.username}@{server.hostname}"
@@ -207,6 +224,10 @@ class CaptureManager:
         # so closing one closes both.
         self._processes: dict[str, object] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # The interfaces a live multi-interface capture reads. Its record says
+        # "any" (that is what tcpdump runs on), which would otherwise read as
+        # every link. In memory only: a capture is never live across a restart.
+        self._interface_sets: dict[str, frozenset[str]] = {}
         self._restore()
 
     def _restore(self) -> None:
@@ -317,7 +338,9 @@ class CaptureManager:
         if missing:
             raise UnknownInterface(f"not an interface on this server: {', '.join(missing)}")
         bpf = ifindex_clause([by_name[n] for n in req.interfaces], req.bpf_filter)
-        return req.model_copy(update={"interface": ANY_INTERFACE, "interfaces": [], "bpf_filter": bpf})
+        # `interfaces` stays on the request so start() knows which links the
+        # "any" capture really reads; build_command_args never looks at it.
+        return req.model_copy(update={"interface": ANY_INTERFACE, "bpf_filter": bpf})
 
     async def start(self, req: CaptureRequest, server: ServerInfo, user_id: str) -> CaptureInfo:
         # Before anything else, and in particular before tcpdump runs on the
@@ -344,23 +367,29 @@ class CaptureManager:
         # host stay allowed: reading eth0 and eth1 at once is a real thing to
         # want, and they do not overlap.
         #
+        # Compared by the links each capture covers, not by the interface
+        # string: a capture of eth0+eth1 runs on "any", and by name alone it
+        # clashed with one of eth2+eth3 while letting a second capture of eth0
+        # through. Plain "any" covers every link, so it overlaps everything.
+        #
         # Deliberately in the same synchronous stretch as the limit check above
         # and the _captures insert below. Nothing awaits between them, so two
         # simultaneous requests cannot both pass this and then both register;
         # an await anywhere in here would open exactly that window.
-        busy = next(
-            (
-                c for c in self._captures.values()
-                if c.status in _ACTIVE_STATUSES
-                and c.server_id == server.id
-                and c.interface == req.interface
-            ),
-            None,
-        )
-        if busy:
-            held = busy.name or busy.id
+        wanted = _covered(req.interface, frozenset(req.interfaces) or None)
+        for c in self._captures.values():
+            if c.status not in _ACTIVE_STATUSES or c.server_id != server.id:
+                continue
+            theirs = _covered(c.interface, self._interface_sets.get(c.id))
+            shared = _overlap(wanted, theirs)
+            if shared is not None and not shared:
+                continue
+            held = c.name or c.id
+            links = ", ".join(sorted(shared)) if shared else ANY_INTERFACE
+            if theirs is None and wanted is not None:
+                links += ' (that capture is on "any", which reads every interface)'
             raise InterfaceAlreadyCapturing(
-                f"a capture is already running on {req.interface} on this server "
+                f"a capture is already running on {links} on this server "
                 f"({held}) -- stop it first, or capture a different interface"
             )
 
@@ -409,6 +438,8 @@ class CaptureManager:
             local_path=str(local_path),
         )
         self._captures[capture_id] = info
+        if req.interfaces:
+            self._interface_sets[capture_id] = frozenset(req.interfaces)
         self._persist(info)
 
         # From here the capture counts against max_concurrent_captures. Only
@@ -769,6 +800,7 @@ class CaptureManager:
             await process.close()
 
         self._db.delete_capture(capture_id)
+        self._interface_sets.pop(capture_id, None)
         info = self._captures.pop(capture_id, None)
         if info and info.local_path:
             path = Path(info.local_path)
@@ -867,6 +899,7 @@ class CaptureManager:
                 await capture.close()
             self._persist(info)
             self._tasks.pop(capture_id, None)
+            self._interface_sets.pop(capture_id, None)
 
     async def _record_interface_names(self, info: CaptureInfo, server: ServerInfo) -> None:
         """Merge the host's current interface table into the capture's.

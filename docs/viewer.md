@@ -111,6 +111,38 @@ server that has not been checked, or has an older libpcap, the list is
 disabled and says why. Ticking just one is the same as picking it from the
 list.
 
+`any` cannot put an interface into promiscuous mode, so a capture on several
+interfaces (or on `any`) sees only what the host itself sends, receives,
+routes or bridges. For a mirror (SPAN) port, capture that one interface on its
+own.
+
+**The same packet on two interfaces.** On a box that routes or bridges, a
+capture of both sides sees each forwarded packet twice: in on one interface,
+out on the other. tshark's TCP analysis knows nothing of interfaces, so it
+calls the second sighting a retransmission (data) or a duplicate ACK (a bare
+ACK). pcap-server finds these repeat sightings — same addresses, IP ID,
+length, ports, TCP sequence, ack, flags and checksum, on a different
+interface within a second — and marks them in the packet list (**again: #N**,
+muted unless its own link shows a problem, below). Through NAT the addresses
+change, so it matches on IP ID, length and TCP sequence and ack with the
+untranslated address the same (**NAT of #N**; IPv4 only, and outside TCP only
+with a non-zero IP ID). NAT copies keep tshark's flags, which hold for that
+side, because tshark treats each side as its own conversation.
+
+Each link that carries unchanged copies is also read on its own, the way a
+capture of just that link would be, and a copy's Info is what tshark says there.
+On the link a packet leaves by, that is the only place a segment the box
+dropped shows up: the next one reads *previous segment not captured*.
+
+The Traffic and Sequence Diagrams draw and count each packet once. Problems
+count distinct events. A duplicate ACK seen arriving and leaving is one; a
+drop only the outgoing link shows is one of its own. Conversations count an
+unchanged copy once, and a NATed copy under its own pair of addresses. Pick an
+interface in the Traffic Diagram to see everything that crossed it, as that
+link saw it. The *Seen on 2+ interfaces* row in the stats pane says how many
+repeats there were. Up to 8 links are read on their own; past that, a copy
+takes its first sighting's verdict.
+
 **The name does not survive a download.** The mapping lives only in
 pcap-server's own database; the `.pcap` file itself — classic pcap, the same
 format tcpdump always wrote — has nowhere to carry it. Opened elsewhere, a

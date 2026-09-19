@@ -203,12 +203,20 @@ class RemoteCapture:
     path including cancellation.
     """
 
-    __slots__ = ("process", "_conn", "_closed")
+    __slots__ = ("process", "_conn", "_closed", "_remote_path", "_use_sudo")
 
-    def __init__(self, process: asyncssh.SSHClientProcess, conn: asyncssh.SSHClientConnection) -> None:
+    def __init__(
+        self,
+        process: asyncssh.SSHClientProcess,
+        conn: asyncssh.SSHClientConnection,
+        remote_path: str = "",
+        use_sudo: bool = False,
+    ) -> None:
         self.process = process
         self._conn = conn
         self._closed = False
+        self._remote_path = remote_path
+        self._use_sudo = use_sudo
 
     @property
     def exit_status(self):
@@ -227,6 +235,20 @@ class RemoteCapture:
     def kill(self) -> None:
         self.process.kill()
 
+    async def signal_on_target(self, sig: str) -> None:
+        """Signal this capture's processes by a command run on the target.
+
+        The SSH "signal" request is optional in the protocol and often not
+        honoured: OpenSSH refuses it for a root login ("session signalling
+        requires privilege separation" -- reproduced against an Alpine
+        target), and Dropbear ignores it. Stop then did nothing, and the
+        capture ran on to its full duration. The command matches the
+        capture's own file name, which is unique to it.
+        """
+        cmd = kill_capture_command(self._remote_path, sig, self._use_sudo)
+        if cmd:
+            await self._conn.run(cmd, check=False, timeout=10)
+
     async def remove_remote_file(self, remote_path: str) -> None:
         """Delete this capture's file on the target, over its own connection.
 
@@ -238,7 +260,7 @@ class RemoteCapture:
         host that is already authenticated, and it has to happen before
         close(): afterwards there is nothing left to run it on.
         """
-        await self._conn.run(f"rm -f {_shell_quote(remote_path)}", check=True, timeout=10)
+        await _remove_capture_file(self._conn, remote_path, self._use_sudo)
 
     async def close(self) -> None:
         """Idempotent: safe to call from the monitor, from delete, and at shutdown."""
@@ -607,7 +629,7 @@ class SSHManager:
             conn.close()
             await conn.wait_closed()
             raise
-        return RemoteCapture(process, conn)
+        return RemoteCapture(process, conn, remote_path, bool(server.use_sudo))
 
     async def stop_tcpdump(self, capture: RemoteCapture) -> None:
         """Interrupt tcpdump so it flushes its pcap, then escalate if it ignores us.
@@ -617,13 +639,27 @@ class SSHManager:
         """
         try:
             capture.send_signal("INT")
-            await asyncio.wait_for(capture.wait(), timeout=10)
+            await asyncio.wait_for(capture.wait(), timeout=STOP_SIGNAL_GRACE)
+            return
         except (asyncio.TimeoutError, OSError):
-            capture.kill()
-            try:
-                await asyncio.wait_for(capture.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
+            pass
+        # The SSH signal went nowhere (see RemoteCapture.signal_on_target):
+        # the same interrupt, sent by a command on the target instead.
+        try:
+            await capture.signal_on_target("INT")
+            await asyncio.wait_for(capture.wait(), timeout=10)
+            return
+        except (asyncio.TimeoutError, OSError, asyncssh.Error):
+            pass
+        capture.kill()
+        try:
+            await capture.signal_on_target("KILL")
+        except (OSError, asyncssh.Error):
+            pass
+        try:
+            await asyncio.wait_for(capture.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
 
     async def fetch_file(
         self,
@@ -670,10 +706,17 @@ class SSHManager:
         server: ServerAuth,
         remote_path: str,
     ) -> None:
-        safe_path = _shell_quote(remote_path)
+        use_sudo = bool(getattr(server, "use_sudo", False))
         conn = await self._connect(server)
         async with conn:
-            await conn.run(f"rm -f {safe_path}", check=True, timeout=10)
+            # Anything of this capture's still there: busybox timeout(1) (Alpine,
+            # OpenWrt) leaves its watcher behind when the capture is stopped, to
+            # signal a pid that may have been reused by then. It runs as the
+            # login user, so no sudo.
+            leftover = kill_capture_command(remote_path, "TERM", False)
+            if leftover:
+                await conn.run(leftover, check=False, timeout=10)
+            await _remove_capture_file(conn, remote_path, use_sudo)
 
     def migrate_plaintext_keys(self) -> tuple[int, int]:
         """Seal SSH keys uploaded before encryption was switched on.
@@ -706,6 +749,37 @@ class SSHManager:
         if done or failed:
             logger.info("SSH key migration complete: %d encrypted, %d failed", done, failed)
         return (done, failed)
+
+
+# How long Stop waits for the SSH signal to end tcpdump before it signals
+# from a command on the target instead.
+STOP_SIGNAL_GRACE = 3
+
+_CAPTURE_FILE = re.compile(r"/tmp/(pcap_[0-9a-f-]{36})\.pcap")
+
+
+def kill_capture_command(remote_path: str, sig: str, use_sudo: bool) -> str:
+    """`pkill -<sig> -f` for one capture's processes, or "" for a path this
+    app did not make. "[p]cap_..." so the pattern cannot match the shell
+    running it; the uuid makes it this capture's alone."""
+    match = _CAPTURE_FILE.fullmatch(remote_path or "")
+    if not match or sig not in ("INT", "TERM", "KILL"):
+        return ""
+    cmd = f"pkill -{sig} -f '[p]{match.group(1)[1:]}'"
+    return f"sudo -n {cmd}" if use_sudo else cmd
+
+
+async def _remove_capture_file(conn, remote_path: str, use_sudo: bool) -> None:
+    """rm the capture's file on the target. Under sudo, tcpdump wrote it as
+    root (or, on Debian's build, as its own tcpdump user) in a sticky /tmp,
+    where the login user's rm is refused -- every sudo capture used to leave
+    its pcap behind on the target."""
+    safe_path = _shell_quote(remote_path)
+    result = await conn.run(f"rm -f {safe_path}", check=False, timeout=10)
+    if result.exit_status and use_sudo:
+        result = await conn.run(f"sudo -n rm -f {safe_path}", check=False, timeout=10)
+    if result.exit_status:
+        raise RuntimeError(f"could not remove {remote_path} on the target (exit {result.exit_status})")
 
 
 def _shell_quote(s: str) -> str:

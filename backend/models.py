@@ -1003,6 +1003,19 @@ class PacketSummary(BaseModel):
     # An IP (or IPv6) fragment, read from the header: the Info column cannot
     # say so on the fragment that completes a datagram.
     fragment: bool = False
+    # The frame number this packet is a second sighting of: the same packet,
+    # seen again on another interface of a multi-interface or "any" capture
+    # (packet_parser.find_interface_copies). 0 on a first sighting. tshark
+    # reads such a copy as a retransmission or duplicate ACK; it is neither.
+    copy_of: int = 0
+    # That copy's addresses were rewritten on the way (NAT). tshark reads each
+    # side as its own conversation, so its flags hold for this side.
+    copy_nat: bool = False
+    # An unchanged copy whose link was read on its own: `info` is then what a
+    # capture of that link alone says about it (a segment the box dropped
+    # shows there as "previous segment not captured"), not the combined
+    # analysis. False: `info` is tshark's reading of the whole file.
+    copy_link_view: bool = False
     # Whatever the operator added to their column layout beyond the built-in
     # columns above, keyed by tshark field name. Empty on a default layout.
     values: dict[str, str] = Field(default_factory=dict)

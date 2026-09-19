@@ -110,7 +110,7 @@ These are configurable from the Admin tab by the admin user:
 |---|---|---|
 | Max capture seconds | 300 | Maximum duration for a single capture |
 | Max capture packets | 100000 | Maximum packets per capture; also the most the Traffic Diagram will draw |
-| Max concurrent captures | 5 | Captures running or finishing up at once, across all users — each holds an SSH connection to a target host plus a local file. Separately, and not configurable: one capture at a time per interface per server, so `eth0` and `eth1` on the same host can run together but a second capture on either is refused. A capture on several interfaces at once runs on `any`, and counts as `any` here |
+| Max concurrent captures | 5 | Captures running or finishing up at once, across all users — each holds an SSH connection to a target host plus a local file. Separately, and not configurable: one capture at a time per interface per server, so `eth0` and `eth1` on the same host can run together but a second capture on either is refused. Captures clash when the interfaces they read overlap: a capture on several interfaces clashes only with one that reads any of them, and a capture on plain `any` reads every interface, so it clashes with all of them |
 | Session duration (hours) | 8 | Login session lifetime |
 | Session idle timeout (minutes) | 60 | Idle window before a session is deleted, independent of the absolute duration above. `0` disables idle expiry |
 | Device trust (days) | 30 | How long a trusted device skips MFA |

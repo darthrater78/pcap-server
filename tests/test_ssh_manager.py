@@ -1257,3 +1257,95 @@ def test_the_prereq_check_reports_multi_interface_support():
     older = _check_named(evaluate_prereqs(old, False), name)
     assert older["status"] == "info" and "1.9.1" in older["detail"]
     assert _check_named(evaluate_prereqs(unknown, False), name)["status"] == "info"
+
+
+# --- stopping a capture when the SSH signal goes nowhere ------------------------
+#
+# Found against a real Alpine target: OpenSSH refuses the "signal" request for
+# a root login, so Stop sent INT and KILL into the void and the capture ran on
+# to its full duration. And under sudo, tcpdump's file belongs to root in a
+# sticky /tmp, so the login user's rm failed and every sudo capture left its
+# pcap on the target.
+
+from backend import ssh_manager as ssh_mod  # noqa: E402
+from backend.ssh_manager import RemoteCapture, kill_capture_command  # noqa: E402
+
+_PATH = "/tmp/pcap_0f8e5c1a-1234-4abc-8def-0123456789ab.pcap"
+
+
+class _Result:
+    def __init__(self, status: int) -> None:
+        self.exit_status = status
+
+
+class _TargetConn:
+    """Runs commands 'on the target': a pkill -INT ends the capture."""
+
+    def __init__(self, process, rm_status: int = 0) -> None:
+        self.process = process
+        self.commands: list[str] = []
+        self.rm_status = rm_status
+
+    async def run(self, cmd, check=False, timeout=None):
+        self.commands.append(cmd)
+        if "pkill -INT" in cmd or "pkill -KILL" in cmd:
+            self.process.exited.set()
+        if cmd.startswith("rm -f"):
+            return _Result(self.rm_status)
+        return _Result(0)
+
+
+class _DeafProcess:
+    """A process whose SSH signals the server ignores."""
+
+    def __init__(self) -> None:
+        self.exited = asyncio.Event()
+        self.signals: list[str] = []
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def kill(self):
+        self.signals.append("KILL")
+
+    async def wait(self):
+        await self.exited.wait()
+
+
+def test_the_kill_command_names_only_this_capture_and_never_its_own_shell():
+    assert kill_capture_command(_PATH, "INT", False) == \
+        "pkill -INT -f '[p]cap_0f8e5c1a-1234-4abc-8def-0123456789ab'"
+    assert kill_capture_command(_PATH, "INT", True).startswith("sudo -n pkill -INT -f ")
+    # Only a path this app made, and only the signals it uses.
+    assert kill_capture_command("/tmp/x; reboot", "INT", False) == ""
+    assert kill_capture_command(_PATH, "HUP;id", False) == ""
+
+
+async def test_stop_falls_back_to_a_command_on_the_target(monkeypatch):
+    monkeypatch.setattr(ssh_mod, "STOP_SIGNAL_GRACE", 0.01)
+    process = _DeafProcess()
+    conn = _TargetConn(process)
+    capture = RemoteCapture(process, conn, _PATH, use_sudo=True)
+    await SSHManager.__new__(SSHManager).stop_tcpdump(capture)
+    assert process.signals == ["INT"]
+    assert conn.commands == [kill_capture_command(_PATH, "INT", True)]
+
+
+async def test_a_capture_that_honours_the_signal_gets_no_command():
+    process = _DeafProcess()
+    process.send_signal = lambda sig: process.exited.set()
+    conn = _TargetConn(process)
+    await SSHManager.__new__(SSHManager).stop_tcpdump(RemoteCapture(process, conn, _PATH))
+    assert conn.commands == []
+
+
+async def test_a_file_the_login_user_cannot_remove_is_removed_with_sudo():
+    conn = _TargetConn(_DeafProcess(), rm_status=1)
+    await RemoteCapture(_DeafProcess(), conn, _PATH, use_sudo=True).remove_remote_file(_PATH)
+    assert conn.commands == [f"rm -f {_PATH}", f"sudo -n rm -f {_PATH}"]
+
+
+async def test_without_sudo_a_refused_remove_is_reported_not_swallowed():
+    conn = _TargetConn(_DeafProcess(), rm_status=1)
+    with pytest.raises(RuntimeError, match="could not remove"):
+        await RemoteCapture(_DeafProcess(), conn, _PATH).remove_remote_file(_PATH)
