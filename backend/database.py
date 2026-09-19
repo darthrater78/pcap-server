@@ -113,6 +113,9 @@ class Database:
                 use_sudo INTEGER NOT NULL DEFAULT 0,
                 tcpdump_path TEXT NOT NULL DEFAULT '',
                 os_name TEXT NOT NULL DEFAULT '',
+                -- The target's libpcap version, from the last prerequisite
+                -- check. Decides whether a capture may name several interfaces.
+                libpcap_version TEXT NOT NULL DEFAULT '',
                 -- Why this target was found to be the machine pcap-server runs
                 -- on. Empty means no such finding, which is not the same as
                 -- "proved remote": a server nothing has connected to yet is
@@ -267,6 +270,10 @@ class Database:
             conn.execute("ALTER TABLE active_servers ADD COLUMN tcpdump_path TEXT NOT NULL DEFAULT ''")
         if "os_name" not in active_columns:
             conn.execute("ALTER TABLE active_servers ADD COLUMN os_name TEXT NOT NULL DEFAULT ''")
+        if "libpcap_version" not in active_columns:
+            # '' is "not checked yet": a multi-interface capture asks for the
+            # prerequisite check to be run again rather than guessing.
+            conn.execute("ALTER TABLE active_servers ADD COLUMN libpcap_version TEXT NOT NULL DEFAULT ''")
         if "self_target_reason" not in active_columns:
             conn.execute(
                 "ALTER TABLE active_servers ADD COLUMN self_target_reason TEXT NOT NULL DEFAULT ''"
@@ -626,6 +633,14 @@ class Database:
         self._conn().commit()
         return cur.rowcount > 0
 
+    def set_active_server_libpcap(self, server_id: str, user_id: str, version: str) -> bool:
+        cur = self._conn().execute(
+            "UPDATE active_servers SET libpcap_version = ? WHERE id = ? AND user_id = ?",
+            (version, server_id, user_id),
+        )
+        self._conn().commit()
+        return cur.rowcount > 0
+
     def set_active_server_self_target(self, server_id: str, user_id: str, reason: str) -> bool:
         """Record (or clear) why this server is the machine pcap-server runs on."""
         cur = self._conn().execute(
@@ -692,11 +707,12 @@ class Database:
             """UPDATE active_servers
                SET name = ?, hostname = ?, port = ?, username = ?, ssh_key_name = ?, use_sudo = ?, tcpdump_path = '',
                    os_name = CASE WHEN hostname = ? AND port = ? THEN os_name ELSE '' END,
+                   libpcap_version = CASE WHEN hostname = ? AND port = ? THEN libpcap_version ELSE '' END,
                    self_target_reason = CASE WHEN hostname = ? AND port = ? THEN self_target_reason ELSE '' END,
                    kernel_verified_at = CASE WHEN hostname = ? AND port = ? THEN kernel_verified_at ELSE '' END
                WHERE id = ? AND user_id = ?""",
             (name, hostname, port, username, ssh_key_name, int(use_sudo),
-             hostname, port, hostname, port, hostname, port, server_id, user_id),
+             hostname, port, hostname, port, hostname, port, hostname, port, server_id, user_id),
         )
         self._conn().commit()
         if cur.rowcount:

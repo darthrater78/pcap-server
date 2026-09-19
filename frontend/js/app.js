@@ -1772,9 +1772,20 @@ const FILTER_NAMES = (() => {
 // in the frontend next to the one in bpfCheckExpression. An expression the
 // library does not know is shown verbatim instead, which is never wrong -- the
 // CSS truncates it and the title carries it in full.
+//
+// The operator's own saved filters count too: a capture taken with one shows
+// its name rather than the expression. So does a filter with the Capture
+// tab's "optimize for diagrams" exclusions on the end -- "Web servers, noise
+// left out" -- since that tail is always built from the same catalog.
 function filterDisplayName(expr) {
     const trimmed = (expr || "").trim();
-    const name = FILTER_NAMES.get(trimmed);
+    const noise = splitNoiseClause(trimmed);
+    if (noise) {
+        if (!noise.base) return { text: "Noise left out", named: true };
+        const inner = filterDisplayName(noise.base);
+        return inner.named ? { text: `${inner.text}, noise left out`, named: true } : { text: trimmed, named: false };
+    }
+    const name = FILTER_NAMES.get(trimmed) || customFilters.find((f) => f.expression.trim() === trimmed)?.label;
     // `named` decides the typeface, and the distinction is worth drawing: a
     // library name is prose, a bare expression is code, and setting "Kerberos"
     // in a monospace face beside a status badge reads as neither.
@@ -1783,6 +1794,47 @@ function filterDisplayName(expr) {
         : { text: trimmed, named: false };
 }
 
+
+// `(base) and not (noise)` or `not (noise)`, where the noise is made only of
+// NOISE_EXCLUSIONS entries joined by `or` -- what applyDiagramOptimization
+// writes. Anything else is null.
+function splitNoiseClause(expr) {
+    let base = "", tail = "";
+    const m = /^\((.*)\) and not \((.*)\)$/s.exec(expr);
+    if (m) { base = m[1]; tail = m[2]; } else if (expr.startsWith("not (") && expr.endsWith(")")) {
+        tail = expr.slice(5, -1);
+    } else {
+        return null;
+    }
+    const pieces = NOISE_EXCLUSIONS.flatMap((x) => [x.bpf, x.cooked].filter(Boolean))
+        .map((b) => (/ (or|and) /.test(b) ? `(${b})` : b))
+        .sort((a, b) => b.length - a.length);
+    let rest = tail;
+    for (const piece of pieces) rest = rest.split(piece).join("\u0000");
+    return /^\u0000( or \u0000)*$/.test(rest) ? { base } : null;
+}
+
+// A capture on several interfaces runs on "any" with an ifindex clause in
+// front of the operator's filter (capture.py narrow_to_interfaces). Shown
+// the other way round: the interfaces by name, and the filter without it.
+const IFINDEX_CLAUSE_RE = /^\((ifindex \d+(?: or ifindex \d+)*)\)(?: and \((.*)\))?$/s;
+
+function captureFilterParts(c) {
+    const filter = (c.bpf_filter || "").trim();
+    const m = c.interface === ANY_INTERFACE ? IFINDEX_CLAUSE_RE.exec(filter) : null;
+    if (!m) return { interfaces: null, filter };
+    const names = c.interface_names || {};
+    const interfaces = m[1].split(" or ").map((t) => {
+        const idx = t.split(" ")[1];
+        return names[idx] || `#${idx}`;
+    });
+    return { interfaces, filter: m[2] || "" };
+}
+
+function captureInterfaceText(c) {
+    const { interfaces } = captureFilterParts(c);
+    return interfaces ? interfaces.join(", ") : (c.interface || "");
+}
 
 function filterBadge(expr) {
     const { text, named } = filterDisplayName(expr);
@@ -1826,27 +1878,72 @@ function renderCustomFilterGroup(q) {
     );
     if (!rows.length) return "";
     return `
-        <section class="filter-group filter-group-own">
-            <h4>Your filters</h4>
-            <p class="field-hint">Saved from the field above, and visible only to you.</p>
+        <section class="filter-group filter-group-own" data-group="Your filters">
+            ${libraryGroupHead("Your filters")}
+            <p class="field-hint">Saved from the field above, and visible only to you. A capture taken with one shows its name.</p>
             <table class="filter-table">
-                ${rows.map((f) => `
-                <tr>
-                    <td class="filter-label">${escHtml(f.label)}</td>
-                    <td class="filter-expr"><code>${escHtml(f.expression)}</code></td>
-                    <td class="filter-use">
-                        <button type="button" class="btn btn-sm btn-secondary"
-                                data-action="use-library-filter" data-id="${escHtml(f.expression)}">Use</button>
-                        <button type="button" class="btn btn-sm btn-secondary btn-not"
-                                data-action="exclude-library-filter" data-id="${escHtml(f.expression)}"
-                                title="Leave this traffic OUT: adds 'and not (...)' to the field, or 'not (...)' when it is empty">Not</button>
+                ${rows.map((f) => libraryRowHtml(f.label, f.expression, `
                         <button type="button" class="btn btn-sm btn-danger"
                                 data-action="delete-custom-filter" data-id="${escHtml(f.id)}"
-                                title="Forget this saved filter. Captures already taken with it are untouched.">&times;</button>
-                    </td>
-                </tr>`).join("")}
+                                title="Forget this saved filter. Captures already taken with it are untouched.">&times;</button>`)).join("")}
             </table>
         </section>`;
+}
+
+// One library row: Use, Or and Not as chips. Or joins the row to what is in
+// the field with `or` straight away; Use asks how (bpfMenuItems) unless the
+// section's own Or box is ticked. A row whose expression is already in the
+// field is lit (markLibraryInUse), so a filter being built shows which rows
+// it came from.
+function libraryRowHtml(label, expr, extra = "") {
+    return `
+                <tr data-expr="${escHtml(expr)}">
+                    <td class="filter-label">${escHtml(label)}</td>
+                    <td class="filter-expr"><code>${escHtml(expr)}</code></td>
+                    <td class="filter-use">
+                        <button type="button" class="btn btn-sm btn-secondary filter-chip filter-chip-use"
+                                data-action="use-library-filter" data-id="${escHtml(expr)}">Use</button>
+                        <button type="button" class="btn btn-sm btn-secondary filter-chip filter-chip-or"
+                                data-action="or-library-filter" data-id="${escHtml(expr)}"
+                                title="Add this as an alternative: '(what you have) or (this)'">Or</button>
+                        <button type="button" class="btn btn-sm btn-secondary btn-not filter-chip filter-chip-not"
+                                data-action="exclude-library-filter" data-id="${escHtml(expr)}"
+                                title="Leave this traffic OUT: adds 'and not (...)' to the field, or 'not (...)' when it is empty">Not</button>${extra}
+                    </td>
+                </tr>`;
+}
+
+// Sections whose Use means "or this" without asking. Kept for the page's
+// life, not stored: it is a way of working through one filter.
+const libraryOrGroups = new Set();
+
+function libraryGroupHead(name) {
+    const on = libraryOrGroups.has(name);
+    return `<div class="filter-group-head"><h4>${escHtml(name)}</h4>` +
+        `<label class="filter-group-or" title="Tick to join every Use in this section with 'or' -- any of these, rather than asking each time">` +
+        `<input type="checkbox" data-or-group="${escHtml(name)}"${on ? " checked" : ""}> Or</label></div>`;
+}
+
+function libraryUseMode(el) {
+    const name = el.closest(".filter-group")?.dataset.group;
+    return name && libraryOrGroups.has(name) ? "or" : null;
+}
+
+// Lights the rows the field already contains: Use and Or for a row that is
+// in it, Not for one it leaves out. Read off the field's text -- the field is
+// the only source of truth -- so a row is lit if its expression appears whole
+// (the field is exactly it, or holds it in the parentheses combineBpf adds).
+function markLibraryInUse() {
+    const value = ($("cap-bpf")?.value || "").trim();
+    for (const row of document.querySelectorAll("#filter-library tr[data-expr]")) {
+        const expr = row.dataset.expr;
+        const excluded = value.includes(`not (${expr})`);
+        const used = !excluded && (value === expr || value.includes(`(${expr})`));
+        row.classList.toggle("is-in-use", used);
+        row.classList.toggle("is-excluded", excluded);
+        row.querySelector(".filter-chip-use")?.setAttribute("aria-pressed", String(used));
+        row.querySelector(".filter-chip-not")?.setAttribute("aria-pressed", String(excluded));
+    }
 }
 
 function renderFilterLibrary() {
@@ -1870,25 +1967,15 @@ function renderFilterLibrary() {
 
     el.innerHTML = own + groups
         .map((g) => `
-        <section class="filter-group">
-            <h4>${escHtml(g.group)}</h4>
+        <section class="filter-group" data-group="${escHtml(g.group)}">
+            ${libraryGroupHead(g.group)}
             ${g.note ? `<p class="field-hint">${escHtml(g.note)}</p>` : ""}
             <table class="filter-table">
-                ${g.filters.map(([label, expr]) => `
-                <tr>
-                    <td class="filter-label">${escHtml(label)}</td>
-                    <td class="filter-expr"><code>${escHtml(expr)}</code></td>
-                    <td class="filter-use">
-                        <button type="button" class="btn btn-sm btn-secondary"
-                                data-action="use-library-filter" data-id="${escHtml(expr)}">Use</button>
-                        <button type="button" class="btn btn-sm btn-secondary btn-not"
-                                data-action="exclude-library-filter" data-id="${escHtml(expr)}"
-                                title="Leave this traffic OUT: adds 'and not (...)' to the field, or 'not (...)' when it is empty">Not</button>
-                    </td>
-                </tr>`).join("")}
+                ${g.filters.map(([label, expr]) => libraryRowHtml(label, expr)).join("")}
             </table>
         </section>`)
         .join("");
+    markLibraryInUse();
 }
 
 // Straight into the Capture form, which is the only place a capture filter can
@@ -1947,6 +2034,7 @@ function renderFilterPreview() {
 // row, the Clear button -- so the preview bar never falls out of step with it.
 function onBpfFilterChanged() {
     renderFilterPreview();
+    markLibraryInUse();
     syncSaveButton("btn-save-filter", "cap-bpf");
 }
 
@@ -2258,6 +2346,11 @@ function useLibraryFilter(expr, el, ev) {
         applyBpfFilter(expr, "replace");
         return;
     }
+    // The section's Or box is ticked: no question to ask.
+    if (el && libraryUseMode(el) === "or") {
+        applyBpfFilter(expr, "or");
+        return;
+    }
     // Without this the menu opens and shuts on the same click. The document
     // handler that dismisses it fires on any click outside #filter-menu, and
     // this click is outside it -- the menu does not exist yet. The display
@@ -2464,6 +2557,7 @@ async function loadInterfaces() {
     const previous = sel.value;
     if (!serverId) {
         fillSelect(sel, [ANY_INTERFACE]);
+        fillInterfaceChecks([]);
         return;
     }
     let names;
@@ -2472,10 +2566,76 @@ async function loadInterfaces() {
     } catch {
         // Unreachable host — leave "any" available rather than an empty dropdown.
         fillSelect(sel, [ANY_INTERFACE]);
+        fillInterfaceChecks([]);
         return;
     }
     fillSelect(sel, names);
     if (names.includes(previous)) sel.value = previous;
+    fillInterfaceChecks(names.filter((n) => n !== ANY_INTERFACE));
+}
+
+// Several interfaces at once needs libpcap 1.10 on the server (the ifindex
+// filter); the prerequisite check records the version. Mirrors
+// ssh_manager.libpcap_supports_multi_interface, which the server enforces.
+function multiInterfaceBlocker(srv) {
+    const v = srv?.libpcap_version || "";
+    const m = /^(\d+)\.(\d+)/.exec(v);
+    if (m && (Number(m[1]) > 1 || (Number(m[1]) === 1 && Number(m[2]) >= 10))) return "";
+    return v
+        ? `Needs libpcap 1.10 or later; this server has ${v}. Capture one interface, or "any".`
+        : "Needs libpcap 1.10 or later, and this server's version is not known yet: run Check prerequisites on the Servers tab.";
+}
+
+// The "Pick several" list: one checkbox per real interface, ticks kept for
+// names the new list still has. On a server that cannot do it, the list is
+// shown disabled with the reason, so the option is not a mystery.
+function fillInterfaceChecks(names) {
+    const el = $("cap-interfaces");
+    if (!el) return;
+    const blocker = multiInterfaceBlocker(activeServers.find((x) => x.id === $("cap-server")?.value));
+    const ticked = blocker ? new Set() : new Set(captureInterfaceChoice().names);
+    el.innerHTML = names.map((n) => `<label class="cap-interface-check">` +
+        `<input type="checkbox" value="${escHtml(n)}"${ticked.has(n) ? " checked" : ""}${blocker ? " disabled" : ""}> ` +
+        `${escHtml(n)}</label>`).join("")
+        || '<span class="hint">No interfaces listed for this server.</span>';
+    el.dataset.blocker = blocker;
+    $("cap-interfaces-multi").hidden = names.length < 2;
+    onInterfaceChecksChanged();
+}
+
+// What the capture will read: {iface, names}. Two or more ticked means "any"
+// narrowed to those names; exactly one ticked is simply that interface.
+function captureInterfaceChoice() {
+    const names = [...document.querySelectorAll("#cap-interfaces input:checked")].map((el) => el.value);
+    if (names.length >= 2) return { iface: ANY_INTERFACE, names };
+    if (names.length === 1) return { iface: names[0], names: [] };
+    return { iface: $("cap-interface")?.value || ANY_INTERFACE, names: [] };
+}
+
+// While boxes are ticked they decide, so the single select steps aside and
+// says what will be read. The optimize clause follows, since "any" and a
+// named interface compile the noise exclusions differently.
+function onInterfaceChecksChanged() {
+    const sel = $("cap-interface");
+    if (!sel) return;
+    const ticked = [...document.querySelectorAll("#cap-interfaces input:checked")].map((el) => el.value);
+    sel.disabled = ticked.length > 0;
+    const hint = $("cap-interfaces-hint");
+    const blocker = $("cap-interfaces")?.dataset.blocker;
+    if (hint) {
+        hint.textContent = blocker ? blocker : ticked.length >= 2
+            ? `Capturing ${ticked.join(", ")}: on "any", limited to these (needs libpcap 1.10 or later on the server).`
+            : ticked.length === 1
+                ? `Capturing ${ticked[0]} only. Tick another to capture several at once.`
+                : "Tick two or more. The capture runs on \"any\", limited to the ticked interfaces (needs libpcap 1.10 or later on the server).";
+    }
+    refreshOptimizeForInterface();
+}
+
+// The optimize clause is written for one link type; after a change of
+// interface, rewrite it for the new one -- only while it is still ours.
+function refreshOptimizeForInterface() {
+    if (lastOptimize && tickedDiagramCap() && $("cap-bpf").value === lastOptimize.written) applyDiagramOptimization();
 }
 
 // What the confirm dialog says, and the same facts the capture record will
@@ -2487,7 +2647,7 @@ function describeCapture(body, serverName) {
     const lines = [
         `Name:       ${body.name}`,
         `Server:     ${serverName}`,
-        `Interface:  ${body.interface}`,
+        `Interface:  ${body.interfaces ? `${body.interfaces.join(", ")} (on any)` : body.interface}`,
         `Duration:   ${body.duration_seconds ? body.duration_seconds + "s" : "the server maximum"}`,
         `Packets:    ${body.count ? body.count : "the server maximum"}`,
         `Snap length: ${body.snap_len === undefined ? "full packets" : body.snap_len + " bytes"}`,
@@ -2517,10 +2677,22 @@ const DIAGRAM_CAPS = [
 // and the transfer back to a fraction of full packets.
 const DIAGRAM_SNAPLEN = 256;
 
+// `cooked` is the same exclusion for a capture on "any", which tcpdump takes
+// as Linux cooked v2 (LINUX_SLL2) rather than Ethernet. There are no MAC
+// addresses in that header, so `ether host`, `broadcast` and `multicast`
+// fail to compile ("ethernet addresses supported only on ethernet/...") and
+// the whole capture refuses to start. The cooked header's own fields say the
+// same thing instead: the protocol at link[0:2], the packet type at link[10]
+// (1 broadcast, 2 multicast), and the frame after its 20 bytes -- CDP being
+// an 802.2 frame (protocol 4) with a SNAP header of OUI 00000c, type 0x2000.
+// Checked against tcpdump with a hand-built SLL2 capture.
 const NOISE_EXCLUSIONS = [
     { key: "arp", label: "ARP", bpf: "arp", rec: true },
     { key: "stp", label: "Spanning tree (STP)", bpf: "stp", rec: true },
-    { key: "lldp", label: "LLDP / CDP", bpf: "ether proto 0x88cc or ether host 01:00:0c:cc:cc:cc", rec: true },
+    {
+        key: "lldp", label: "LLDP / CDP", bpf: "ether proto 0x88cc or ether host 01:00:0c:cc:cc:cc", rec: true,
+        cooked: "ether proto 0x88cc or (link[0:2] = 0x0004 and link[20:4] = 0xaaaa0300 and link[24:4] = 0x000c2000)",
+    },
     { key: "mdns", label: "mDNS (5353)", bpf: "udp port 5353", rec: true },
     { key: "ssdp", label: "SSDP / UPnP (1900)", bpf: "udp port 1900", rec: true },
     { key: "llmnr", label: "LLMNR (5355)", bpf: "udp port 5355", rec: true },
@@ -2530,8 +2702,8 @@ const NOISE_EXCLUSIONS = [
     { key: "ipv6-nd", label: "IPv6 neighbour / router discovery", bpf: "icmp6 and ip6[40] >= 133 and ip6[40] <= 137", rec: true },
     { key: "dhcp", label: "DHCP (67, 68)", bpf: "udp port 67 or udp port 68", rec: false },
     { key: "ntp", label: "NTP (123)", bpf: "udp port 123", rec: false },
-    { key: "broadcast", label: "All other broadcast", bpf: "broadcast", rec: false },
-    { key: "multicast", label: "All other multicast", bpf: "multicast", rec: false },
+    { key: "broadcast", label: "All other broadcast", bpf: "broadcast", cooked: "link[10] = 1", rec: false },
+    { key: "multicast", label: "All other multicast", bpf: "multicast", cooked: "link[10] = 2", rec: false },
     { key: "ssh", label: "SSH (22), including this app's own session", bpf: "tcp port 22", rec: false },
 ];
 
@@ -2551,8 +2723,14 @@ function chosenExclusions() {
     return [...document.querySelectorAll("#optimize-exclusions input:checked")].map((el) => el.value);
 }
 
-function exclusionClause(keys) {
-    const parts = NOISE_EXCLUSIONS.filter((x) => keys.includes(x.key)).map((x) => x.bpf);
+// A capture on "any" -- including one on several interfaces, which runs on
+// "any" too -- is cooked; any other interface is taken to be Ethernet.
+function captureIsCooked() {
+    return captureInterfaceChoice().iface === ANY_INTERFACE;
+}
+
+function exclusionClause(keys, cooked = captureIsCooked()) {
+    const parts = NOISE_EXCLUSIONS.filter((x) => keys.includes(x.key)).map((x) => (cooked && x.cooked) || x.bpf);
     return parts.length ? parts.map((b) => (/ (or|and) /.test(b) ? `(${b})` : b)).join(" or ") : "";
 }
 
@@ -2588,19 +2766,53 @@ function applyDiagramOptimization(settings = {}) {
     // Sequence to Traffic): set to this one's.
     const current = parseInt(count?.value);
     const otherCaps = DIAGRAM_CAPS.map((d) => d.cap);
-    if (count && (!current || current > max || otherCaps.includes(current))) count.value = String(Math.min(max, cap.cap));
+    // Each field remembers what it held before the first Apply, for as long
+    // as it still holds what Apply wrote: unticking the diagram puts those
+    // back (revertDiagramOptimization). A field edited since is left alone.
+    const prior = (key, el) => (lastOptimize && el.value === lastOptimize[key]?.written
+        ? lastOptimize[key].before : el.value);
+    const next = { ...(lastOptimize || {}) };
+    if (count) {
+        const before = prior("count", count);
+        if (!current || current > max || otherCaps.includes(current)) count.value = String(Math.min(max, cap.cap));
+        next.count = { before, written: count.value };
+    }
     const snap = $("cap-snaplen");
-    if (snap) snap.value = String(settings.snaplen || DIAGRAM_SNAPLEN);
+    if (snap) {
+        const before = prior("snap", snap);
+        snap.value = String(settings.snaplen || DIAGRAM_SNAPLEN);
+        next.snap = { before, written: snap.value };
+    }
     const box = $("cap-bpf");
     if (box) {
         const base = lastOptimize && box.value === lastOptimize.written ? lastOptimize.before : box.value.trim();
         const clause = exclusionClause(chosenExclusions());
         const written = clause ? combineBpf(base, clause, "andnot") : base;
         box.value = written;
-        lastOptimize = { before: base, written };
+        Object.assign(next, { before: base, written });
+        lastOptimize = next;
         onBpfFilterChanged();
     }
+    lastOptimize = next;
     updateOptimizeSummary();
+}
+
+// Unticking the diagram undoes Apply: Snap length back to automatic (or
+// whatever was typed before), Max packets and the BPF filter back to what
+// they were -- each only while it still holds what Apply put there.
+function revertDiagramOptimization() {
+    const lo = lastOptimize;
+    if (!lo) return;
+    for (const [key, id] of [["count", "cap-count"], ["snap", "cap-snaplen"]]) {
+        const el = $(id);
+        if (el && lo[key] && el.value === lo[key].written) el.value = lo[key].before;
+    }
+    const box = $("cap-bpf");
+    if (box && lo.written !== undefined && box.value === lo.written) {
+        box.value = lo.before;
+        onBpfFilterChanged();
+    }
+    lastOptimize = null;
 }
 
 async function loadCapturePresets(selectId = "") {
@@ -2678,6 +2890,7 @@ function initDiagramOptimize() {
                 for (const other of DIAGRAM_CAPS) if (other.box !== d.box) $(other.box).checked = false;
                 applyDiagramOptimization();
             } else {
+                revertDiagramOptimization();
                 updateOptimizeSummary();
             }
         });
@@ -2689,6 +2902,8 @@ function initDiagramOptimize() {
         else updateOptimizeSummary();
     });
     $("btn-optimize-apply").addEventListener("click", () => applyDiagramOptimization());
+    $("cap-interfaces")?.addEventListener("change", onInterfaceChecksChanged);
+    $("cap-interface")?.addEventListener("change", refreshOptimizeForInterface);
     $("optimize-preset").addEventListener("change", onCapturePresetPick);
     $("btn-optimize-save").addEventListener("click", saveCapturePreset);
     $("btn-optimize-delete").addEventListener("click", deleteCapturePreset);
@@ -2718,8 +2933,8 @@ async function startCapture() {
     // "there was no such traffic". This is the last moment it can be caught
     // before that happens. It is a warning, not a refusal -- an odd-looking
     // filter someone means is still theirs to run.
-    if (!await confirmBpfFilter($("cap-bpf").value,
-                                $("cap-interface").value || ANY_INTERFACE)) {
+    const choice = captureInterfaceChoice();
+    if (!await confirmBpfFilter($("cap-bpf").value, choice.iface)) {
         $("cap-bpf").focus();
         return;
     }
@@ -2727,9 +2942,10 @@ async function startCapture() {
     const body = {
         name,
         server_id: serverId,
-        interface: $("cap-interface").value || ANY_INTERFACE,
+        interface: choice.iface,
         bpf_filter: $("cap-bpf").value,
     };
+    if (choice.names.length) body.interfaces = choice.names;
 
     const count = parseInt($("cap-count").value);
     if (count > 0) body.count = count;
@@ -3117,7 +3333,8 @@ function renderCaptures() {
             // yet" rather than "not counted" and is worth showing.
             const live = c.status === "running";
             const stats = [];
-            if (c.interface) stats.push(captureStat("if", escHtml(c.interface)));
+            const parts = captureFilterParts(c);
+            if (c.interface) stats.push(captureStat("if", escHtml(captureInterfaceText(c))));
             if (live || c.packet_count) {
                 stats.push(captureStat("packets", `${Number(c.packet_count).toLocaleString()}${live ? " so far" : ""}`));
             }
@@ -3146,7 +3363,7 @@ function renderCaptures() {
                 </div>
                 <div class="capture-badges">
                     ${uploaded ? '<span class="status-badge badge-upload" title="This pcap was uploaded. It is stored and encrypted exactly like a capture taken here, but this server did not record it -- so it has no interface, capture filter or command of its own.">upload</span>' : ""}
-                    ${c.bpf_filter ? filterBadge(c.bpf_filter) : ""}
+                    ${parts.filter ? filterBadge(parts.filter) : ""}
                     <span class="status-badge status-${status}">${status}</span>
                 </div>
                 <div class="capture-actions">${actions}</div>
@@ -3347,12 +3564,16 @@ function setViewerLabel(id) {
     // an empty origin line would let the packets read as its own capture.
     if (c.origin === "upload") parts.push("uploaded pcap");
     if (c.server_label) parts.push(escHtml(c.server_label));
-    if (c.interface) parts.push(escHtml(c.interface));
+    if (c.interface) parts.push(escHtml(captureInterfaceText(c)));
     // Empty is not the same claim as "no filter": a capture taken before the
     // column existed also reads empty, and the two are indistinguishable here.
     // Saying nothing is the honest option -- see the migration in database.py.
-    if (c.bpf_filter) {
-        parts.push(`filter <code class="viewer-origin-filter">${escHtml(c.bpf_filter)}</code>`);
+    const { filter } = captureFilterParts(c);
+    if (filter) {
+        const { text, named } = filterDisplayName(filter);
+        parts.push(named
+            ? `filter <span class="viewer-origin-filter" title="${escHtml(filter)}">${escHtml(text)}</span>`
+            : `filter <code class="viewer-origin-filter">${escHtml(filter)}</code>`);
     }
     el.innerHTML = escHtml(heading)
         + (parts.length
@@ -4587,6 +4808,7 @@ function renderColumnHeaders(columns) {
     const row = $("packet-head-row");
     if (!row) return;
     row.textContent = "";
+    const widths = storedColumnWidths();
     for (const col of columns) {
         const th = document.createElement("th");
         th.className = col.cls;
@@ -4597,8 +4819,76 @@ function renderColumnHeaders(columns) {
         th.title = col.hidden
             ? "Only a capture on \"any\" records which interface a packet crossed"
             : (col.field || BUILTIN_COLUMNS[col.id]?.shows || "");
+        const width = widths[col.id];
+        if (width && !col.hidden) th.style.width = `${width}px`;
+        const grip = document.createElement("span");
+        grip.className = "col-resize-handle";
+        grip.title = "Drag to resize; double-click to put it back";
+        grip.setAttribute("aria-hidden", "true");
+        th.appendChild(grip);
         row.appendChild(th);
     }
+}
+
+// --- widths ---
+//
+// Dragging a heading's right edge sets that column's width. Kept per browser
+// by column id (a screen-size preference, not part of the account's layout),
+// and a double-click puts the stylesheet's width back. The table is
+// table-layout:fixed, so the heading's width is the column's; past the
+// window's width the list scrolls sideways.
+const COLUMN_WIDTHS_KEY = "pcap.columnWidths";
+const COLUMN_MIN_WIDTH = 32;
+
+function storedColumnWidths() {
+    try {
+        const v = JSON.parse(localStorage.getItem(COLUMN_WIDTHS_KEY) || "{}");
+        return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+    } catch {
+        return {};
+    }
+}
+
+function storeColumnWidth(id, width) {
+    const all = storedColumnWidths();
+    if (width) all[id] = Math.round(width); else delete all[id];
+    try { localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+}
+
+function onColumnResizeStart(ev) {
+    const grip = ev.target.closest(".col-resize-handle");
+    if (!grip || ev.button !== 0) return;
+    const th = grip.parentElement;
+    ev.preventDefault();
+    ev.stopPropagation();
+    // A heading is also draggable to move it; not while its edge is held.
+    th.draggable = false;
+    const startX = ev.clientX;
+    const startWidth = th.getBoundingClientRect().width;
+    grip.setPointerCapture(ev.pointerId);
+    document.body.classList.add("col-resizing");
+    const move = (e) => {
+        th.style.width = `${Math.max(COLUMN_MIN_WIDTH, startWidth + e.clientX - startX)}px`;
+    };
+    const end = () => {
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", end);
+        grip.removeEventListener("pointercancel", end);
+        document.body.classList.remove("col-resizing");
+        th.draggable = true;
+        storeColumnWidth(th.dataset.col, parseFloat(th.style.width));
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+}
+
+function onColumnResizeReset(ev) {
+    const grip = ev.target.closest(".col-resize-handle");
+    if (!grip) return;
+    const th = grip.parentElement;
+    th.style.width = "";
+    storeColumnWidth(th.dataset.col, 0);
 }
 
 // --- rearranging ---
@@ -4939,6 +5229,8 @@ function initColumnControls() {
     // that survives instead of re-attached to each <th>.
     const head = $("packet-head-row");
     head?.addEventListener("contextmenu", onColumnHeaderContextMenu);
+    head?.addEventListener("pointerdown", onColumnResizeStart);
+    head?.addEventListener("dblclick", onColumnResizeReset);
     head?.addEventListener("dragstart", onColumnDragStart);
     head?.addEventListener("dragover", onColumnDragOver);
     head?.addEventListener("drop", onColumnDrop);
@@ -5239,6 +5531,9 @@ function useFilterSuggestion(expr) {
 function applyDisplayFilter() {
     if (!viewingCaptureId) return;
     loadPackets(viewingCaptureId, $("display-filter").value);
+    // A Traffic Diagram open on this capture drops a host highlight the
+    // packet list no longer matches (diagrams.js).
+    if (typeof onViewerFilterApplied === "function") onViewerFilterApplied($("display-filter").value);
 }
 
 function downloadCapture() {
@@ -5284,6 +5579,33 @@ function exportPacketBytes() {
 // without another round trip: both are views onto this one object.
 let currentDetail = null;
 let selectedFieldEl = null;
+
+// Go to a packet by number. One in the list is scrolled to -- within the
+// list only, never the page -- and selected. One the list does not hold
+// (filtered out, or past the rows loaded) still has its details opened
+// below, and the note says why it is not highlighted above.
+function gotoPacket() {
+    const box = $("goto-packet");
+    const msg = $("goto-packet-msg");
+    const n = parseInt(box.value, 10);
+    msg.textContent = "";
+    if (!viewingCaptureId || !(n >= 1)) return;
+    const row = document.querySelector(`#packet-tbody tr[data-frame="${n}"]`);
+    if (row) {
+        const scroller = row.closest(".packet-table-scroll");
+        if (scroller) {
+            const head = scroller.querySelector("thead")?.offsetHeight || 0;
+            scroller.scrollTop = row.offsetTop - head - (scroller.clientHeight - head) / 2 + row.offsetHeight / 2;
+        }
+        selectPacket(n);
+        return;
+    }
+    const shown = currentPackets.length;
+    msg.textContent = shown && n > currentPackets[shown - 1].number
+        ? `#${n} is past the ${shown.toLocaleString()} rows shown; details below`
+        : `#${n} is not in this filtered list; details below`;
+    selectPacket(n);
+}
 
 async function selectPacket(frameNumber) {
     setDetailVisible(true);
@@ -6979,6 +7301,19 @@ function initEventDelegation() {
     // The field is the source of truth, so the bar follows it however it
     // changed -- including someone typing or clearing it by hand.
     $("cap-bpf")?.addEventListener("input", onBpfFilterChanged);
+    $("goto-packet")?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); gotoPacket(); }
+    });
+    // Ctrl+G (Wireshark's own) puts the cursor in the box while the viewer
+    // is open.
+    document.addEventListener("keydown", (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "g" && !$("packet-viewer")?.hidden
+            && !document.querySelector("dialog[open]")) {
+            ev.preventDefault();
+            $("goto-packet")?.focus();
+            $("goto-packet")?.select();
+        }
+    });
     $("filter-preview-clear")?.addEventListener("click", () => {
         // Starting over is a normal part of composing, and the field can be
         // scrolled out of sight behind the list by the time you want to.
@@ -6987,9 +7322,16 @@ function initEventDelegation() {
         box.value = "";
         onBpfFilterChanged();
     });
+    $("filter-library")?.addEventListener("change", (ev) => {
+        const name = ev.target.dataset?.orGroup;
+        if (name === undefined) return;
+        if (ev.target.checked) libraryOrGroups.add(name);
+        else libraryOrGroups.delete(name);
+    });
     delegate("filter-library", {
         "use-library-filter": (expr, el, ev) => useLibraryFilter(expr, el, ev),
         "exclude-library-filter": (expr) => applyBpfFilter(expr, "andnot"),
+        "or-library-filter": (expr) => applyBpfFilter(expr, "or"),
         "delete-custom-filter": (id) => deleteCustomFilter(id),
     });
     delegate("display-own-filters", {

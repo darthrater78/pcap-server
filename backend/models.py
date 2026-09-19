@@ -190,6 +190,18 @@ class DiagramViewState(BaseModel):
     spacing: float = 1.0
     zoom: DiagramZoom | None = None
     resolve_names: bool = False
+    # The interface the diagram was narrowed to ("" for all of them), as the
+    # packets name it -- a pcapng's own names can carry spaces and braces
+    # ("\Device\NPF_{...}"), so any printable ASCII, bounded.
+    interface: str = ""
+
+    @field_validator("interface")
+    @classmethod
+    def validate_interface(cls, v: str) -> str:
+        v = v.strip()
+        if v and not re.fullmatch(r"[\x20-\x7e]{1,80}", v):
+            raise ValueError("an interface name must be 1-80 printable characters")
+        return v
 
     @field_validator("display_filter")
     @classmethod
@@ -549,6 +561,10 @@ class ServerInfo(ServerAuth):
     # PRETTY_NAME from the host's /etc/os-release, as of the last prerequisite
     # check. Set by the server, never by a client: ServerAuth has no such field.
     os_name: str = ""
+    # The host's libpcap version ("1.10.4"), as of the last prerequisite check;
+    # "" when never checked. Server-set, like os_name. 1.10 or later allows a
+    # capture on several interfaces at once (ssh_manager.MULTI_INTERFACE_LIBPCAP).
+    libpcap_version: str = ""
     # Why this target was found to be the machine pcap-server runs on, as of the
     # last time anything connected to it. Empty is "no such finding", which is
     # not the same as "proved remote". Server-set, like os_name.
@@ -635,6 +651,11 @@ BPF_FORBIDDEN_CHARS = ";$`\\"
 # default for a capture you are going to read afterwards.
 ANY_INTERFACE = "any"
 
+# How many interfaces one capture may name. An ifindex clause per name goes
+# into the BPF program; a host with more links than this is better served by
+# "any" and a display filter.
+MAX_CAPTURE_INTERFACES = 16
+
 
 class CaptureRequest(BaseModel):
     # What this capture is for, in the operator's words.
@@ -654,6 +675,19 @@ class CaptureRequest(BaseModel):
     snap_len: int | None = Field(default=None, ge=0, le=65535)
     duration_seconds: int | None = Field(default=None, ge=1, le=600)
     bpf_filter: str = ""
+    # Several interfaces at once. Two or more run one capture on "any",
+    # narrowed to these by interface index (capture.py narrow_to_interfaces);
+    # `interface` is then ignored. Empty is the ordinary one-interface capture.
+    interfaces: list[str] = Field(default_factory=list, max_length=MAX_CAPTURE_INTERFACES)
+
+    @field_validator("interfaces")
+    @classmethod
+    def validate_interfaces(cls, v: list[str]) -> list[str]:
+        names = [n.strip() for n in v]
+        for n in names:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]*", n) or len(n) > 64 or n == ANY_INTERFACE:
+                raise ValueError("invalid interface name")
+        return list(dict.fromkeys(names))
 
     @field_validator("name")
     @classmethod

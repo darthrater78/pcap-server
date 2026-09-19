@@ -82,6 +82,15 @@ writable, and the SELinux mode. The OS it finds is kept on the server and shown
 in the server list and its details; run the check again after upgrading a host
 to refresh it. Changing a server's hostname or port clears it.
 
+It also reads the **libpcap version** tcpdump was built with. Version 1.10 or
+later can capture **several interfaces in one capture**: the Capture tab's
+**Pick several** runs on `any`, filtered by interface index, and the `ifindex`
+filter that relies on arrived in 1.10. This finding is informational, never a
+failure, because one interface or `any` works on every version. It is kept on
+the server like the OS, and follows the same rules. Until the check has run
+(or after an upgrade, until it runs again), **Pick several** stays disabled,
+and a request for several interfaces is refused with a message saying why.
+
 Two findings are worth knowing about in advance:
 
 - **tcpdump is usually in `/usr/sbin`, which a non-login SSH session often drops

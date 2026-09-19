@@ -238,6 +238,15 @@
                             <select id="cap-interface">
                                 <option value="any">any</option>
                             </select>
+                            <!-- Several at once: the capture runs on "any" with an
+                                 ifindex clause in front of the BPF filter, so one
+                                 tcpdump records exactly those links (app.js
+                                 captureInterfaceChoice, capture.py). -->
+                            <details class="cap-interfaces-multi" id="cap-interfaces-multi">
+                                <summary>Pick several</summary>
+                                <div id="cap-interfaces" class="cap-interfaces-list"></div>
+                                <p class="field-hint" id="cap-interfaces-hint">Tick two or more. The capture runs on <code>any</code>, limited to the ticked interfaces (needs libpcap 1.10 or later, which Check prerequisites reads).</p>
+                            </details>
                         </div>
                     </div>
                     <div class="form-group bpf-filter">
@@ -506,6 +515,11 @@
                             role="listbox" aria-label="Display filter suggestions" hidden></ul>
                     </div>
                     <button id="btn-apply-filter" class="btn btn-sm btn-secondary">Apply</button>
+                    <!-- Go to a packet by its number, as Wireshark's Ctrl+G. -->
+                    <input type="number" id="goto-packet" class="goto-packet" min="1" step="1"
+                           placeholder="Go to #" title="Go to packet number (Ctrl+G), then Enter"
+                           aria-label="Go to packet number">
+                    <span id="goto-packet-msg" class="goto-packet-msg" role="status" aria-live="polite"></span>
                     <!-- The two diagrams lead the viewer's tools, in the accent
                          color with an icon of its own: it is the fastest way to
                          see what a capture is. -->
@@ -948,8 +962,13 @@
          much (diagrams.js renderCaptureDetails). -->
     <dl id="topology-capture-details" class="diagram-capture-details"></dl>
     <p id="topology-scope" class="sanitize-target"></p>
-    <p class="diagram-hint">Click a host to filter the packet list to it and light up every host it talks to; click a link for that conversation (the diagram stays open). Drag a host to move it.
-        <span id="topology-selection" class="diagram-selection" aria-live="polite"></span></p>
+    <p class="diagram-hint">Click a host to filter the packet list to it and light up every host it talks to; click a link for that conversation (the diagram stays open). Drag a host to move it; Shift-click hosts, or Shift-drag a box around them, to move several at once.</p>
+    <div class="diagram-selection-row">
+        <span id="topology-selection" class="diagram-selection" aria-live="polite"></span>
+        <span id="topology-group-msg" class="diagram-group-msg" aria-live="polite"></span>
+        <button type="button" id="btn-topology-clear-filter" class="btn btn-sm btn-secondary" hidden
+                title="Put the packet list back to the diagram's own filter and clear the highlight">Clear filter</button>
+    </div>
     <div id="topology-cap-warning" class="diagram-cap-warning" hidden></div>
     <div id="topology-body" class="diagram-body">
         <!-- First thing in the diagram, and the largest control on it. -->
@@ -990,6 +1009,13 @@
                 <input type="range" id="topology-scrubber" class="diagram-scrubber" min="0" max="1000" value="0" disabled>
                 <span id="topology-playback-count" class="diagram-playback-count"></span>
             </div>
+            <!-- Only for a capture whose packets name more than one interface
+                 ("any", or a mapped upload): narrows the whole diagram --
+                 hosts, links, chips, stats and the play -- to one of them. -->
+            <label class="diagram-iface-filter" id="topology-iface-wrap" hidden
+                   title="Show only the traffic seen on one interface">Interface
+                <select id="topology-iface"><option value="">All interfaces</option></select>
+            </label>
         </div>
         <div class="diagram-main">
             <!-- The chips: what to play, grouped by what the traffic is for.

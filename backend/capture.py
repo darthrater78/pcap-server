@@ -21,7 +21,7 @@ from backend.models import (
     ServerInfo,
 )
 from backend.packet_parser import get_packet_count
-from backend.ssh_manager import MAX_INTERFACE_INDEXES, SSHManager
+from backend.ssh_manager import MAX_INTERFACE_INDEXES, SSHManager, libpcap_supports_multi_interface
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,25 @@ class InterfaceAlreadyCapturing(Exception):
     while this is a conflict over one specific link that clears only by
     stopping the capture that holds it -- or by choosing another interface.
     """
+
+
+class UnknownInterface(Exception):
+    """A multi-interface capture named an interface the server does not have,
+    or the server's interface table could not be read. Nothing was started."""
+
+
+def ifindex_clause(indexes: list[int], bpf_filter: str) -> str:
+    """The filter a multi-interface capture runs with.
+
+    `ifindex N` matches the interface index Linux cooked v2 records per
+    packet, so on "any" it keeps exactly the named links. The operator's own
+    filter goes after it, parenthesised, so its `or`s cannot rebind the
+    clause. The frontend reads this shape back to show the names
+    (app.js IFINDEX_CLAUSE_RE): change one, change both.
+    """
+    clause = "(" + " or ".join(f"ifindex {int(i)}" for i in indexes) + ")"
+    rest = bpf_filter.strip()
+    return f"{clause} and ({rest})" if rest else clause
 
 
 def server_label(server: ServerInfo) -> str:
@@ -266,11 +285,46 @@ class CaptureManager:
                 "encryption first rather than storing it in the clear"
             )
 
+    async def narrow_to_interfaces(self, req: CaptureRequest, server: ServerInfo) -> CaptureRequest:
+        """Two or more interfaces: one capture on "any", limited by index.
+
+        The names are looked up on the target now, so the indexes are the
+        ones tcpdump will see. One name is just that interface. Runs before
+        start()'s synchronous stretch -- it awaits, and nothing may await
+        between the busy check and the registration below it.
+        """
+        if len(req.interfaces) < 2:
+            if req.interfaces:
+                return req.model_copy(update={"interface": req.interfaces[0], "interfaces": []})
+            return req
+        # Refused here rather than left to tcpdump: an older libpcap rejects
+        # the ifindex filter, and the capture would fail after starting.
+        version = getattr(server, "libpcap_version", "")
+        if not libpcap_supports_multi_interface(version):
+            raise UnknownInterface(
+                f"several interfaces at once needs libpcap 1.10 or later on the server; it has {version}"
+                if version else
+                "several interfaces at once needs libpcap 1.10 or later, and this server's version "
+                "is not known yet -- run Check prerequisites on the Servers tab"
+            )
+        try:
+            table = await self._ssh.interface_indexes(server)
+        except Exception as exc:  # any failure to read the table: nothing starts
+            logger.warning("could not read interface indexes for a multi-interface capture", exc_info=True)
+            raise UnknownInterface("could not read this server's interfaces") from exc
+        by_name = {name: index for index, name in table.items()}
+        missing = [n for n in req.interfaces if n not in by_name]
+        if missing:
+            raise UnknownInterface(f"not an interface on this server: {', '.join(missing)}")
+        bpf = ifindex_clause([by_name[n] for n in req.interfaces], req.bpf_filter)
+        return req.model_copy(update={"interface": ANY_INTERFACE, "interfaces": [], "bpf_filter": bpf})
+
     async def start(self, req: CaptureRequest, server: ServerInfo, user_id: str) -> CaptureInfo:
         # Before anything else, and in particular before tcpdump runs on the
         # target: refusing at collection time would throw away a capture the
         # user already waited for.
         self._refuse_while_locked("a new capture")
+        req = await self.narrow_to_interfaces(req, server)
 
         # Checked first, before any connection is opened or file created: each
         # running capture holds an SSH connection to a target host plus a local

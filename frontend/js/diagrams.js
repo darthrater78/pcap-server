@@ -192,10 +192,14 @@ function renderLegend(el, ranked, slotOf) {
 const PROBLEM_KINDS = [
     { key: "reset", label: "Resets", test: /\brst\b/i, filter: "tcp.flags.reset == 1" },
     {
-        key: "retrans", label: "Retransmissions / lost", test: /retransmission|out-of-order|previous segment|dup ack/i,
+        key: "retrans", label: "Retransmissions / lost", test: /retransmission|out-of-order|previous segment/i,
         filter: "tcp.analysis.retransmission || tcp.analysis.fast_retransmission || " +
-            "tcp.analysis.out_of_order || tcp.analysis.lost_segment || tcp.analysis.duplicate_ack",
+            "tcp.analysis.out_of_order || tcp.analysis.lost_segment",
     },
+    // A kind of its own rather than folded into retransmissions: a run of
+    // duplicate ACKs is the receiver asking for a lost segment, and is worth
+    // picking out on its own.
+    { key: "dupack", label: "Duplicate ACKs", test: /dup ack/i, filter: "tcp.analysis.duplicate_ack" },
     {
         key: "window", label: "Window problems", test: /zerowindow|window full/i,
         filter: "tcp.analysis.zero_window || tcp.analysis.window_full",
@@ -307,6 +311,25 @@ function linkKey(a, b) {
 // each have a colored mark of their own; a capture with more than that shares
 // the neutral mark past it, and those are told apart by picking them -- the
 // chip still names each one.
+// Which sections of the two side panes are folded, per browser: chip groups
+// by their label, stats sections as "stats:" + their key.
+const COLLAPSED_KEY = "pcap.topologyCollapsed";
+
+function collapsedSections() {
+    try {
+        const list = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+        return new Set(Array.isArray(list) ? list.filter((x) => typeof x === "string") : []);
+    } catch {
+        return new Set();
+    }
+}
+
+function setSectionCollapsed(key, collapsed) {
+    const set = collapsedSections();
+    if (collapsed) set.add(key); else set.delete(key);
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* storage blocked */ }
+}
+
 function renderTopologyLegend(el, ranked, slotOf, selected, problemCounts = new Map()) {
     if (!ranked.length) {
         el.innerHTML = '<span class="diagram-legend-empty">No packets</span>';
@@ -318,11 +341,21 @@ function renderTopologyLegend(el, ranked, slotOf, selected, problemCounts = new 
     const chip = (key, pressed, inner, title) =>
         `<button type="button" class="diagram-legend-item diagram-legend-chip" data-key="${escHtml(key)}" ` +
         `aria-pressed="${pressed}" title="${escHtml(title)}">${inner}</button>`;
-    const group = (label, chips, keys, cls = "") =>
-        `<div class="diagram-chip-group ${cls}" role="group" aria-label="${escHtml(label)}">` +
-        `<button type="button" class="diagram-chip-group-label" data-group-keys="${escHtml(JSON.stringify(keys))}" ` +
-        `title="Pick every chip in ${escHtml(label)} (click again to drop them)">${escHtml(label)}</button>` +
-        `${chips.join("")}</div>`;
+    const folded = collapsedSections();
+    // A folded group keeps its heading, with how many chips it holds and how
+    // many of them are picked, so a pick is never hidden without a trace.
+    const group = (label, chips, keys, cls = "") => {
+        const closed = folded.has(label);
+        const picked = keys.filter((k) => selected.has(k)).length;
+        return `<div class="diagram-chip-group ${cls}${closed ? " is-collapsed" : ""}" role="group" aria-label="${escHtml(label)}">` +
+            `<div class="diagram-chip-group-head">` +
+            `<button type="button" class="diagram-section-toggle" data-section="${escHtml(label)}" ` +
+            `aria-expanded="${!closed}" title="${closed ? "Show" : "Hide"} ${escHtml(label)}">${closed ? "▸" : "▾"}</button>` +
+            `<button type="button" class="diagram-chip-group-label" data-group-keys="${escHtml(JSON.stringify(keys))}" ` +
+            `title="Pick every chip in ${escHtml(label)} (click again to drop them)">${escHtml(label)}</button>` +
+            (closed ? `<span class="diagram-chip-group-count">${keys.length}${picked ? ` · ${picked} picked` : ""}</span>` : "") +
+            `</div>${closed ? "" : chips.join("")}</div>`;
+    };
 
     const blocks = [];
     const kinds = PROBLEM_KINDS.filter((k) => problemCounts.get(k.key));
@@ -390,8 +423,8 @@ function renderCaptureDetails(kind) {
     const srv = activeServers.find((x) => x.id === c.server_id);
     const rows = [
         ["Server", uploaded ? "Uploaded pcap" : (c.server_label || srv?.hostname || c.server_id || "")],
-        ["Interface", c.interface || ""],
-        ["Capture filter", uploaded ? "" : (c.bpf_filter || "none")],
+        ["Interface", captureInterfaceText(c)],
+        ["Capture filter", uploaded ? "" : (filterDisplayName(captureFilterParts(c).filter).text || "none")],
         [uploaded ? "Uploaded" : "Started", c.started_at ? formatStoredAt(c.started_at) : ""],
         ["Took", uploaded ? "" : captureDuration(c)],
         ["Packets", c.packet_count ? Number(c.packet_count).toLocaleString() : ""],
@@ -441,6 +474,7 @@ function currentLayoutState() {
         spacing: parseFloat($("topology-spacing").value) || 1,
         zoom: { k: st.view.k, tx: round1(st.view.tx), ty: round1(st.view.ty) },
         resolve_names: resolveNamesEnabled(),
+        interface: topologyPlayback?.iface ?? st.pendingIface ?? "",
     };
 }
 
@@ -1036,6 +1070,27 @@ function placeNode(n) {
     n.el?.setAttribute("transform", `translate(${n.x},${n.y}) scale(${glyphScale()})`);
 }
 
+// The hosts that move together. `add` only adds (a box drawn round hosts
+// already in the group keeps them); `clear` empties the group first.
+function toggleMoveGroup(ids, add = false, clear = false) {
+    const state = topologyState;
+    if (!state) return;
+    const group = state.moveGroup || (state.moveGroup = new Set());
+    if (clear) group.clear();
+    for (const id of ids) {
+        if (add || !group.has(id)) group.add(id);
+        else group.delete(id);
+    }
+    for (const n of state.nodes) n.el?.classList.toggle("is-grouped", group.has(n.id));
+    const msg = $("topology-group-msg");
+    if (msg) {
+        msg.textContent = group.size
+            ? `${group.size} host${group.size === 1 ? "" : "s"} picked to move together: drag any of them. ` +
+              "Click empty space to let go."
+            : "";
+    }
+}
+
 function applyTopologyView() {
     if (!topologyState) return;
     const { k, tx, ty } = topologyState.view;
@@ -1156,23 +1211,59 @@ function initTopologyZoomPan(svg) {
     }, { passive: false });
 
     let pan = null;
+    let box = null;
     svg.addEventListener("pointerdown", (ev) => {
         if (!topologyState || ev.target !== svg) return;
         const pt = svgPoint(svg, ev);
-        pan = { x: pt.x, y: pt.y, tx: topologyState.view.tx, ty: topologyState.view.ty };
         svg.setPointerCapture(ev.pointerId);
+        if (ev.shiftKey) {
+            // Shift-drag on empty space draws a box; the hosts inside it join
+            // the move group.
+            box = { x: pt.x, y: pt.y, el: svgEl("rect", { class: "diagram-marquee", x: pt.x, y: pt.y, width: 0, height: 0 }) };
+            svg.append(box.el);
+            return;
+        }
+        pan = { x: pt.x, y: pt.y, tx: topologyState.view.tx, ty: topologyState.view.ty, moved: false };
         svg.classList.add("is-panning");
     });
     svg.addEventListener("pointermove", (ev) => {
+        if (box) {
+            const pt = svgPoint(svg, ev);
+            box.el.setAttribute("x", Math.min(box.x, pt.x)); box.el.setAttribute("y", Math.min(box.y, pt.y));
+            box.el.setAttribute("width", Math.abs(pt.x - box.x)); box.el.setAttribute("height", Math.abs(pt.y - box.y));
+            return;
+        }
         if (!pan) return;
         const pt = svgPoint(svg, ev);
+        if (!pan.moved && Math.hypot(pt.x - pan.x, pt.y - pan.y) < 3) return;
+        pan.moved = true;
         const v = topologyState.view;
         v.tx = pan.tx + (pt.x - pan.x);
         v.ty = pan.ty + (pt.y - pan.y);
         v.userMoved = true;
         applyTopologyView();
     });
-    const end = () => { pan = null; svg.classList.remove("is-panning"); };
+    const end = (ev) => {
+        if (box) {
+            const x = Number(box.el.getAttribute("x")), y = Number(box.el.getAttribute("y"));
+            const w = Number(box.el.getAttribute("width")), h = Number(box.el.getAttribute("height"));
+            box.el.remove();
+            box = null;
+            if (topologyState && ev.type === "pointerup") {
+                const inside = topologyState.nodes.filter((n) => {
+                    if (n.hidden) return false;
+                    const p = toScreen(topologyState.view, n.x, n.y);
+                    return p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h;
+                });
+                toggleMoveGroup(inside.map((n) => n.id), true);
+            }
+            return;
+        }
+        // A plain click on empty space lets go of the move group.
+        if (pan && !pan.moved && ev.type === "pointerup") toggleMoveGroup([], false, true);
+        pan = null;
+        svg.classList.remove("is-panning");
+    };
     svg.addEventListener("pointerup", end);
     svg.addEventListener("pointercancel", end);
 }
@@ -1307,12 +1398,17 @@ function updateEdgePositions(edgeLayer, byId) {
 
 // Drag repositions just that node -- no re-simulation -- which is cheap and
 // leaves the rest of a layout the user has already made sense of alone.
+//
+// A host in the move group (Shift-click, or Shift-drag a box) takes the rest
+// of the group with it: every member moves by the same amount.
 function makeDraggable(g, node, onMove) {
     let dragging = false;
     let start = null;
+    let origin = null;
     g.addEventListener("pointerdown", (ev) => {
         dragging = true;
         start = { x: ev.clientX, y: ev.clientY };
+        origin = null;
         g.setPointerCapture(ev.pointerId);
     });
     g.addEventListener("pointermove", (ev) => {
@@ -1325,9 +1421,15 @@ function makeDraggable(g, node, onMove) {
         }
         const pt = svgPoint(g.ownerSVGElement, ev);
         const world = topologyState ? toWorld(topologyState.view, pt) : pt;
-        node.x = world.x; node.y = world.y;
+        const group = topologyState?.moveGroup;
+        const movers = group?.has(node.id) && group.size > 1
+            ? [...group].map((id) => topologyState.byId.get(id)).filter(Boolean) : [node];
+        if (!origin) origin = { x: world.x, y: world.y, at: movers.map((n) => [n, n.x, n.y]) };
+        for (const [n, x0, y0] of origin.at) {
+            n.x = x0 + (world.x - origin.x); n.y = y0 + (world.y - origin.y);
+            placeNode(n);
+        }
         if (topologyState) topologyState.userDragged = true;
-        placeNode(node);
         onMove();
     });
     const end = () => {
@@ -1391,7 +1493,13 @@ function renderTopologySVG(svg, nodes, byId, edges, onNodeClick, onEdgeClick) {
             `\n${ZONE_LABEL[n.zone]}` +
             "\nClick to filter the packet list to this host and light up what it talks to, or drag to move it";
         g.append(circle, label, title);
-        g.addEventListener("click", () => { if (g.dataset.dragged === undefined) onNodeClick(n); });
+        g.addEventListener("click", (ev) => {
+            if (g.dataset.dragged !== undefined) return;
+            // Shift (or Ctrl / Cmd) gathers hosts to move together instead of
+            // filtering to one.
+            if (ev.shiftKey || ev.ctrlKey || ev.metaKey) toggleMoveGroup([n.id]);
+            else onNodeClick(n);
+        });
         // The packet marks live on the canvas, not in this <g>, so a drag has
         // to repaint them too -- otherwise, paused or finished, the marks
         // sitting on a node stay where the node used to be.
@@ -1591,15 +1699,33 @@ function playbackAtEnd(playback) {
 
 // --- Stats pane ---------------------------------------------------------------
 
-function statsRow(label, value, title = "") {
-    return `<tr${title ? ` title="${escHtml(title)}"` : ""}><th scope="row">${escHtml(label)}</th>` +
+// `text` marks a value that is words or an address rather than a number: it
+// may wrap. A number never does, but an address or host name that could not
+// wrap took the whole row and squeezed the label to one letter a line.
+function statsRow(label, value, title = "", text = false) {
+    const attrs = (title ? ` title="${escHtml(title)}"` : "") + (text ? ' class="is-text"' : "");
+    return `<tr${attrs}><th scope="row">${escHtml(label)}</th>` +
         `<td>${escHtml(value)}</td></tr>`;
 }
 
-function statsSection(heading, rows) {
-    return rows.length
-        ? `<h4>${escHtml(heading)}</h4><table class="diagram-stats-table">${rows.join("")}</table>`
-        : "";
+// Each section folds on its heading. `key` names it for the remembered
+// folded state when the heading itself changes (the selected host's).
+function statsSection(heading, rows, key = heading) {
+    if (!rows.length) return "";
+    const open = !collapsedSections().has(`stats:${key}`);
+    return `<details class="diagram-stats-section" data-section="stats:${escHtml(key)}"${open ? " open" : ""}>` +
+        `<summary><h4>${escHtml(heading)}</h4></summary>` +
+        `<table class="diagram-stats-table">${rows.join("")}</table></details>`;
+}
+
+// Recorded on the click, not on <details>' own "toggle": that event comes
+// later, and the pane is redrawn often enough during a play that the section
+// it names can already be gone -- and its state with it.
+function onTopologyStatsSectionClick(ev) {
+    const summary = ev.target.closest(".diagram-stats-section > summary");
+    if (!summary) return;
+    const d = summary.parentElement;
+    setSectionCollapsed(d.dataset.section, d.open);
 }
 
 function percent(part, whole) {
@@ -1629,15 +1755,16 @@ function renderTopologyStats() {
                 `<tr><th scope="row">${slotSwatch(protocolSlot(topologyState.rank.slotOf, proto))}` +
                 `${escHtml(proto)}</th><td>${escHtml(`${c.toLocaleString()} · ${percent(c, sp.total)}`)}</td></tr>`)]
             : [statsRow("Protocols", "loading…")];
-        parts.push(statsSection(heading, rows));
+        parts.push(statsSection(heading, rows, "Selected"));
     }
     const pbp = topologyPlayback;
     if (pbp?.problemCounts) {
-        const rows = PROBLEM_KINDS.filter((k) => pbp.problemCounts.get(k.key)).map((k) =>
+        const problemCounts = pbp.viewProblemCounts || pbp.problemCounts;
+        const rows = PROBLEM_KINDS.filter((k) => problemCounts.get(k.key)).map((k) =>
             `<tr class="diagram-stats-action" data-problem="${k.key}" tabindex="0" ` +
             `title="Filter the packet list to these: ${escHtml(k.filter)}">` +
             `<th scope="row"><span class="diagram-problem-icon" aria-hidden="true">⚠</span>${escHtml(k.label)}</th>` +
-            `<td>${pbp.problemCounts.get(k.key).toLocaleString()}</td></tr>`);
+            `<td>${problemCounts.get(k.key).toLocaleString()}</td></tr>`);
         parts.push(statsSection("Problems", rows.length ? rows : [statsRow("None found", "")]));
     }
     const zoneCounts = ZONES.map((z) => [z, nodes.filter((n) => n.zone === z).length]);
@@ -1645,9 +1772,17 @@ function renderTopologyStats() {
     parts.push(statsSection("Where hosts are", [
         ...zoneCounts.map(([z, c]) => statsRow(ZONE_LABEL[z], c.toLocaleString())),
         ...egress.map((n) => statsRow("This box's address (likely)", nodeLabel(n),
-            "Only ever sends packets out of a physical interface, never forwarded in: where this box's own traffic leaves")),
+            "Only ever sends packets out of a physical interface, never forwarded in: where this box's own traffic leaves", true)),
     ]));
-    parts.push(statsSection("Capture", [
+    // Narrowed to one interface, the totals, talkers and links below come
+    // from that interface's packets instead of /conversations.
+    const onIface = topologyPlayback?.iface ? ifaceTotals(topologyPlayback) : null;
+    parts.push(onIface ? statsSection(`On ${topologyPlayback.iface}`, [
+        statsRow("Hosts", onIface.hosts.size.toLocaleString()),
+        statsRow("Links", onIface.links.size.toLocaleString()),
+        statsRow("Packets", onIface.packets.toLocaleString()),
+        statsRow("Bytes", formatBytes(onIface.bytes)),
+    ], "Capture") : statsSection("Capture", [
         statsRow("Hosts", nodes.length.toLocaleString()),
         statsRow("Links", edges.length.toLocaleString()),
         // From /conversations, which counts IP traffic only -- so an ARP-heavy
@@ -1666,16 +1801,50 @@ function renderTopologyStats() {
         parts.push(statsSection(scope, [statsRow("Packets", pb.packets.length.toLocaleString()), ...rows]));
     }
 
-    const talkers = [...nodes].sort((a, b) => b.bytes - a.bytes).slice(0, 5)
-        .map((n) => statsRow(nodeLabel(n), formatBytes(n.bytes), `${hostText(n)}: ${n.packets.toLocaleString()} packets`));
+    const label = (id) => nodeLabel(topologyState.byId.get(id) || { id, name: "" });
+    const talkers = onIface
+        ? [...onIface.hosts].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 5)
+            .map(([id, t]) => statsRow(label(id), formatBytes(t.bytes), `${id}: ${t.packets.toLocaleString()} packets`))
+        : [...nodes].sort((a, b) => b.bytes - a.bytes).slice(0, 5)
+            .map((n) => statsRow(nodeLabel(n), formatBytes(n.bytes), `${hostText(n)}: ${n.packets.toLocaleString()} packets`));
     parts.push(statsSection("Top talkers", talkers));
 
-    const links = [...edges].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 5)
-        .map((e) => statsRow(`${nodeLabel(topologyState.byId.get(e.a) || { id: e.a })} ↔ ${nodeLabel(topologyState.byId.get(e.b) || { id: e.b })}`, formatBytes(e.totalBytes),
-            `${(e.packetsAB + e.packetsBA).toLocaleString()} packets`));
+    const links = onIface
+        ? [...onIface.links].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 5)
+            .map(([key, t]) => {
+                const [a, b] = key.split("|");
+                return statsRow(`${label(a)} ↔ ${label(b)}`, formatBytes(t.bytes), `${t.packets.toLocaleString()} packets`);
+            })
+        : [...edges].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 5)
+            .map((e) => statsRow(`${label(e.a)} ↔ ${label(e.b)}`, formatBytes(e.totalBytes),
+                `${(e.packetsAB + e.packetsBA).toLocaleString()} packets`));
     parts.push(statsSection("Busiest links", links));
 
     el.innerHTML = parts.join("");
+}
+
+// Per host and per link, packets and bytes on the picked interface --
+// counted from the packets, all of them, not just the picked chips'.
+function ifaceTotals(pb) {
+    if (pb.ifaceTotals?.iface === pb.iface) return pb.ifaceTotals;
+    const hosts = new Map();
+    const links = new Map();
+    let packets = 0, bytes = 0;
+    const bump = (map, key, len) => {
+        const t = map.get(key) || { packets: 0, bytes: 0 };
+        t.packets++; t.bytes += len;
+        map.set(key, t);
+    };
+    for (const p of pb.allPackets) {
+        if (p.interface !== pb.iface) continue;
+        const len = Number(p.length) || 0;
+        packets++; bytes += len;
+        bump(hosts, p.source, len);
+        if (p.destination !== p.source) bump(hosts, p.destination, len);
+        bump(links, linkKey(p.source, p.destination), len);
+    }
+    pb.ifaceTotals = { iface: pb.iface, hosts, links, packets, bytes };
+    return pb.ifaceTotals;
 }
 
 const STATS_OPEN_KEY = "pcap.topologyStatsOpen";
@@ -1867,28 +2036,96 @@ function diagramBroadcast() {
     return diagramChannel;
 }
 
+// Two messages, both checked for shape and capture before anything is done:
+//   "filter"        diagram window -> app: put this in the packet list
+//   "viewer-filter" app -> diagram window: the packet list's filter changed
+// A "filter" may be empty -- that is Clear filter going back to a diagram
+// drawn over the whole capture.
 function onDiagramBroadcast(ev) {
     const m = ev.data;
-    if (document.body.classList.contains("diagram-window")) return;
-    if (!m || m.type !== "filter" || typeof m.filter !== "string" || typeof m.capture !== "string") return;
-    if (m.capture !== viewingCaptureId) return;
-    applyBuiltFilter(m.filter, "selected");
+    if (!m || typeof m.filter !== "string" || typeof m.capture !== "string") return;
+    if (document.body.classList.contains("diagram-window")) {
+        if (m.type === "viewer-filter" && topologyState && m.capture === topologyState.captureId) {
+            onViewerFilterApplied(m.filter, false);
+        }
+        return;
+    }
+    if (m.type !== "filter" || m.capture !== viewingCaptureId) return;
+    setViewerFilter(m.filter);
+}
+
+function inDiagramWindow() {
+    return document.body.classList.contains("diagram-window");
+}
+
+function setViewerFilter(expr) {
+    $("display-filter").value = expr;
+    applyDisplayFilter();
 }
 
 function filterViewerTo(expr) {
-    if (document.body.classList.contains("diagram-window")) {
+    // Recorded first: applying it comes straight back through
+    // onViewerFilterApplied, which must recognise it as the diagram's own.
+    if (topologyState) topologyState.pushedFilter = expr;
+    if (inDiagramWindow()) {
         diagramBroadcast()?.postMessage({ type: "filter", capture: topologyState.captureId, filter: expr });
     } else {
-        applyBuiltFilter(expr, "selected");
+        setViewerFilter(expr);
     }
-    const inWindow = document.body.classList.contains("diagram-window");
     $("topology-selection").textContent =
-        `${inWindow ? "Sent to the app's packet list" : "Packet list filtered to"}: ${expr}`;
+        `${inDiagramWindow() ? "Sent to the app's packet list" : "Packet list filtered to"}: ${expr}`;
+    $("btn-topology-clear-filter").hidden = false;
+}
+
+// A click on a host or link used to leave its filter on the packet list for
+// good: the only way back was to close the diagram and clear it in the
+// viewer. Clear filter puts back the filter the diagram was drawn with (the
+// whole capture, usually) and drops the highlight.
+function clearTopologyFilter() {
+    const state = topologyState;
+    if (!state) return;
+    if (state.pushedFilter !== undefined) {
+        state.pushedFilter = undefined;
+        if (inDiagramWindow()) {
+            diagramBroadcast()?.postMessage({ type: "filter", capture: state.captureId, filter: state.filter });
+        } else {
+            setViewerFilter(state.filter);
+        }
+    }
+    dropTopologySelection();
+}
+
+function dropTopologySelection() {
+    const state = topologyState;
+    $("topology-selection").textContent = "";
+    $("btn-topology-clear-filter").hidden = true;
+    if (!state) return;
+    state.pushedFilter = undefined;
+    if (!state.selection) return;
+    state.selection = null;
+    state.selectionProtocols = null;
+    highlightSelection(state, null);
+    renderSelectionOverlay();
+    renderTopologyStats();
+}
+
+// The packet list's filter changed. If it is no longer the one a click on
+// the diagram put there -- cleared, a saved view picked, something typed --
+// the diagram's highlight no longer describes it, so it goes too.
+function onViewerFilterApplied(filter, broadcast = true) {
+    if (broadcast && viewingCaptureId && !inDiagramWindow()) {
+        diagramBroadcast()?.postMessage({ type: "viewer-filter", capture: viewingCaptureId, filter });
+    }
+    const state = topologyState;
+    if (!state || state.pushedFilter === undefined) return;
+    if (filter.trim() !== state.pushedFilter.trim()) dropTopologySelection();
 }
 
 function onTopologyNodeClick(n) {
     const field = addressField(n.id);
     if (!field) return;
+    // A second click on the selected host undoes the first, filter and all.
+    if (sameSelection(topologyState?.selection, { kind: "host", id: n.id })) { clearTopologyFilter(); return; }
     filterViewerTo(buildFieldFilter(field, n.id));
     selectTopologyItem({ kind: "host", id: n.id });
 }
@@ -1896,6 +2133,7 @@ function onTopologyNodeClick(n) {
 function onTopologyEdgeClick(e) {
     const field = addressField(e.a);
     if (!field) return;
+    if (sameSelection(topologyState?.selection, { kind: "link", a: e.a, b: e.b })) { clearTopologyFilter(); return; }
     filterViewerTo(`${buildFieldFilter(field, e.a)} && ${buildFieldFilter(field, e.b)}`);
     selectTopologyItem({ kind: "link", a: e.a, b: e.b });
 }
@@ -2025,6 +2263,7 @@ function resetTopologyPlayback() {
     $("topology-scrubber").disabled = true;
     $("topology-scrubber").value = 0;
     $("topology-playback-count").textContent = "";
+    $("topology-iface-wrap").hidden = true;
 }
 
 async function openTopologyDialog(opts = {}) {
@@ -2039,6 +2278,8 @@ async function openTopologyDialog(opts = {}) {
     loadTopologyLayouts(viewingCaptureId, layout?.id || "");
     $("topology-resolve").checked = resolveNamesEnabled();
     $("topology-selection").textContent = "";
+    $("btn-topology-clear-filter").hidden = true;
+    $("topology-group-msg").textContent = "";
     $("topology-search").value = "";
     $("topology-search-count").textContent = "";
     $("topology-cap-warning").hidden = true;
@@ -2076,6 +2317,7 @@ async function openTopologyDialog(opts = {}) {
             view: { k: 1, tx: 0, ty: 0, userMoved: false },
             layoutId: layout?.id || null,
             pendingPicks: layout ? (layout.state?.selected || []) : null,
+            pendingIface: layout ? (layout.state?.interface || "") : "",
         };
         if (!layout || !restoreLayoutPositions(topologyState, layout.state || {})) settleAndFit();
         renderTopologyStats();
@@ -2116,6 +2358,7 @@ function preparePlayback(packets) {
     topologyPlayback.problemScope = null;
     renderProblemBadges(packets);
     renderTopologyLegend($("topology-legend"), ranked, slotOf, topologyPlayback.selected, topologyPlayback.problemCounts);
+    fillInterfaceFilter(packets);
     // A saved layout's picks, once there are chips to pick: only keys this
     // capture still has (a protocol, or a problem kind that occurs).
     const picks = topologyState.pendingPicks;
@@ -2124,8 +2367,14 @@ function preparePlayback(packets) {
             ...PROBLEM_KINDS.filter((k) => topologyPlayback.problemCounts.get(k.key)).map(problemKey)]);
         for (const key of picks) if (known.has(key)) topologyPlayback.selected.add(key);
         topologyState.pendingPicks = null;
-        if (topologyPlayback.selected.size) applyTopologyPicks();
     }
+    const iface = topologyState.pendingIface;
+    topologyState.pendingIface = "";
+    if (iface && [...$("topology-iface").options].some((o) => o.value === iface)) {
+        topologyPlayback.iface = iface;
+        $("topology-iface").value = iface;
+    }
+    if (topologyPlayback.selected.size || topologyPlayback.iface) applyTopologyPicks();
     $("topology-scrubber").max = String(packets.length);
     $("topology-scrubber").disabled = false;
     $("topology-speed").disabled = false;
@@ -2223,10 +2472,12 @@ function drawTopologyFrame(ctx, canvas, playback) {
     const view = topologyState.view;
     applyEdgeHeat(topologyState?.edgeLayer, edgeHeatAt(playback, idx));
     const trailStart = Math.max(0, idx - 20);
+    const lit = new Set();
     for (let i = trailStart; i <= idx && i < playback.packets.length; i++) {
         const p = playback.packets[i];
         const a = topologyState.byId.get(p.source), b = topologyState.byId.get(p.destination);
         if (!a || !b) continue;
+        lit.add(a.id); lit.add(b.id); lit.add(linkKey(a.id, b.id));
         const frac = i === idx ? progress - idx : 1;
         const { x, y } = toScreen(view, a.x + (b.x - a.x) * frac, a.y + (b.y - a.y) * frac);
         ctx.globalAlpha = Math.max(0.08, 1 - (idx - i) / 20);
@@ -2243,6 +2494,31 @@ function drawTopologyFrame(ctx, canvas, playback) {
         }
     }
     ctx.globalAlpha = 1;
+    lightFlowTargets(playback, playback.finished ? new Set() : lit);
+}
+
+// With a host selected everything else fades, but the play still carries
+// every packet -- and a packet landing on a faded host used to arrive at
+// something barely visible. A host (and the link) a packet in the trail is
+// crossing comes back up to full strength, label and all, for as long as
+// the trail is on it. Only what changed since the last frame is touched.
+function lightFlowTargets(playback, lit) {
+    const state = topologyState;
+    const before = playback.flowLit || new Set();
+    if (!state) return;
+    const toggle = (key, on) => {
+        if (key.includes("|")) {
+            if (!state.lineByKey) {
+                state.lineByKey = new Map([...state.edgeLayer.children].map((l) => [linkKey(l.dataset.a, l.dataset.b), l]));
+            }
+            state.lineByKey.get(key)?.classList.toggle("is-flow", on);
+        } else {
+            state.byId.get(key)?.el?.classList.toggle("is-flow", on);
+        }
+    };
+    for (const key of before) if (!lit.has(key)) toggle(key, false);
+    for (const key of lit) if (!before.has(key)) toggle(key, true);
+    playback.flowLit = lit;
 }
 
 // One packet on the canvas. The shape is half of what identifies its protocol
@@ -2367,7 +2643,11 @@ function applyProtocolScope(packets, scoped) {
         const { a, b } = el.dataset;
         el.classList.toggle("is-hidden", scoped && !links.has(linkKey(a, b)));
     }
-    if (!topologyState.view.userMoved) fitTopologyView(AUTO_ZOOM_FLOOR);
+    // A handful of hosts left cannot crowd each other, so they are fitted
+    // however far out that takes; the floor is for a graph still full enough
+    // for glyphs to overlap.
+    const shown = topologyState.nodes.filter((n) => !n.hidden).length;
+    if (!topologyState.view.userMoved) fitTopologyView(scoped && shown <= 20 ? ZOOM_MIN : AUTO_ZOOM_FLOOR);
 }
 
 // A protocol chip was clicked: change the selection, and rewind to a stopped
@@ -2375,6 +2655,12 @@ function applyProtocolScope(packets, scoped) {
 function onTopologyLegendClick(ev) {
     const pb = topologyPlayback;
     if (!pb) return;
+    const toggle = ev.target.closest(".diagram-section-toggle");
+    if (toggle) {
+        setSectionCollapsed(toggle.dataset.section, toggle.getAttribute("aria-expanded") === "true");
+        renderPicksLegend(pb);
+        return;
+    }
     const groupLabel = ev.target.closest(".diagram-chip-group-label");
     const chip = ev.target.closest(".diagram-legend-chip");
     const sel = pb.selected;
@@ -2397,13 +2683,18 @@ function onTopologyLegendClick(ev) {
 
 // Plays only what is picked: packets of a picked protocol, and packets of a
 // picked problem kind. Also used when a saved layout restores its picks.
+//
+// The interface filter sits over all of it: with one picked, only packets
+// seen on it play, the chips count only those, and hosts and links that
+// never crossed it leave the drawing.
 function applyTopologyPicks() {
     const pb = topologyPlayback;
     const sel = pb.selected;
     pb.problemScope = problemScope(sel);
+    const base = pb.iface ? pb.allPackets.filter((p) => p.interface === pb.iface) : pb.allPackets;
     pb.packets = sel.size
-        ? pb.allPackets.filter((p) => sel.has(p.protocol) || (PROBLEM_OF.has(p) && sel.has(problemKey(PROBLEM_OF.get(p)))))
-        : pb.allPackets;
+        ? base.filter((p) => sel.has(p.protocol) || (PROBLEM_OF.has(p) && sel.has(problemKey(PROBLEM_OF.get(p)))))
+        : base;
     pb.playing = false;
     pb.finished = false;
     if (pb.raf) cancelAnimationFrame(pb.raf);
@@ -2416,10 +2707,55 @@ function applyTopologyPicks() {
     applyEdgeHeat(topologyState?.edgeLayer, new Map());
     const canvas = $("topology-canvas");
     canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
-    renderTopologyLegend($("topology-legend"), pb.ranked, pb.slotOf, sel, pb.problemCounts);
-    renderProblemBadges(pb.allPackets, pb.problemScope);
-    applyProtocolScope(pb.packets, sel.size > 0);
+    countLegend(pb, base);
+    renderPicksLegend(pb);
+    renderProblemBadges(base, pb.problemScope);
+    applyProtocolScope(pb.packets, sel.size > 0 || Boolean(pb.iface));
     renderTopologyStats();
+}
+
+// The chips' counts over `base` -- every packet, or one interface's -- kept
+// in the capture-wide ranking's order, which is also what fixes each
+// protocol's mark.
+function countLegend(pb, base) {
+    if (base === pb.allPackets) {
+        pb.viewRanked = pb.ranked;
+        pb.viewProblemCounts = pb.problemCounts;
+        return;
+    }
+    const counts = new Map();
+    const problems = new Map();
+    for (const p of base) {
+        counts.set(p.protocol, (counts.get(p.protocol) || 0) + 1);
+        const kind = PROBLEM_OF.get(p);
+        if (kind) problems.set(kind.key, (problems.get(kind.key) || 0) + 1);
+    }
+    pb.viewRanked = pb.ranked.map(([proto]) => [proto, counts.get(proto) || 0]).filter(([, c]) => c);
+    pb.viewProblemCounts = problems;
+}
+
+function renderPicksLegend(pb) {
+    renderTopologyLegend($("topology-legend"), pb.viewRanked || pb.ranked, pb.slotOf, pb.selected,
+        pb.viewProblemCounts || pb.problemCounts);
+}
+
+// One entry per interface the packets name, shown only when there is a
+// choice to make.
+function fillInterfaceFilter(packets) {
+    const names = [...new Set(packets.map((p) => p.interface).filter(Boolean))].sort();
+    const sel = $("topology-iface");
+    sel.textContent = "";
+    sel.append(new Option("All interfaces", ""));
+    for (const name of names) sel.append(new Option(name, name));
+    sel.value = "";
+    $("topology-iface-wrap").hidden = names.length < 2;
+}
+
+function onTopologyIfaceChange() {
+    const pb = topologyPlayback;
+    if (!pb) return;
+    pb.iface = $("topology-iface").value;
+    applyTopologyPicks();
 }
 
 // --- Sequence Diagram (swimlanes) -------------------------------------------
@@ -2435,7 +2771,9 @@ function buildSequenceLayout(packets, width) {
     const hosts = [...laneX.keys()];
     const laneGap = hosts.length > 1 ? (width - 160) / (hosts.length - 1) : 0;
     hosts.forEach((h, i) => laneX.set(h, 80 + i * laneGap));
-    const rowGap = 22, topPad = 58;
+    // Tall enough for each arrow's label to sit under it rather than only in
+    // a hover.
+    const rowGap = 34, topPad = 58;
     return { hosts, laneX, laneGap, rowGap, topPad, totalHeight: topPad + packets.length * rowGap + 30 };
 }
 
@@ -2524,7 +2862,32 @@ function renderSequenceSVG(svg, packets, slotOf, names = {}) {
             `(${formatBytes(p.length)}) ${p.info}`;
         path.append(title);
         arrowLayer.append(path);
+        // What the packet is, under its arrow: number, protocol and tshark's
+        // Info line. Every row holds one arrow, so its label may run past the
+        // arrow's own span across the row -- it starts at the arrow's left end
+        // and goes right, or ends at its right end when that side has more
+        // room -- and is cut only at the diagram's edge (the full line is in
+        // the arrow's <title>). Clicking it opens the packet like the arrow.
+        const left = Math.min(x1, x2) - (x1 === x2 ? 12 : 0), right = Math.max(x1, x2) + (x1 === x2 ? 12 : 0);
+        const toRight = width - left - 8 >= right - 8;
+        const label = svgEl("text", {
+            class: "seq-arrow-label", x: toRight ? left + 2 : right - 2, y: y + 13,
+            "text-anchor": toRight ? "start" : "end",
+        });
+        label.dataset.frame = p.number;
+        label.textContent = fitArrowLabel(`#${p.number} ${p.protocol}  ${p.info || ""}`.trim(),
+            toRight ? width - left - 10 : right - 10);
+        arrowLayer.append(label);
     });
+}
+
+// .seq-arrow-label is 10px monospace, ~6.1px a glyph. Cut at the end: the
+// number and protocol lead, and the Info line reads left to right.
+const ARROW_LABEL_CHAR_PX = 6.1;
+
+function fitArrowLabel(text, roomPx) {
+    const max = Math.max(6, Math.floor(roomPx / ARROW_LABEL_CHAR_PX));
+    return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
 function initSequenceInteractions(svg) {
@@ -2634,6 +2997,8 @@ function initDiagramDialogs() {
     $("btn-topology-play")?.addEventListener("click", onTopologyPlayClick);
     $("topology-scrubber")?.addEventListener("input", onTopologyScrub);
     $("topology-legend")?.addEventListener("click", onTopologyLegendClick);
+    $("btn-topology-clear-filter")?.addEventListener("click", clearTopologyFilter);
+    $("topology-iface")?.addEventListener("change", onTopologyIfaceChange);
     $("btn-topology-zoom-in")?.addEventListener("click", () => zoomTopology(ZOOM_STEP));
     $("btn-topology-zoom-out")?.addEventListener("click", () => zoomTopology(1 / ZOOM_STEP));
     $("btn-topology-fit")?.addEventListener("click", () => fitTopologyView());
@@ -2652,6 +3017,7 @@ function initDiagramDialogs() {
     $("topology-search")?.addEventListener("keydown", onTopologySearchKey);
     $("topology-stats-body")?.addEventListener("click", onTopologyStatsAction);
     $("topology-stats-body")?.addEventListener("keydown", onTopologyStatsAction);
+    $("topology-stats-body")?.addEventListener("click", onTopologyStatsSectionClick);
     diagramBroadcast()?.addEventListener("message", onDiagramBroadcast);
     document.addEventListener("fullscreenchange", onTopologyFullscreenChange);
     if ($("topology-svg")) initTopologyZoomPan($("topology-svg"));

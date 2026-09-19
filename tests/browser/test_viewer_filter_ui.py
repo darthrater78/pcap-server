@@ -405,3 +405,22 @@ async def test_a_saved_display_filter_label_cannot_inject_markup(app_page, api_c
         assert await app_page.locator("#display-own-filters img").count() == 0
     finally:
         api_client.delete(f"/api/display-filters/{created['id']}")
+
+
+async def test_go_to_packet_selects_the_row_or_says_why_not(app_page):
+    await _viewer(app_page)
+    await app_page.evaluate("""() => {
+        viewingCaptureId = 'cap-go';
+        currentPackets = [{ number: 1 }, { number: 2 }, { number: 3 }];
+        document.getElementById('packet-tbody').innerHTML =
+            [1, 2, 3].map((n) => `<tr data-frame="${n}"><td>${n}</td></tr>`).join('');
+        window.__opened = [];
+        selectPacket = async (n) => { window.__opened.push(n); };
+    }""")
+    await app_page.fill("#goto-packet", "2")
+    await app_page.press("#goto-packet", "Enter")
+    assert await app_page.evaluate("() => window.__opened") == [2]
+    await app_page.fill("#goto-packet", "900")
+    await app_page.press("#goto-packet", "Enter")
+    assert await app_page.evaluate("() => window.__opened") == [2, 900]
+    assert "past the 3 rows" in await app_page.inner_text("#goto-packet-msg")

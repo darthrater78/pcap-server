@@ -1399,7 +1399,7 @@ dialog:not([open]) {
 .col-time { width: 100px; }
 .packet-table.time-epoch .col-time { width: 160px; }
 .packet-table.time-full .col-time { width: 280px; }
-.packet-table.time-hidden .col-time { width: 0; padding: 0; border: none; }
+.packet-table.time-hidden .col-time { width: 0 !important; padding: 0; border: none; }
 .col-src { width: 140px; }
 .col-dst { width: 140px; }
 .col-mac { width: 130px; }
@@ -1419,6 +1419,17 @@ dialog:not([open]) {
    the headings themselves mid-drag makes the drop target move under the
    pointer. */
 .packet-table thead th[draggable="true"] { cursor: grab; }
+/* A heading's right edge resizes its column (app.js onColumnResizeStart). */
+.packet-table thead th { position: relative; }
+.col-resize-handle {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 7px;
+    cursor: col-resize; touch-action: none;
+}
+.col-resize-handle::after {
+    content: ""; position: absolute; top: 25%; bottom: 25%; right: 2px; width: 1px; background: var(--border);
+}
+.col-resize-handle:hover::after, body.col-resizing .col-resize-handle::after { background: var(--accent); width: 2px; }
+body.col-resizing { cursor: col-resize; user-select: none; }
 .packet-table thead th.col-dragging { opacity: 0.5; cursor: grabbing; }
 .packet-table thead th.col-drop { box-shadow: inset 2px 0 0 var(--accent); }
 
@@ -3047,6 +3058,19 @@ dialog:not([open]) {
 }
 
 .filter-use { text-align: right; white-space: nowrap; width: 1%; }
+.filter-use .filter-chip { border-radius: 999px; }
+
+/* A section's heading, with its Or box on the right. */
+.filter-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.filter-group-or { font-size: 0.75rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+
+/* A row already in the field is lit: its Use chip filled with the accent;
+   a row the field leaves out, its Not chip in the danger color. */
+.filter-table tr.is-in-use { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.filter-table tr.is-in-use .filter-label { color: var(--text-primary); font-weight: 600; }
+.filter-chip[aria-pressed="true"].filter-chip-use { background: var(--accent); border-color: var(--accent); color: var(--bg-primary); }
+.filter-table tr.is-excluded { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.filter-chip[aria-pressed="true"].filter-chip-not { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 /* The operator's own saved filters, first in the list. Marked with the accent
    border rather than a different background: it sits among eighty-odd built-in
@@ -3586,12 +3610,22 @@ body.diagram-window #btn-topology-new-window { display: none; }
     border-radius: 8px;
     background: var(--bg-surface);
     font-size: 0.75rem;
-    overflow: hidden;
+    /* The pane itself scrolls, with its heading pinned. A <details> wraps its
+       content in a box of its own, so a flex child inside it is never held to
+       the pane's height -- the body grew past the bottom and was clipped,
+       with nothing to scroll. */
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 /* Closed, it folds to a narrow strip holding just its label, so the drawing
    gets the width back. */
 .diagram-stats:not([open]) { width: auto; }
 .diagram-stats > summary {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-surface);
     padding: 6px 10px;
     cursor: pointer;
     color: var(--text-secondary);
@@ -3603,11 +3637,13 @@ body.diagram-window #btn-topology-new-window { display: none; }
     padding: 10px 6px;
 }
 .diagram-stats-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
     padding: 0 10px 10px;
 }
+.diagram-stats-section > summary { cursor: pointer; list-style: none; }
+.diagram-stats-section > summary::-webkit-details-marker { display: none; }
+.diagram-stats-section > summary h4::before { content: "▾ "; }
+.diagram-stats-section:not([open]) > summary h4::before { content: "▸ "; }
+.diagram-stats-section > summary:hover h4 { color: var(--text-primary); }
 .diagram-stats-body h4 {
     margin: 10px 0 4px;
     font-size: 0.6875rem;
@@ -3630,6 +3666,15 @@ body.diagram-window #btn-topology-new-window { display: none; }
     color: var(--text-primary);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+}
+/* A label never goes narrower than a short word; a value that is an address
+   or a name wraps instead (diagrams.js statsRow). */
+.diagram-stats-table th { min-width: 9ch; }
+/* A text value gets a line of its own under its label, full width. */
+.diagram-stats-table tr.is-text { display: block; }
+.diagram-stats-table tr.is-text th, .diagram-stats-table tr.is-text td { display: block; }
+.diagram-stats-table tr.is-text td {
+    text-align: left; padding-left: 1ch; white-space: normal; overflow-wrap: anywhere; font-family: var(--font-mono);
 }
 
 /* On a phone there is no room beside the drawing: the pane goes under it. */
@@ -3679,8 +3724,15 @@ body.diagram-window #btn-topology-new-window { display: none; }
     padding-left: 10px; border-left: 3px solid var(--border);
 }
 .diagram-chip-group--problems { border-left-color: var(--danger); }
+.diagram-chip-group-head { flex-basis: 100%; display: flex; align-items: baseline; gap: 4px; }
+.diagram-section-toggle {
+    background: none; border: none; padding: 0 2px; font: inherit; font-size: 0.75rem;
+    color: var(--text-muted); cursor: pointer; line-height: 1;
+}
+.diagram-section-toggle:hover { color: var(--text-primary); }
+.diagram-chip-group-count { font-size: 0.6875rem; color: var(--text-muted); }
 .diagram-chip-group-label {
-    flex-basis: 100%; text-align: left; padding: 0 0 2px;
+    text-align: left; padding: 0 0 2px;
     background: none; border: none; font: inherit; font-size: 0.6875rem;
     text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); cursor: pointer;
 }
@@ -3800,7 +3852,15 @@ body.diagram-window #btn-topology-new-window { display: none; }
     stroke-linejoin: round;
 }
 .diagram-link-protocols { pointer-events: none; }
-.diagram-selection { display: block; color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.diagram-selection-row { display: flex; align-items: center; gap: 10px; margin: -6px 0 8px; }
+.diagram-selection-row:has(.diagram-selection:empty):has(.diagram-group-msg:empty):has(button[hidden]) { display: none; }
+.diagram-iface-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text-secondary); margin-left: auto; }
+.diagram-iface-filter[hidden] { display: none; }
+.diagram-group-msg { font-size: 0.75rem; color: var(--accent); }
+.diagram-group-msg:empty { display: none; }
+#topology-svg .diagram-node.is-grouped circle { stroke: var(--accent); stroke-width: 3px; stroke-dasharray: 4 3; }
+#topology-svg .diagram-marquee { fill: var(--accent); fill-opacity: 0.08; stroke: var(--accent); stroke-dasharray: 4 3; pointer-events: none; }
+.diagram-selection { display: block; color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.75rem; overflow-wrap: anywhere; }
 .diagram-selection:empty { display: none; }
 .diagram-stats-table th .diagram-legend-swatch { width: 18px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 
@@ -3817,7 +3877,11 @@ body.diagram-window #btn-topology-new-window { display: none; }
 #topology-svg .diagram-node .diagram-node-ip { fill: var(--text-secondary); font-size: 10px; }
 
 /* A selected host and everything it talked to; the rest steps back. */
-#topology-svg .is-faded { opacity: 0.12; }
+#topology-svg .is-faded { opacity: 0.12; transition: opacity 0.25s; }
+/* A faded host a packet is crossing to or from, while the trail is on it. */
+#topology-svg .is-faded.is-flow { opacity: 1; }
+#topology-svg .diagram-node.is-faded.is-flow circle { stroke: var(--accent); stroke-width: 2.5px; }
+#topology-svg .diagram-node.is-faded.is-flow text { font-weight: 600; }
 #topology-svg .diagram-node.is-neighbor circle { stroke: var(--text-primary); stroke-width: 2.5px; fill: var(--accent); fill-opacity: 0.25; }
 #topology-svg .diagram-node.is-neighbor text { font-weight: 600; }
 #topology-svg .diagram-edge.is-active { stroke-opacity: 1; stroke-width: 3px; }
@@ -4036,3 +4100,22 @@ body.diagram-window #btn-topology-new-window { display: none; }
 .zone-color::-webkit-color-swatch-wrapper { padding: 0; }
 .zone-color::-webkit-color-swatch { border: none; }
 .zone-colors-reset { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+/* Capture tab: several interfaces at once. */
+.cap-interfaces-multi { margin-top: 4px; font-size: 0.8125rem; }
+.cap-interfaces-multi > summary { cursor: pointer; color: var(--text-secondary); }
+.cap-interfaces-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 4px; }
+.cap-interface-check { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 0.8125rem; }
+
+/* Viewer: go to a packet by number. */
+.packet-toolbar .goto-packet { width: 7.5em; flex: none; }
+.goto-packet-msg { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+.goto-packet-msg:empty { display: none; }
+
+/* Sequence Diagram: each arrow's packet, written under it. */
+.seq-arrow-label {
+    font-family: var(--font-mono); font-size: 10px; fill: var(--text-secondary); cursor: pointer;
+    /* A halo in the backdrop's color keeps the text readable across lane lines. */
+    paint-order: stroke; stroke: var(--bg-primary); stroke-width: 3px; stroke-linejoin: round;
+}
+.seq-arrow-label:hover { fill: var(--text-primary); text-decoration: underline; }

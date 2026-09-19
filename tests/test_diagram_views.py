@@ -38,6 +38,14 @@ def test_a_saved_diagram_comes_back_with_its_positions(secure_client, capture):
     assert state["zoom"]["k"] == 0.8
 
 
+def test_a_saved_diagram_keeps_the_interface_it_was_narrowed_to(secure_client, capture):
+    # A pcapng's own interface names can carry spaces and braces.
+    name = "\\Device\\NPF_{0A1B} (Wi-Fi)"
+    assert _save(secure_client, capture, state={**STATE, "interface": name}).status_code == 200
+    listed = secure_client.get(f"/api/captures/{capture}/diagram-views").json()
+    assert listed[0]["state"]["interface"] == name
+
+
 def test_a_saved_diagram_can_be_overwritten(secure_client, capture):
     view = _save(secure_client, capture).json()
     moved = {**STATE, "positions": {"10.0.0.1": {"x": 1, "y": 2}}}
@@ -96,6 +104,8 @@ def test_a_view_id_from_another_capture_is_not_found(secure_client, enrolled, ca
     {"selected": [f"P{i}" for i in range(101)]},
     {"spacing": 100},
     {"zoom": {"k": 0, "tx": 0, "ty": 0}},
+    {"interface": "eth\x070"},
+    {"interface": "x" * 81},
 ])
 def test_hostile_or_oversized_state_is_refused(secure_client, capture, bad):
     assert _save(secure_client, capture, state={**STATE, **bad}).status_code == 422

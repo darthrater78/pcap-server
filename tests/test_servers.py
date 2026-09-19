@@ -960,6 +960,30 @@ def test_prereq_check_records_the_os_and_the_server_list_returns_it(api_client, 
     assert row["os_name"] == "Ubuntu 24.04.1 LTS"
 
 
+def test_prereq_check_records_the_libpcap_version(api_client, signed_in, monkeypatch):
+    server_id = _add_server(signed_in, "libpcap-probe.example")
+
+    async def fake_probe(server):
+        result = _probe_result("Debian GNU/Linux 12 (bookworm)")
+        result["facts"]["libpcap_version"] = "1.10.3"
+        return result
+    monkeypatch.setattr(main.ssh_manager, "check_prerequisites", fake_probe)
+
+    res = api_client.post(f"/api/servers/{server_id}/prereq-check")
+    assert res.json()["libpcap_version"] == "1.10.3"
+    row = next(r for r in api_client.get("/api/servers").json() if r["id"] == server_id)
+    assert row["libpcap_version"] == "1.10.3"
+
+
+@pytest.mark.parametrize("hostname,kept", [("10.0.0.1", "1.10.4"), ("10.0.0.2", "")])
+def test_the_libpcap_version_follows_the_endpoint(db, hostname, kept):
+    user_id = _user(db)
+    db.add_active_server("s1", user_id, "n", "10.0.0.1", 22, "root", "k", False)
+    db.set_active_server_libpcap("s1", user_id, "1.10.4")
+    db.update_active_server("s1", user_id, "n", hostname, 22, "root", "k", False)
+    assert db.get_active_server("s1", user_id)["libpcap_version"] == kept
+
+
 def test_an_unfinished_probe_leaves_the_recorded_os_alone(api_client, signed_in, monkeypatch):
     server_id = _add_server(signed_in, "os-cut-short.example")
     main.db.set_active_server_os(server_id, signed_in, "Alpine Linux v3.20")

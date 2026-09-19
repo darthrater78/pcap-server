@@ -750,6 +750,7 @@ if [ -z "$TD" ]; then
 fi
 if [ -n "$TD" ]; then
     echo "VERSION=$("$TD" --version 2>&1 | head -1)"
+    echo "LIBPCAP=$("$TD" --version 2>&1 | grep -i 'libpcap version' | head -1)"
     echo "TDMODE=$(stat -c '%a %G' "$TD" 2>/dev/null)"
     # Same sbin fallback as tcpdump above: getcap is installed into /sbin on
     # Debian and Ubuntu, which a non-login SSH session for a non-root user
@@ -845,6 +846,20 @@ def _clean(text: str, limit: int = 200) -> str:
     return "".join(c for c in text if c.isprintable())[:limit].strip()
 
 
+_LIBPCAP_VERSION = re.compile(r"libpcap version (\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)", re.IGNORECASE)
+
+# `ifindex N` in a filter -- what a capture on several interfaces at once is
+# built on (capture.py ifindex_clause) -- arrived in libpcap 1.10.0. An older
+# libpcap refuses the whole filter, so the capture would fail to start.
+MULTI_INTERFACE_LIBPCAP = (1, 10)
+
+
+def libpcap_supports_multi_interface(version: str) -> bool:
+    """True for a libpcap version string of 1.10 or later; False for older or unknown."""
+    match = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", version or "")
+    return bool(match) and (int(match.group(1)), int(match.group(2))) >= MULTI_INTERFACE_LIBPCAP
+
+
 def parse_prereq_output(raw: str) -> dict:
     """Turn probe output into validated facts. Never trusts a value as given."""
     facts: dict = {
@@ -854,6 +869,7 @@ def parse_prereq_output(raw: str) -> dict:
         "caps_unavailable": False, "sudo_present": False, "sudo_nopasswd": False,
         "selinux": "", "tmp_writable": None, "path_env": "", "boot_id": "",
         "tcpdump_mode": "", "tcpdump_group": "", "noexec_path": "", "noexec_group": "",
+        "libpcap_version": "",
     }
     in_osrel = False
     for line in raw.splitlines():
@@ -888,6 +904,11 @@ def parse_prereq_output(raw: str) -> dict:
             facts["sudo_nopasswd"] = value == "yes"
         elif key == "VERSION":
             facts["version"] = value
+        elif key == "LIBPCAP":
+            # Only the dotted number is kept: it is compared, and it is shown.
+            match = _LIBPCAP_VERSION.search(value)
+            if match:
+                facts["libpcap_version"] = match.group(1)
         elif key == "TDMODE":
             match = _MODE_GROUP.fullmatch(value)
             if match:
@@ -966,6 +987,25 @@ def getcap_install_hint(os_release: dict) -> str:
     return install_hint(os_release, package)
 
 
+def _multi_interface_check(version: str) -> dict:
+    """Whether this host can capture several interfaces in one go.
+
+    Never a failure: one interface, or "any", works on every libpcap. It says
+    whether the Capture tab's "Pick several" is available on this server.
+    """
+    name = "Several interfaces per capture"
+    if libpcap_supports_multi_interface(version):
+        return {"name": name, "status": "ok",
+                "detail": f"libpcap {version}: supports ifindex filters", "fix": ""}
+    if version:
+        detail = (f"libpcap {version} is older than 1.10, which added the ifindex filter "
+                  "a multi-interface capture needs. Capture one interface, or \"any\".")
+    else:
+        detail = "Could not read the libpcap version from tcpdump --version."
+    return {"name": name, "status": "info", "detail": detail,
+            "fix": "Optional: upgrade tcpdump and libpcap (1.10 or later), then run this check again."}
+
+
 def evaluate_prereqs(facts: dict, use_sudo: bool, username: str = "") -> list[dict]:
     """One entry per check: status ok | warn | fail | info, plus what to run on a miss.
 
@@ -990,6 +1030,7 @@ def evaluate_prereqs(facts: dict, use_sudo: bool, username: str = "") -> list[di
     path = facts["tcpdump_path"]
     if path:
         add("tcpdump installed", "ok", f"{path}" + (f" — {facts['version']}" if facts["version"] else ""))
+        checks.append(_multi_interface_check(facts.get("libpcap_version", "")))
     elif facts["noexec_path"]:
         checks.append(_unrunnable_tcpdump(facts, username))
         return checks
