@@ -566,9 +566,47 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
 
+      # The pushed tags must resolve in the registry before a release is
+      # announced for them; a push step that exits 0 without landing an image
+      # would otherwise publish notes pointing at nothing. Every tag the push
+      # was given, so a floating :latest or :dev that failed to move is caught
+      # as well as the version itself.
+      - name: Verify the pushed image resolves
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            docker buildx imagetools inspect "$tag" >/dev/null
+            echo "$tag resolves."
+          done <<< "$TAGS"
+
+      # The release body is this version's CHANGELOG.md section. GitHub's
+      # generated notes are only the fallback for a version with no section.
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/release-notes.md"
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; found = (index($0, "## " v " ") == 1 || $0 == "## " v) ; next }
+            found { print }
+          ' CHANGELOG.md > "$out"
+          if [ -n "$(tr -d '[:space:]' < "$out")" ]; then
+            echo "path=$out" >> "$GITHUB_OUTPUT"
+            echo "Using the CHANGELOG.md section for ${VERSION}."
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "::notice::No CHANGELOG.md section for ${VERSION}; falling back to generated notes."
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: ${{ steps.meta.outputs.release_name }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
