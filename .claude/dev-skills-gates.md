@@ -1,5 +1,211 @@
 # Dev Skills gate state
 
+## ACTIVE: diagram packet caps -- two-tier setting + no more hard fail (2026-09-19, local)
+Track: release sequence -- user said "let's go to release" (session 3,
+2026-09-19), on branch feat/diagram-caps-and-truncation (from main's tip,
+includes PR #29 and PR #30 -- i.e. beta.8 plus its README bump).
+Model: Sonnet 5. Shell: Linux bash. Not pushed yet -- about to push and open
+the PR.
+
+Started as a question ("where's the 100k diagram cap from") and became this
+implementation over the course of one session. Superseded the two local-only
+pointer branches this began as (local/diagram-cap-handoff, local/compare-
+handoff is unrelated and still stands) -- deleted once real work started, per
+their own note.
+
+FOLLOW-UP SESSION (2026-09-19, same day): resumed to close the "not yet seen
+rendered" gap. Ran scripts/check.sh full (1818 passed, see the build gate
+entry further down), then built the preview container and drove it with a
+standalone Playwright script
+(no interactive browser tool available this session) -- logged in as
+`preview`, screenshotted Admin > Settings live, and forced a truncation by
+setting `max_capture_packets=5` directly in the preview DB (restored to unset
+afterward) to see the notice banner on a real diagram.
+
+BUG FOUND AND FIXED BY THIS LOOK: `.admin-settings-grid .setting-item input`
+(style.css) is a descendant selector, so it also matched the two nested radio
+inputs inside `.diagram-cap-option` (two levels down, inside
+`.setting-item--wide`) and gave them the numeric-input box model --
+width:100%, padding, border. Screenshot showed the radio circles and their
+label text pulled apart, one radio floating in its own huge invisible box on
+its own line. Fixed by narrowing both rules (`:focus` too) to the direct-child
+combinator `.setting-item > input`, which only the normal numeric settings
+and the wide item's own hidden input match. This was invisible to every
+existing check: `parseInt`/type/value assertions in the API tests and
+Playwright's text/locator assertions in the browser suite don't look at
+layout. Re-verified visually after the fix (both radios render correctly);
+re-ran `tests/browser/test_diagrams_ui.py tests/browser/test_capture_ui.py`
+(150 passed) since those are the suites that touch this markup and settings
+form.
+
+The truncation notice itself renders correctly: a non-blocking banner ("Showing
+the first N of M packets...") above the diagram, which stays open and drawn --
+confirms item 3's behavior by hand, not just by Playwright locator checks.
+
+WHAT SHIPPED IN THIS COMMIT:
+
+1. **max_capture_packets now offers two presets, not a free number.** Admin >
+   Settings renders this one setting (it doubles as the Traffic Diagram's own
+   ceiling) as two radio options instead of `SETTING_LABELS`' usual numeric
+   input:
+   - **250,000** -- new default (was 100,000; `backend/database.py` DEFAULTS),
+     needs no other changes.
+   - **500,000** -- shown with what to check first: raise the container's
+     `mem_limit` (docker-compose.yml's comment block now says by how much,
+     ~300-350 MB extra transient), and use "Optimize for diagrams" on very
+     large captures.
+   `frontend/js/app.js` `renderCapturePacketsSetting` builds this (a stored
+   value that is neither preset -- an older install, or a hand-edited DB --
+   is shown as-is via a hint line, unchecked; picking either radio replaces
+   it, same as any setting, only on Save). Backend validation is unchanged
+   (any positive int still accepted; the two-value UI is a UX choice, not a
+   new constraint), so a direct DB edit to a third value still works.
+
+2. **The Traffic Diagram now actually respects whatever max_capture_packets
+   is set to**, which it did NOT before this session: it used to hardcode its
+   own request ceiling (`TOPOLOGY_PACKET_CAP = 100000` in diagrams.js),
+   passed as an explicit `limit` that silently overrode a higher admin
+   setting. That constant is now deleted; `fetchPacketsCapped` is called with
+   no `cap` argument for the Traffic Diagram (`topologyPackets()`,
+   diagrams.js), which per its own existing contract means "take the
+   server's ceiling as it stands." This is what makes the two-tier setting
+   above actually do anything for the diagram, not just the raw capture
+   limit. The Sequence Diagram is unaffected -- it keeps its own separate,
+   unchanged `PACKET_DIAGRAM_CAP = 10000`, passed explicitly as before (see
+   "NOT changed" below for why).
+
+3. **A capture over a diagram's packet cap now draws a partial diagram
+   instead of refusing.** This was the user's explicit ask: "it should not
+   be a hard fail... automatically filter for whatever the max packet size
+   is." Changed:
+   - `backend/packet_parser.py` `get_diagram_packets`: previously, when
+     `matched > cap`, it discarded the packets it had already built and
+     returned `([], matched, {})` -- all or nothing. Now it always returns
+     the packets it built (already bounded to `cap` by the existing
+     per-line check), so `matched > len(packets)` is the truncation signal
+     rather than a reason to return nothing.
+   - `frontend/js/diagrams.js` `fetchPacketsCapped`: returns `{truncated,
+     total, cap, packets, names}` always, replacing the old `{overCap: true,
+     ...}` / `{overCap: false, ..., packets}` split.
+   - New `showDiagramTruncatedNotice` (non-blocking, `.diagram-cap-warning
+     --notice` CSS variant using `--accent` not `--danger`) shown alongside
+     the still-open diagram. `showDiagramCapWarning` (renamed in effect,
+     same name kept) is now ONLY for the visual-complexity caps below, which
+     still hard-block.
+   - Call sites updated: `prefetchTopologyPackets` (shows the notice as soon
+     as the dialog's own prefetch resolves -- this is the actual first place
+     a result is seen, since it primes `preparePlayback` before Play is ever
+     clicked; the check inside `onTopologyPlayClick` is now a harmless
+     repeat for the case Play is pressed before prefetch resolves),
+     `selectTopologyItem` (dropped the `result.overCap` guard, checks
+     `!result.packets.length` instead), `openSequenceDialog`.
+   - **NOT changed, deliberately**: the two visual-complexity caps
+     (`TOPOLOGY_NODE_CAP = 200` distinct hosts, `SEQUENCE_LANE_CAP = 40` host
+     lanes) still hard-block via the original `showDiagramCapWarning`. Drawing
+     only some of the hosts/lanes a filter matched would be a wrong picture,
+     not a partial one -- there's no principled "first N hosts" the way
+     there's a principled "first N packets" (packets have a natural order;
+     which hosts would survive a cut is arbitrary). The user's ask was
+     specifically about "max packet size," and this reading was not
+     revisited with them -- flag if that's wrong.
+
+4. **Sequence Diagram's own cap (10,000) was NOT raised.** Discussed at
+   length with the user and deliberately left alone: unlike the Traffic
+   Diagram (whose drawn complexity stays fixed at `TOPOLOGY_NODE_CAP`
+   regardless of packet count), the Sequence Diagram renders one DOM row per
+   packet with no windowing (`renderSequenceSVG`, diagrams.js) -- at today's
+   10,000 cap that's already a ~340,000px-tall SVG and ~30,000 DOM elements,
+   built synchronously on dialog open. Raising it meaningfully needs actual
+   scroll-window virtualization first, which is a small feature, not a
+   config change. This was explained to the user; no explicit go-ahead was
+   given to even the "safe ~2x" bump floated in conversation, so it was left
+   untouched rather than assumed.
+
+5. **Docs/CHANGELOG**: `docs/architecture.md`, `docs/operating.md`,
+   `docs/viewer.md`, `docs/filters.md` updated for the new default and the
+   truncate-vs-block distinction. `docker-compose.yml`'s `mem_limit` comment
+   gained the 500k-preset memory note. `CHANGELOG.md` gained an `Unreleased`
+   section (no such heading existed before this commit) with both changes.
+   `docs/design/compare-captures.md`'s "100,000" mention is about an UNBUILT
+   feature -- deliberately left alone, per .claude/compare-handoff.md.
+
+TESTS: backend -- `tests/test_packet_parser.py` (the exact assertion of the
+old all-or-nothing contract, `over == []`, changed to assert the first `cap`
+packets), `tests/test_capture_upload.py` (two tests renamed/rewritten off the
+old `packets: []` expectation). Browser -- `tests/browser/test_diagrams_ui.py`:
+rewrote `test_traffic_diagram_warning_reports_the_servers_cap` (renamed
+..._over_its_cap_draws_a_partial_picture) and
+`test_sequence_cap_warning_when_packets_exceed_the_limit` (renamed
+..._draws_a_partial_picture) to mock actual returned packets and assert the
+diagram body is NOT hidden and something is actually drawn, rather than
+asserting the old blocking behavior; fixed `test_each_diagram_always_asks_
+for_its_own_cap`'s topology assertion (no `limit=` param is sent for the
+Traffic Diagram at all now, not `limit=100000`); fixed the two tests
+asserting the checkbox/capture-panel text "100,000" (now 250,000) --
+`test_the_cap_checkboxes_show_their_max_and_have_tooltips` and
+`test_a_ticked_diagram_polices_the_capture_limit`. One more bug found only by
+actually running the suite (not by reading the code): the Capture tab's
+checkbox label text ("Traffic Diagram max 100,000 packets") was hardcoded
+directly in `frontend/index.html`, a THIRD hand-sync point beyond the two
+already known -- fixed by making `app.js initDiagramOptimize` fill an
+`id="topology-cap-max"` span from `DIAGRAM_CAPS` itself, so this cannot drift
+from the macro's actual behavior again.
+
+🔢 VERSION    ✅ 1.1.0-beta.9 -- backend/main.py APP_VERSION, docker-compose.yml
+              image tag, CHANGELOG heading (Unreleased -> 1.1.0-beta.9) all
+              agree. README beta line intentionally left at 1.1.0-beta.8
+              until the image is live (repo convention, own commit after).
+              Previous tag v1.1.0-beta.8 confirmed on remote, points at
+              acb969e.
+🔨 BUILD      ✅ handoff offered. Full gate run twice: once pre-bump (1818
+              passed, ebf6b7a), once more on the version-bumped tree after
+              the CSS fix (1818 passed, 0 failed, exit 0, 35.90s, commit
+              7d58ebc + version bump) -- the tree the PR will actually carry.
+              Preview container rebuilt on this tree; in-image APP_VERSION
+              confirmed == 1.1.0-beta.9 by reading it out of the running
+              container; still up on :8099 for the user to look at directly.
+              Admin > Settings radio UI and the truncated diagram's notice
+              banner both seen rendered by hand this session (script-driven,
+              no interactive browser tool available) -- found and fixed a
+              real CSS bug in the radio UI in the process (descendant
+              selector over-matching, see note near the top of this entry);
+              screenshots sent to the user.
+              tests/browser/test_diagrams_ui.py + test_capture_ui.py rerun
+              after that fix: 150 passed.
+🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
+              subprocess/eval. PUT /api/admin/settings is unchanged (still
+              admin-only, still validates any positive int) -- the two-preset
+              UI is a client-side rendering choice over the same route, not a
+              new validation path; a direct DB edit to a third value still
+              works and is shown, not hidden. New DOM writes reviewed one by
+              one: `renderCapturePacketsSetting`'s only interpolated value is
+              `parseInt(rawValue, 10)` (always a number, cannot carry HTML)
+              plus a hardcoded preset catalog (not user data) run through
+              escHtml anyway; `showDiagramTruncatedNotice` and the edited
+              `showDiagramCapWarning` write the display filter's text via
+              `.textContent`, matching the pre-existing pattern, never
+              innerHTML. get_diagram_packets' changed return value carries the
+              same per-packet fields the route already sent -- returning them
+              on the truncated path instead of discarding them adds no new
+              data to the response, just more of what a non-truncated
+              response already contained. The CSS fix (direct-child
+              combinator) adds no execution surface.
+📄 DOCS       ✅ see item 5 above, plus this session's CHANGELOG heading rename
+              (Unreleased -> 1.1.0-beta.9).
+📦 RELEASE    ⬜ about to push feat/diagram-caps-and-truncation and open the
+              PR into main.
+🚀 SHIP       ⬜ next: user merges, pushes the tag; confirm tag SHA + Release
+              run only (release.yml's own smoke step covers the image).
+
+RESOLVED, THIS SESSION AND THE ONE BEFORE: (1) scripts/check.sh full run,
+twice. (2) VERSION: bumped to 1.1.0-beta.9 on "let's go to release". (3) Scope
+of item 3's "max packet size" reading confirmed correct by the user --
+host/lane caps keep hard-blocking, as built. (5) Preview container built,
+both UI pieces looked at by hand, one real bug found and fixed.
+
+STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
+a commitment -- revisit only if asked.
+
 ## ACTIVE: multi-interface reality fixes (2026-09-19, local)
 Track: release sequence -- user chose to bump to 1.1.0-beta.8 and push/PR now
 (session start, 2026-09-19). Branch fix/multi-interface-reality, rebased onto

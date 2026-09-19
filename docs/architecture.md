@@ -935,7 +935,7 @@ Adjustable from the Admin panel, applied without a restart:
 | Setting | Default |
 | --- | --- |
 | `max_capture_seconds` | 300 |
-| `max_capture_packets` | 100000 |
+| `max_capture_packets` | 250000 (Admin offers 250000 or 500000; also the Traffic Diagram's cap) |
 | `max_concurrent_captures` | 5 |
 | `session_duration_hours` | 8 |
 | `session_idle_timeout_minutes` | 60 |

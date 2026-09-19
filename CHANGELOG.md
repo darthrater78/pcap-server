@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0-beta.9 — 2026-09-19
+
+### Changed
+
+- **Max capture packets now offers two sized presets in Admin > Settings**:
+  250,000 (the new default, no other changes needed) or 500,000 (shown with
+  what to check first — the container's memory limit, and Optimize for
+  diagrams on very large captures). This setting is also the Traffic
+  Diagram's own ceiling.
+- **A capture over a diagram's packet cap now draws a partial diagram
+  instead of refusing.** The Traffic and Sequence Diagrams show the first
+  packets up to the cap and a notice that the picture is partial, rather
+  than blocking and asking for a narrower filter. The host/lane caps (200
+  hosts, 40 lanes) still block outright, since drawing only some of the
+  hosts a filter matched would draw a wrong picture, not a partial one.
+
 ## 1.1.0-beta.8 — 2026-09-19
 
 ### Fixed

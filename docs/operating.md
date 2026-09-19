@@ -109,7 +109,7 @@ These are configurable from the Admin tab by the admin user:
 | Setting | Default | Description |
 |---|---|---|
 | Max capture seconds | 300 | Maximum duration for a single capture |
-| Max capture packets | 100000 | Maximum packets per capture; also the most the Traffic Diagram will draw |
+| Max capture packets | 250000 | Maximum packets per capture; also the most the Traffic Diagram will draw. The panel offers two presets: 250,000 (no other changes needed) or 500,000 (shown with what to check first — container memory, and Optimize for diagrams on large captures) |
 | Max concurrent captures | 5 | Captures running or finishing up at once, across all users — each holds an SSH connection to a target host plus a local file. Separately, and not configurable: one capture at a time per interface per server, so `eth0` and `eth1` on the same host can run together but a second capture on either is refused. Captures clash when the interfaces they read overlap: a capture on several interfaces clashes only with one that reads any of them, and a capture on plain `any` reads every interface, so it clashes with all of them |
 | Session duration (hours) | 8 | Login session lifetime |
 | Session idle timeout (minutes) | 60 | Idle window before a session is deleted, independent of the absolute duration above. `0` disables idle expiry |

@@ -67,8 +67,10 @@ The **Capture** tab's **Optimize for diagrams** checkboxes fit a capture to
 the diagram you will read it with. Both start unticked, and only one can be
 ticked per capture. Ticking **Traffic Diagram** or **Sequence Diagram**:
 
-- sets **Max packets** to that diagram's cap — 100,000 or 10,000 — and while
-  it stays ticked, a capture never asks for more (a blank Max packets means
+- sets **Max packets** to that diagram's cap — 250,000 or 10,000 (the Traffic
+  Diagram's tracks **Max capture packets**' 250,000 default; an admin who
+  raised that setting to 500,000 can raise this by hand too) — and while it
+  stays ticked, a capture never asks for more (a blank Max packets means
   exactly the cap; a larger number asks first);
 - sets **Snap length** to 256 bytes: every header a diagram reads, and the
   start of the payload protocols are recognised by, at a fraction of the file

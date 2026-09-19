@@ -149,10 +149,11 @@ def test_the_diagram_route_counts_what_the_filter_matched(secure_client, enrolle
     assert one["total"] == 1 and [p["number"] for p in one["packets"]] == [2]
 
 
-def test_the_diagram_route_over_its_cap_sends_the_count_alone(secure_client, enrolled):
+def test_the_diagram_route_over_its_cap_draws_the_first_cap_packets(secure_client, enrolled):
     capture_id = _upload(secure_client, PCAP).json()["id"]
     body = secure_client.get(f"/api/captures/{capture_id}/diagram-packets", params={"limit": 2}).json()
-    assert body == {"packets": [], "total": 3, "cap": 2, "names": {}}
+    assert body["total"] == 3 and body["cap"] == 2 and body["names"] == {}
+    assert [p["number"] for p in body["packets"]] == [1, 2]
 
 
 def test_the_diagram_route_never_exceeds_max_capture_packets(secure_client, enrolled):
@@ -165,7 +166,7 @@ def test_the_diagram_route_never_exceeds_max_capture_packets(secure_client, enro
         ).json()
     finally:
         main.db.set_setting("max_capture_packets", str(before))
-    assert body["cap"] == 2 and body["packets"] == []
+    assert body["cap"] == 2 and [p["number"] for p in body["packets"]] == [1, 2]
 
 
 def test_the_diagram_route_reports_a_bad_filter_as_one(secure_client, enrolled):

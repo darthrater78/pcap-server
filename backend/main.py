@@ -125,7 +125,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.8"
+APP_VERSION = "1.1.0-beta.9"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -2810,13 +2810,13 @@ async def list_diagram_packets(
     resolve_names: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
-    """Every packet a diagram draws, in one tshark pass, or just the count.
+    """Up to `cap` packets a diagram draws, in one tshark pass, plus the true count.
 
     The ceiling is max_capture_packets -- the most one capture from this app
     can hold -- and a caller may ask for less (the Sequence Diagram draws a
     row per packet, and keeps its own lower cap). "total" is what the filter
-    matched, not the capture's size: it is what the caller's cap is judged
-    against.
+    matched, not the capture's size, and may exceed "cap": the caller draws
+    the packets it got and says the picture is partial rather than refusing.
     """
     if not packet_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many packet list requests, slow down")

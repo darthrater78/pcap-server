@@ -872,9 +872,10 @@ async def get_diagram_packets(
     """Up to `cap` packets matching the filter, how many matched in all, and names.
 
     Every match is counted, but only the first `cap` are kept, so memory is
-    bounded by the cap and not by the capture. Over the cap the caller gets
-    the count alone -- a diagram of the first N packets would draw a picture of
-    something other than what was asked for.
+    bounded by the cap and not by the capture. Over the cap, the caller still
+    gets those first `cap` packets -- `matched` being larger than len(packets)
+    is the caller's signal to draw them and say the picture is partial, rather
+    than a reason to draw nothing.
 
     A packet with an IP layer is keyed by its ADDRESSES, with resolution on or
     off, exactly as get_conversations keys its nodes: a diagram builds display
@@ -967,8 +968,10 @@ async def get_diagram_packets(
         if display_filter:
             raise DisplayFilterError(_filter_rejection(stderr))
         raise RuntimeError("tshark failed listing diagram packets")
-    if matched > cap:
-        return [], matched, {}
+    # matched > cap: the caller draws a diagram of the first `cap` packets
+    # rather than refusing outright, and shows a truncation notice from the
+    # gap between this count and len(packets) -- a picture of most of a
+    # capture beats no picture at all.
     return packets, matched, names
 
 

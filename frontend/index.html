@@ -330,9 +330,9 @@
                     <div class="diagram-optimize">
                         <span class="capture-limits-label">Optimize for diagrams <span class="hint">&mdash; tick one (one per capture) to fit this capture to it</span></span>
                         <div class="diagram-caps">
-                            <label class="diagram-cap" title="Ticking sets Max packets to 100,000, a header-only snap length, and leaves the noise below out of the capture. While ticked, the capture never asks for more packets than the Traffic Diagram can draw.">
+                            <label class="diagram-cap" title="Ticking sets Max packets to the Traffic Diagram's cap, a header-only snap length, and leaves the noise below out of the capture. While ticked, the capture never asks for more packets than the Traffic Diagram can draw.">
                                 <input type="checkbox" id="topology-cap-enabled">
-                                <span>Traffic Diagram <span class="hint">max <strong>100,000</strong> packets</span></span>
+                                <span>Traffic Diagram <span class="hint">max <strong id="topology-cap-max"></strong> packets</span></span>
                             </label>
                             <label class="diagram-cap" title="Ticking sets Max packets to 10,000 (the Sequence Diagram draws one row per packet), a header-only snap length, and leaves the noise below out of the capture. While ticked, the capture never asks for more than 10,000 packets.">
                                 <input type="checkbox" id="sequence-cap-enabled">
