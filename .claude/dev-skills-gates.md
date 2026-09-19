@@ -1,11 +1,11 @@
 # Dev Skills gate state
 
-## HANDOFF: diagram packet caps -- two-tier setting + no more hard fail (2026-09-19, local)
-Track: work commit so far, on branch feat/diagram-caps-and-truncation (from
-main's tip, includes PR #29 and PR #30 -- i.e. beta.8 plus its README bump).
-Model: Sonnet 5. Shell: Linux bash. Not pushed; no PR opened. User asked to
-commit and update this handoff so they can clear context -- VERSION/RELEASE/
-SHIP are deliberately left open below for whoever resumes to decide.
+## ACTIVE: diagram packet caps -- two-tier setting + no more hard fail (2026-09-19, local)
+Track: release sequence -- user said "let's go to release" (session 3,
+2026-09-19), on branch feat/diagram-caps-and-truncation (from main's tip,
+includes PR #29 and PR #30 -- i.e. beta.8 plus its README bump).
+Model: Sonnet 5. Shell: Linux bash. Not pushed yet -- about to push and open
+the PR.
 
 Started as a question ("where's the 100k diagram cap from") and became this
 implementation over the course of one session. Superseded the two local-only
@@ -150,27 +150,25 @@ already known -- fixed by making `app.js initDiagramOptimize` fill an
 `id="topology-cap-max"` span from `DIAGRAM_CAPS` itself, so this cannot drift
 from the macro's actual behavior again.
 
-🔢 VERSION    ➖ resolved, not bumped here: user chose to roll this into the
-              next beta rather than cut it alone. APP_VERSION/compose
-              tag/CHANGELOG heading stay as-is on this branch; the bump
-              happens whenever that next beta is cut, folding this change in.
-🔨 BUILD      ✅ full gate now run: `scripts/check.sh` on this branch/commit
-              (ebf6b7a) -- 1818 passed, 0 failed, exit 0, 35.95s. Confirms the
-              prior session's targeted/full-file runs (see below) rather than
-              replacing them.
-              Prior targeted runs, all green: `tests/test_packet_parser.py -k
-              diagram_packets` (6), `tests/test_capture_upload.py -k diagram`
-              (4), `tests/test_main.py tests/test_capture_upload.py
-              tests/test_packet_parser.py tests/test_capture.py` in full (323
-              passed), `tests/browser/test_diagrams_ui.py` in full (85
-              passed).
-              FOLLOW-UP SESSION: preview container built and driven by hand
-              (script, not the interactive browser tool -- see note above).
-              Admin > Settings radio UI and the truncated diagram's notice
-              banner both now seen rendered, not just reasoned from code --
-              found and fixed a real CSS bug in the radio UI along the way
-              (see above). tests/browser/test_diagrams_ui.py +
-              test_capture_ui.py rerun after the fix: 150 passed.
+🔢 VERSION    ✅ 1.1.0-beta.9 -- backend/main.py APP_VERSION, docker-compose.yml
+              image tag, CHANGELOG heading (Unreleased -> 1.1.0-beta.9) all
+              agree. README beta line intentionally left at 1.1.0-beta.8
+              until the image is live (repo convention, own commit after).
+              Previous tag v1.1.0-beta.8 confirmed on remote, points at
+              acb969e.
+🔨 BUILD      ✅ full gate run twice: once pre-bump (1818 passed, ebf6b7a),
+              once more on the version-bumped tree after the CSS fix (1818
+              passed, 0 failed, exit 0, 35.90s, commit 7d58ebc + version
+              bump) -- the tree the PR will actually carry.
+              Preview container rebuilt on this tree; in-image APP_VERSION
+              confirmed == 1.1.0-beta.9 by reading it out of the running
+              container. Admin > Settings radio UI and the truncated
+              diagram's notice banner both seen rendered by hand this
+              session (script-driven, no interactive browser tool available)
+              -- found and fixed a real CSS bug in the radio UI in the
+              process (descendant selector over-matching, see note near the
+              top of this entry). tests/browser/test_diagrams_ui.py +
+              test_capture_ui.py rerun after that fix: 150 passed.
 🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
               subprocess/eval. PUT /api/admin/settings is unchanged (still
               admin-only, still validates any positive int) -- the two-preset
@@ -187,26 +185,23 @@ from the macro's actual behavior again.
               same per-packet fields the route already sent -- returning them
               on the truncated path instead of discarding them adds no new
               data to the response, just more of what a non-truncated
-              response already contained.
-📄 DOCS       ✅ see item 5 above.
-📦 RELEASE    ⬜ no PR opened (user asked for local commit only).
-🚀 SHIP       ⬜ n/a until RELEASE.
+              response already contained. The CSS fix (direct-child
+              combinator) adds no execution surface.
+📄 DOCS       ✅ see item 5 above, plus this session's CHANGELOG heading rename
+              (Unreleased -> 1.1.0-beta.9).
+📦 RELEASE    ⬜ about to push feat/diagram-caps-and-truncation and open the
+              PR into main.
+🚀 SHIP       ⬜ next: user merges, pushes the tag; confirm tag SHA + Release
+              run only (release.yml's own smoke step covers the image).
 
-RESOLVED THIS SESSION: (1) scripts/check.sh full run -- 1818 passed, see BUILD
-above. (2) VERSION track: user chose "roll into next beta" -- no bump on this
-branch, folds in whenever that beta is cut. (3) Scope of item 3's "max packet
-size" reading confirmed correct by the user -- host/lane caps keep
-hard-blocking, as built.
-
-RESOLVED, FOLLOW-UP SESSION: (5) preview container built, both UI pieces
-looked at by hand -- see BUILD above. Found and fixed a real CSS layout bug
-in the Admin > Settings radio UI in the process (descendant selector
-over-matching; see the note near the top of this entry).
+RESOLVED, THIS SESSION AND THE ONE BEFORE: (1) scripts/check.sh full run,
+twice. (2) VERSION: bumped to 1.1.0-beta.9 on "let's go to release". (3) Scope
+of item 3's "max packet size" reading confirmed correct by the user --
+host/lane caps keep hard-blocking, as built. (5) Preview container built,
+both UI pieces looked at by hand, one real bug found and fixed.
 
 STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
 a commitment -- revisit only if asked.
-Not pushed; no PR opened -- still a local branch, per the user's original ask
-for a local commit only.
 
 ## ACTIVE: multi-interface reality fixes (2026-09-19, local)
 Track: release sequence -- user chose to bump to 1.1.0-beta.8 and push/PR now
