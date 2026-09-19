@@ -1,5 +1,29 @@
 # Dev Skills gate state
 
+## ACTIVE: multi-interface reality fixes (2026-09-19, local)
+Track: release sequence -- user chose to bump to 1.1.0-beta.8 and push/PR now
+(session start, 2026-09-19). Branch fix/multi-interface-reality, rebased onto
+origin/main (082d219, includes PR #28 docs/beta7-live).
+Model: Sonnet 5. Shell: Linux bash.
+Scope: deep review of traffic diagram + capture logic with several interfaces.
+
+🔢 VERSION    ⏳ bumping to 1.1.0-beta.8
+🔨 BUILD      ✅ check.sh 1816 passed; pytest 1818 after CHANGELOG; browser 270.
+              Docker lab (router/client/server, real multi-interface captures):
+              repeat sightings 5845/5845 routed, 5687/5687 NAT; problem counts
+              equal per-link tshark truth; Stop + remote cleanup verified root and sudo.
+              Preview rebuilt from this tree, screenshots sent.
+🔒 SECURITY   ✅ 0 Critical, 0 High
+              No new deps. New remote commands: pkill pattern built only from a path
+              matching /tmp/pcap_<uuid>.pcap (else no command), signal from a fixed
+              set; rm path shell-quoted, as before. Per-link display filters built
+              from ints parsed from tshark output. Copy cache keyed by capture id +
+              size + mtime, bounded to 8. New innerHTML (copy tag) escaped.
+📄 DOCS       ✅ CHANGELOG Unreleased, viewer.md, operating.md -- version heading
+              to be renamed to 1.1.0-beta.8 as part of the VERSION bump.
+📦 RELEASE    ⬜
+🚀 SHIP       ⬜
+
 ## SHIPPED: v1.1.0-beta.7 -- UI feedback batch (2026-09-18, local)
 Track: release sequence. Branch feat/beta7-feedback (from main 4b14c6e).
 Model: Opus 5 (user approved for this batch). Shell: Linux bash.

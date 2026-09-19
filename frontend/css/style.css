@@ -1343,6 +1343,17 @@ dialog:not([open]) {
 }
 
 .pkt-bad     { --pkt: var(--pkt-bad); font-weight: 600; }
+/* The same packet seen again on another interface: not a problem, and not
+   new traffic -- muted rather than colored by what tshark mistook it for. */
+.pkt-copy    { color: var(--text-secondary); font-style: italic; }
+.pkt-copy-tag {
+    font-style: normal;
+    font-size: 0.85em;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 4px;
+    margin-right: 6px;
+}
 .pkt-reset   { --pkt: var(--pkt-reset); }
 .pkt-session { --pkt: var(--pkt-session); }
 .pkt-arp     { --pkt: var(--pkt-arp); }

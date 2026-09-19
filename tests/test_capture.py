@@ -1184,3 +1184,73 @@ async def test_several_interfaces_need_libpcap_1_10(tmp_path, libpcap, says):
         assert ssh.run_tcpdump_calls == 0 and ssh.index_calls == 0
     finally:
         await mgr.shutdown()
+
+
+# --- which links a capture holds ------------------------------------------------
+#
+# A capture on several interfaces runs on "any", so its record's interface
+# says "any". The busy rule compared that string: two captures of disjoint
+# links clashed, while a second capture of a link already being read got
+# through. It compares the links each capture reads now.
+
+_TABLE = {1: "lo", 2: "eth0", 3: "eth1", 4: "eth2", 5: "eth3"}
+
+
+async def test_captures_of_disjoint_interface_sets_run_together(tmp_path):
+    mgr, ssh = _naming_manager(tmp_path, [_TABLE] * 6)
+    try:
+        srv = make_multi_server()
+        await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0", "eth1"]), srv, user_id="u1")
+        second = await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth2", "eth3"]), srv, user_id="u1")
+        assert second.status == CaptureStatus.RUNNING and ssh.run_tcpdump_calls == 2
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.parametrize("second", [
+    {"interface": "eth1"},
+    {"interfaces": ["eth1", "eth2"]},
+    {"interface": "any"},
+])
+async def test_a_capture_overlapping_an_interface_set_is_refused(tmp_path, second):
+    mgr, ssh = _naming_manager(tmp_path, [_TABLE] * 6)
+    try:
+        srv = make_multi_server()
+        held = await mgr.start(CaptureRequest(server_id=srv.id, name="router", interfaces=["eth0", "eth1"]),
+                               srv, user_id="u1")
+        with pytest.raises(InterfaceAlreadyCapturing, match="router") as exc:
+            await mgr.start(CaptureRequest(server_id=srv.id, **second), srv, user_id="u1")
+        if "interface" not in second or second["interface"] != "any":
+            assert "eth1" in str(exc.value) and "eth0" not in str(exc.value)
+        assert ssh.run_tcpdump_calls == 1 and held.status == CaptureStatus.RUNNING
+    finally:
+        await mgr.shutdown()
+
+
+async def test_plain_any_holds_every_interface(manager):
+    mgr, ssh, settings = manager
+    srv = make_server()
+    seed_running_capture(mgr, CaptureStatus.RUNNING, server_id=srv.id, interface="any")
+    with pytest.raises(InterfaceAlreadyCapturing, match='"any"'):
+        await mgr.start(CaptureRequest(server_id=srv.id, interface="eth0"), srv, user_id="u1")
+    assert ssh.run_tcpdump_calls == 0
+
+
+async def test_a_named_interface_holds_it_against_plain_any(manager):
+    mgr, ssh, settings = manager
+    srv = make_server()
+    seed_running_capture(mgr, CaptureStatus.RUNNING, server_id=srv.id, interface="eth0")
+    with pytest.raises(InterfaceAlreadyCapturing, match="eth0"):
+        await mgr.start(CaptureRequest(server_id=srv.id, interface="any"), srv, user_id="u1")
+
+
+async def test_an_interface_set_is_released_when_its_capture_is_deleted(tmp_path):
+    mgr, ssh = _naming_manager(tmp_path, [_TABLE] * 6)
+    try:
+        srv = make_multi_server()
+        info = await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0", "eth1"]), srv, user_id="u1")
+        await mgr.delete(info.id)
+        again = await mgr.start(CaptureRequest(server_id=srv.id, interface="eth0"), srv, user_id="u1")
+        assert again.status == CaptureStatus.RUNNING and not mgr._interface_sets
+    finally:
+        await mgr.shutdown()

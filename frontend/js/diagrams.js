@@ -205,7 +205,10 @@ const PROBLEM_KINDS = [
         filter: "tcp.analysis.zero_window || tcp.analysis.window_full",
     },
     {
-        key: "frag", label: "IP fragments", test: /fragmented ip protocol|reassembled in|ipv6 fragment/i,
+        // Not "reassembled in": tshark also writes "[TCP PDU reassembled in N]"
+        // on ordinary TCP segments of a larger message. The fragment that
+        // completes a datagram is flagged from its header (p.fragment).
+        key: "frag", label: "IP fragments", test: /fragmented ip protocol|ipv6 fragment/i,
         filter: "ip.flags.mf == 1 || ip.frag_offset > 0 || ipv6.fraghdr",
     },
     {
@@ -280,18 +283,67 @@ const PROTOCOL_GROUP_OF = new Map(
 
 // Packet -> its problem kind, computed once when the packets arrive.
 const PROBLEM_OF = new WeakMap();
+// The packets that are a problem event of their own: every problem but a
+// repeat of one already counted (classifyProblems).
+const PROBLEM_EVENT = new WeakSet();
 
+// A second sighting of a packet on another interface (packet_parser
+// find_interface_copies) whose first sighting is among these packets.
+function isRepeat(p, byNumber) {
+    return Boolean(p.copy_of) && byNumber.has(p.copy_of);
+}
+
+// An unchanged copy -- routed or bridged, not NATed -- is the same packet
+// twice: it plays once and counts once. A NATed copy is traffic between a
+// different pair of addresses, and plays on that link.
+function isSamePacketAgain(p, byNumber) {
+    return isRepeat(p, byNumber) && !p.copy_nat;
+}
+
+function problemEvents(pb) {
+    if (!pb.events) pb.events = pb.allPackets.filter((p) => PROBLEM_EVENT.has(p));
+    return pb.events;
+}
+
+function packetsByNumber(packets) {
+    return new Map(packets.map((p) => [p.number, p]));
+}
+
+// Each packet's kind is what tshark says about it on its own link: the
+// server reads every unchanged copy's link on its own (copy_link_view) and
+// serves that Info, because its analysis of the whole file has no interfaces
+// and called every such copy a retransmission or duplicate ACK. A NATed copy
+// is a conversation of its own, which tshark judged apart anyway. A copy
+// whose link was not read keeps its first sighting's kind.
+//
+// Counts are of distinct events. A repeat of a problem already counted (the
+// same duplicate ACK, seen leaving) is not a second one; a repeat whose link
+// shows something its first sighting's did not -- "previous segment not
+// captured" after the box dropped a segment -- is.
 function classifyProblems(packets) {
     const counts = new Map();
+    const byNumber = packetsByNumber(packets);
+    const own = (p) => (p.fragment ? PROBLEM_KINDS.find((k) => k.key === "frag")
+        : PROBLEM_KINDS.find((k) => k.test.test(p.info || "")));
     for (const p of packets) {
-        const info = p.info || "";
         // A fragment is flagged by the server from its IP header (the last
         // one's Info reads like any packet); the Info patterns cover the rest.
-        const kind = p.fragment ? PROBLEM_KINDS.find((k) => k.key === "frag")
-            : PROBLEM_KINDS.find((k) => k.test.test(info));
+        let kind;
+        if (p.copy_of && !p.copy_nat && !p.copy_link_view) {
+            // Without its first sighting (filtered out) nothing trustworthy
+            // is known beyond the header.
+            kind = byNumber.has(p.copy_of) ? PROBLEM_OF.get(byNumber.get(p.copy_of))
+                : (p.fragment ? own(p) : undefined);
+        } else {
+            kind = own(p);
+        }
         if (!kind) continue;
         PROBLEM_OF.set(p, kind);
-        counts.set(kind.key, (counts.get(kind.key) || 0) + 1);
+        const first = isRepeat(p, byNumber) ? PROBLEM_OF.get(byNumber.get(p.copy_of)) : null;
+        if (kind !== first) {
+            PROBLEM_EVENT.add(p);
+            counts.set(kind.key, (counts.get(kind.key) || 0) + 1);
+        }
     }
     return counts;
 }
@@ -1789,6 +1841,9 @@ function renderTopologyStats() {
         // capture shows fewer here than in the play below. Labelled as such.
         statsRow("IP packets", totalPackets.toLocaleString()),
         statsRow("IP bytes", formatBytes(totalBytes)),
+        ...(topologyPlayback?.repeats ? [statsRow("Seen on 2+ interfaces", topologyPlayback.repeats.toLocaleString(),
+            "Packets the box routed or bridged, seen again on the interface they left by. " +
+            "Counted and played once here; pick an interface to see everything on it.")] : []),
     ]));
 
     const pb = topologyPlayback;
@@ -2336,9 +2391,14 @@ async function openTopologyDialog(opts = {}) {
 // protocol table, interface labels. Done as soon as the packets arrive --
 // the dialog fetches them on open -- so all of it is there before the first
 // press of Play; Play itself only has to start the clock.
-function preparePlayback(packets) {
+function preparePlayback(all) {
     if (topologyPlayback) return;
-    showNodeInterfaces(packets);
+    // Interfaces, and which way each host's traffic went, come from every
+    // sighting; what plays and is counted is each packet once.
+    showNodeInterfaces(all);
+    const byNumber = packetsByNumber(all);
+    const packets = all.filter((p) => !isSamePacketAgain(p, byNumber));
+    const repeats = all.filter((p) => isRepeat(p, byNumber)).length;
     const { ranked, slotOf } = rankProtocols(packets, TOPOLOGY_SLOT_CAP);
     // Canvas needs literal colors (it cannot resolve var(...)), so the
     // slots are resolved once here rather than per frame. The shape rides
@@ -2349,16 +2409,16 @@ function preparePlayback(packets) {
     // Ranked (and so colored) from every packet, once. Picking protocols
     // narrows what plays but never reshuffles which mark a protocol has.
     topologyPlayback = {
-        allPackets: packets, packets, selected: new Set(),
+        allPackets: all, distinct: packets, packets, repeats, selected: new Set(),
         ranked, slotOf, resolvedSlotOf, playing: false, progress: 0, raf: null,
     };
     topologyState.rank = { ranked, slotOf };
-    topologyPlayback.problemCounts = classifyProblems(packets);
+    topologyPlayback.problemCounts = classifyProblems(all);
     topologyPlayback.dangerColor = resolveColor("var(--danger)") || "#e5484d";
     topologyPlayback.problemScope = null;
-    renderProblemBadges(packets);
+    renderProblemBadges(problemEvents(topologyPlayback));
     renderTopologyLegend($("topology-legend"), ranked, slotOf, topologyPlayback.selected, topologyPlayback.problemCounts);
-    fillInterfaceFilter(packets);
+    fillInterfaceFilter(all);
     // A saved layout's picks, once there are chips to pick: only keys this
     // capture still has (a protocol, or a problem kind that occurs).
     const picks = topologyState.pendingPicks;
@@ -2691,7 +2751,8 @@ function applyTopologyPicks() {
     const pb = topologyPlayback;
     const sel = pb.selected;
     pb.problemScope = problemScope(sel);
-    const base = pb.iface ? pb.allPackets.filter((p) => p.interface === pb.iface) : pb.allPackets;
+    // One interface: everything seen on it. All of them: each packet once.
+    const base = pb.iface ? pb.allPackets.filter((p) => p.interface === pb.iface) : pb.distinct;
     pb.packets = sel.size
         ? base.filter((p) => sel.has(p.protocol) || (PROBLEM_OF.has(p) && sel.has(problemKey(PROBLEM_OF.get(p)))))
         : base;
@@ -2709,16 +2770,19 @@ function applyTopologyPicks() {
     canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
     countLegend(pb, base);
     renderPicksLegend(pb);
-    renderProblemBadges(base, pb.problemScope);
+    // Badges count what the chips count: on one interface, everything seen
+    // there; on all of them, each event once -- including a drop only the
+    // outgoing link shows, whose packet does not play twice.
+    renderProblemBadges(pb.iface ? base : problemEvents(pb), pb.problemScope);
     applyProtocolScope(pb.packets, sel.size > 0 || Boolean(pb.iface));
     renderTopologyStats();
 }
 
-// The chips' counts over `base` -- every packet, or one interface's -- kept
+// The chips' counts over `base` -- every packet once, or one interface's -- kept
 // in the capture-wide ranking's order, which is also what fixes each
 // protocol's mark.
 function countLegend(pb, base) {
-    if (base === pb.allPackets) {
+    if (base === pb.distinct) {
         pb.viewRanked = pb.ranked;
         pb.viewProblemCounts = pb.problemCounts;
         return;
@@ -2925,15 +2989,19 @@ async function openSequenceDialog() {
         // it stops being one. Guarded the same way the packet cap is: block
         // and ask for a narrower filter rather than draw something this
         // cramped that nobody could actually read.
+        // A packet routed or bridged through the box is one arrow, not one
+        // per interface it was seen on.
+        const byNumber = packetsByNumber(result.packets);
+        const packets = result.packets.filter((p) => !isSamePacketAgain(p, byNumber));
         const hosts = new Set();
-        for (const p of result.packets) { hosts.add(p.source); hosts.add(p.destination); }
+        for (const p of packets) { hosts.add(p.source); hosts.add(p.destination); }
         if (hosts.size > SEQUENCE_LANE_CAP) {
             showDiagramCapWarning("sequence", hosts.size, SEQUENCE_LANE_CAP, filter, "hosts");
             return;
         }
-        const { ranked, slotOf } = rankProtocols(result.packets);
+        const { ranked, slotOf } = rankProtocols(packets);
         renderLegend($("sequence-legend"), ranked, slotOf);
-        renderSequenceSVG($("sequence-svg"), result.packets, slotOf, result.names);
+        renderSequenceSVG($("sequence-svg"), packets, slotOf, result.names);
     } catch (e) {
         $("sequence-legend").innerHTML = `<span style="color:var(--danger)">${escHtml(e.message)}</span>`;
     }

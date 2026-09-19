@@ -2624,7 +2624,8 @@ function onInterfaceChecksChanged() {
     const blocker = $("cap-interfaces")?.dataset.blocker;
     if (hint) {
         hint.textContent = blocker ? blocker : ticked.length >= 2
-            ? `Capturing ${ticked.join(", ")}: on "any", limited to these (needs libpcap 1.10 or later on the server).`
+            ? `Capturing ${ticked.join(", ")}: on "any", limited to these (needs libpcap 1.10 or later on the server). ` +
+              "\"any\" is never promiscuous: for a mirror (SPAN) port, capture that interface on its own."
             : ticked.length === 1
                 ? `Capturing ${ticked[0]} only. Tick another to capture several at once.`
                 : "Tick two or more. The capture runs on \"any\", limited to the ticked interfaces (needs libpcap 1.10 or later on the server).";
@@ -4163,6 +4164,16 @@ function noteFilterEditedByHand() {
 
 // Wireshark-style row coloring. First match wins, so problems outrank protocols.
 const PACKET_RULES = [
+    // First of all: a packet routed or bridged through the capturing box, seen
+    // again on the interface it left by. tshark's whole-file analysis calls it
+    // a retransmission or a duplicate ACK; it is neither. Only a problem its
+    // own link shows (the server reads the link on its own: copy_link_view)
+    // colors it -- "previous segment not captured" is the box dropping one.
+    {
+        cls: "pkt-copy", label: "Seen again",
+        test: (p, info) => Boolean(p.copy_of) && !p.copy_nat &&
+            !(p.copy_link_view && (PROBLEM_KINDS.some((k) => k.test.test(info)) || p.fragment)),
+    },
     {
         cls: "pkt-bad",
         label: "Problem",
@@ -5325,6 +5336,20 @@ function interfaceCellHtml(p) {
     return `<span title="${escHtml(parts.join(" \u2014 "))}">${escHtml(p.interface)}${dir}</span>`;
 }
 
+// A packet seen again on another interface says which frame it repeats; the
+// title says why tshark's own words about it may be off.
+function copyTagHtml(p) {
+    if (!p.copy_of) return "";
+    const title = p.copy_nat
+        ? `The same packet as #${p.copy_of}, with its addresses rewritten (NAT) on the way through. ` +
+          "tshark judges this side as a conversation of its own."
+        : `The same packet as #${p.copy_of}, seen again on another interface as it was routed or bridged. ` +
+          (p.copy_link_view
+              ? "Info is what tshark says about it on this interface alone."
+              : "Any retransmission or duplicate ACK tshark reports on it belongs to #" + p.copy_of + ", if anywhere.");
+    return `<span class="pkt-copy-tag" title="${escHtml(title)}">${p.copy_nat ? "NAT of" : "again:"} #${p.copy_of}</span>`;
+}
+
 function packetRowHtml(p, cols) {
     // Read by the row's own right-click menu, to offer Follow Stream without
     // a round trip: null on a packet outside any TCP/UDP conversation, so
@@ -5370,7 +5395,7 @@ function packetCellHtml(p, col, cols) {
         case "length":
             return `<td ${attrs}>${p.length}</td>`;
         case "info":
-            return `<td ${attrs}>${escHtml(p.info)}</td>`;
+            return `<td ${attrs}>${copyTagHtml(p)}${escHtml(p.info)}</td>`;
         default: {
             // An added column: whatever tshark printed for its field, escaped
             // like every other value here -- this is capture content, and a

@@ -1595,3 +1595,105 @@ async def test_library_or_chip_section_or_box_and_lit_rows(app_page):
     await rows.nth(2).locator(".filter-chip-use").click()
     assert await app_page.locator("#filter-menu").count() == 0
     assert (await app_page.input_value("#cap-bpf")).endswith(f" or ({third})")
+
+
+# --- a router's capture: each forwarded packet seen twice ------------------------
+
+
+def _routed(number, source, destination, interface, info="x", copy_of=0, copy_nat=False):
+    packet = _iface_packet(number, source, destination, interface)
+    packet["info"] = info
+    packet["copy_of"] = copy_of
+    packet["copy_nat"] = copy_nat
+    return packet
+
+
+# Client 10.0.0.1 behind the box (eth0), server 10.0.0.2 beyond it (eth1).
+# 1/2, 3/4, 5/6: forwarded, each seen in and out; tshark flagged every second
+# sighting. 5 is a genuine retransmission, so its copy 6 is one on eth1 too.
+# 7 went no further than eth0.
+ROUTED_PACKETS = [
+    _routed(1, "10.0.0.1", "10.0.0.2", "eth0", "40000 → 80 [SYN]"),
+    _routed(2, "10.0.0.1", "10.0.0.2", "eth1", "[TCP Retransmission] 40000 → 80 [SYN]", copy_of=1),
+    _routed(3, "10.0.0.2", "10.0.0.1", "eth1", "80 → 40000 [ACK]"),
+    _routed(4, "10.0.0.2", "10.0.0.1", "eth0", "[TCP Dup ACK 3#1] 80 → 40000 [ACK]", copy_of=3),
+    _routed(5, "10.0.0.1", "10.0.0.2", "eth0", "[TCP Retransmission] 40000 → 80 [PSH, ACK]"),
+    _routed(6, "10.0.0.1", "10.0.0.2", "eth1", "[TCP Retransmission] 40000 → 80 [PSH, ACK]", copy_of=5),
+    _routed(7, "10.0.0.1", "10.0.0.2", "eth0", "40000 → 80 [ACK]"),
+]
+
+
+async def test_a_packet_seen_on_two_interfaces_plays_and_counts_once(app_page):
+    await _open_topology_with_packets(app_page, ROUTED_PACKETS)
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='problem:retrans']")
+    # Four packets crossed the box; the three repeats do not play again.
+    assert await app_page.get_attribute("#topology-scrubber", "max") == "4"
+    # One genuine retransmission; no duplicate ACK at all.
+    assert await app_page.locator("#topology-legend .diagram-legend-chip[data-key='problem:dupack']").count() == 0
+    counts = await app_page.evaluate("() => Object.fromEntries(topologyPlayback.problemCounts)")
+    assert counts == {"retrans": 1}
+    stats = await app_page.inner_text("#topology-stats-body")
+    assert "Seen on 2+ interfaces" in stats and "3" in stats.split("Seen on 2+ interfaces")[1].splitlines()[0]
+
+
+async def test_one_interface_shows_everything_on_it_with_its_first_sightings_problems(app_page):
+    await _open_topology_with_packets(app_page, ROUTED_PACKETS)
+    await app_page.wait_for_selector("#topology-iface-wrap:not([hidden])")
+    await app_page.select_option("#topology-iface", "eth1")
+    assert await app_page.get_attribute("#topology-scrubber", "max") == "3"
+    counts = await app_page.evaluate("() => Object.fromEntries(topologyPlayback.viewProblemCounts)")
+    # 6 is the retransmission as it left by eth1; 2 (the SYN) is no problem.
+    assert counts == {"retrans": 1}
+
+
+async def test_a_nat_copy_plays_on_its_own_link_but_is_not_a_second_problem(app_page):
+    packets = [
+        _routed(1, "10.0.0.1", "10.0.0.2", "eth0", "[TCP Retransmission] 40000 → 80"),
+        _routed(2, "198.51.100.2", "10.0.0.2", "eth1", "[TCP Retransmission] 40000 → 80", copy_of=1, copy_nat=True),
+    ]
+    await _open_topology_with_packets(app_page, packets)
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='problem:retrans']")
+    assert await app_page.get_attribute("#topology-scrubber", "max") == "2"
+    assert await app_page.evaluate("() => Object.fromEntries(topologyPlayback.problemCounts)") == {"retrans": 1}
+
+
+async def test_a_drop_only_the_downstream_link_shows_is_counted(app_page):
+    """The box dropped a segment: the next one leaves as "previous segment
+    not captured" on eth1 alone. That is an event of its own; a duplicate
+    ACK seen arriving and leaving is still one."""
+    packets = [
+        _routed(1, "10.0.0.1", "10.0.0.2", "eth0", "40000 → 80 [PSH, ACK] Seq=201"),
+        _routed(2, "10.0.0.1", "10.0.0.2", "eth1",
+                "[TCP Previous segment not captured] 40000 → 80 [PSH, ACK] Seq=201", copy_of=1),
+        _routed(3, "10.0.0.2", "10.0.0.1", "eth1", "[TCP Dup ACK 9#1] 80 → 40000 [ACK]"),
+        _routed(4, "10.0.0.2", "10.0.0.1", "eth0", "[TCP Dup ACK 9#1] 80 → 40000 [ACK]", copy_of=3),
+    ]
+    for p in (packets[1], packets[3]):
+        p["copy_link_view"] = True
+    await _open_topology_with_packets(app_page, packets)
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='problem:retrans']")
+    counts = await app_page.evaluate("() => Object.fromEntries(topologyPlayback.problemCounts)")
+    assert counts == {"retrans": 1, "dupack": 1}
+
+
+async def test_a_downstream_drop_is_on_the_links_badge_too(app_page):
+    packets = [
+        _routed(1, "10.0.0.1", "10.0.0.2", "eth0", "40000 → 80 [PSH, ACK] Seq=201"),
+        _routed(2, "10.0.0.1", "10.0.0.2", "eth1",
+                "[TCP Previous segment not captured] 40000 → 80 [PSH, ACK] Seq=201", copy_of=1),
+    ]
+    packets[1]["copy_link_view"] = True
+    await _open_topology_with_packets(app_page, packets)
+    await app_page.wait_for_selector("#topology-svg .diagram-problem-badge")
+    assert await app_page.text_content("#topology-svg .diagram-problem-badge text") == "⚠1"
+
+
+async def test_a_tcp_segment_of_a_reassembled_message_is_not_an_ip_fragment(app_page):
+    """tshark writes "[TCP PDU reassembled in N]" on ordinary segments."""
+    packets = [
+        _packet(1, "10.0.0.1", "10.0.0.2", "TCP", "80 → 40000 [ACK] Seq=1 Len=1448 [TCP PDU reassembled in 2]"),
+        _packet(2, "10.0.0.1", "10.0.0.2", "HTTP", "HTTP/1.0 200 OK"),
+    ]
+    await _open_topology_with_packets(app_page, packets)
+    await app_page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key='TCP']")
+    assert await app_page.evaluate("() => Object.fromEntries(topologyPlayback.problemCounts)") == {}

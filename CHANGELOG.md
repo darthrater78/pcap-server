@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A packet seen on two interfaces is no longer a retransmission.** A
+  capture of a router or bridge on several interfaces (or on `any`) sees each
+  forwarded packet going in and again going out. tshark's analysis has no
+  interfaces, so it called almost every second sighting a retransmission or
+  duplicate ACK. On a lossy test router it reported 4,305 and 1,841; the
+  true numbers were 163 and 353. pcap-server now finds these repeat
+  sightings, NATed ones included, and marks them in the packet list
+  (**again: #N**, **NAT of #N**). Each link that carries them is also read on
+  its own, so a copy shows what that link saw, including *previous segment
+  not captured* where the box dropped a packet. The Traffic and Sequence
+  Diagrams and Conversations count each packet once; picking an interface
+  shows everything that crossed it.
+- **Stop works on targets that ignore SSH signals.** OpenSSH refuses the
+  signal request for a root login, and Dropbear ignores it, so Stop did
+  nothing and the capture ran to its full duration. If tcpdump has not
+  exited 3 seconds after the SSH signal, Stop now interrupts it with a
+  command on the target.
+- **Sudo captures no longer leave their pcap on the target.** tcpdump
+  writes the file as root in a sticky `/tmp`, so the login user's `rm` was
+  refused. It is now removed with `sudo -n rm` when that happens. A leftover
+  busybox `timeout` watcher is also cleared.
+- **One capture per interface counts the interfaces a capture reads.** Two
+  captures on separate interface sets were refused because both run on
+  `any`, while a second capture of a link already being read was allowed.
+  Captures now clash only when their interfaces overlap, and plain `any`
+  overlaps every interface.
+- **"IP fragments" no longer counts TCP segments.** "[TCP PDU reassembled
+  in N]" on an ordinary segment matched the fragment pattern.
+
+### Changed
+
+- A multi-interface capture's hint says `any` is never promiscuous: capture a
+  mirror (SPAN) port on its own.
+
 ## 1.1.0-beta.7 — 2026-09-18
 
 ### Added

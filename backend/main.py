@@ -48,6 +48,8 @@ from backend.database import Database
 from backend.models import (
     ANY_INTERFACE,
     BPF_FORBIDDEN_CHARS,
+    CaptureInfo,
+    CaptureOrigin,
     CaptureRename,
     CaptureRequest,
     CaptureStatus,
@@ -76,7 +78,9 @@ from backend.packet_parser import (
     ALLOWED_VIEW_FLAGS,
     ColumnFieldError,
     DisplayFilterError,
+    InterfaceCopies,
     MAX_EXTRA_COLUMNS,
+    find_interface_copies,
     get_conversations,
     get_diagram_packets,
     get_follow_stream,
@@ -2137,6 +2141,41 @@ def _require_readable_capture(capture_id: str, user: dict):
     return info, path
 
 
+# Which frames of a capture are the same packet seen again on another
+# interface (packet_parser.find_interface_copies). One tshark pass per capture
+# file, shared by every request that needs it and kept for the few captures
+# most recently read: a finished capture's file never changes, and the key
+# carries its size and mtime in case it ever did.
+_INTERFACE_COPIES_KEEP = 8
+_interface_copies: dict[tuple, asyncio.Task] = {}
+
+
+async def _copies_for(info: CaptureInfo, path: Path) -> InterfaceCopies | None:
+    """None where no packet can carry an interface of its own -- a capture of
+    one named interface -- or when the pass fails: the listing goes on without
+    the marks rather than failing over them."""
+    if info.interface != ANY_INTERFACE and info.origin != CaptureOrigin.UPLOAD:
+        return None
+    stat = path.stat()
+    key = (info.id, stat.st_size, stat.st_mtime_ns)
+    task = _interface_copies.pop(key, None)
+    if task is None:
+        task = asyncio.ensure_future(find_interface_copies(vault.source_for(path)))
+    _interface_copies[key] = task  # re-inserted: most recently used last
+    while len(_interface_copies) > _INTERFACE_COPIES_KEEP:
+        _interface_copies.pop(next(iter(_interface_copies)))
+    try:
+        # Shielded: one caller going away must not cancel the pass for others.
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("could not find repeat sightings in capture %s", info.id, exc_info=True)
+        if _interface_copies.get(key) is task:
+            _interface_copies.pop(key, None)
+        return None
+
+
 @app.get("/api/captures")
 async def list_captures(user: dict = Depends(get_current_user)):
     return capture_manager.list_for_user(user["id"])
@@ -2746,6 +2785,7 @@ async def list_packets(
             display_filter=display_filter, view_flags=view_flags,
             resolve_names=resolve_names, interface_names=info.interface_names,
             extra_fields=extra_fields, subnet_map=info.subnet_map,
+            copies=await _copies_for(info, path),
         )
         return {"packets": packets, "total": info.packet_count}
     except ColumnFieldError as exc:
@@ -2787,7 +2827,7 @@ async def list_diagram_packets(
         packets, total, names = await get_diagram_packets(
             vault.source_for(path), cap, display_filter=display_filter,
             resolve_names=resolve_names, interface_names=info.interface_names,
-            subnet_map=info.subnet_map,
+            subnet_map=info.subnet_map, copies=await _copies_for(info, path),
         )
     except DisplayFilterError as exc:
         raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})
@@ -2841,9 +2881,11 @@ async def conversations(
     """Statistics > Conversations and Endpoints, from the same tshark pass."""
     if not packet_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many requests, slow down")
-    _info, path = _require_readable_capture(capture_id, user)
+    info, path = _require_readable_capture(capture_id, user)
     try:
-        convs, endpoints = await get_conversations(vault.source_for(path), display_filter, resolve_names)
+        convs, endpoints = await get_conversations(
+            vault.source_for(path), display_filter, resolve_names, copies=await _copies_for(info, path),
+        )
         return {"conversations": convs, "endpoints": endpoints}
     except DisplayFilterError as exc:
         raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})

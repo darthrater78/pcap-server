@@ -12,6 +12,7 @@ mixup) goes unnoticed for a release.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import stat
 import struct
@@ -1223,3 +1224,88 @@ async def test_both_fragments_are_flagged_even_the_one_that_reads_like_a_normal_
     assert diagram and all(p["fragment"] for p in diagram)
     plain = await packet_parser.get_packet_list(BytesSource(data), display_filter="dns", limit=5)
     assert plain and not any(p.fragment for p in plain)
+
+
+# --- the same packet, seen on two interfaces ------------------------------------
+#
+# tests/routed_capture.py builds router captures whose truth is known by
+# construction: which frames are second sightings, and which retransmissions
+# and duplicate ACKs really happened. tshark, reading the combined file, calls
+# every forwarded frame a retransmission or duplicate ACK; these check the app
+# reports the wire instead.
+
+from tests.routed_capture import SCENARIOS  # noqa: E402
+
+_PROBLEM = re.compile(r"retransmission|dup ack", re.I)
+
+
+@needs_tshark
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+async def test_every_second_sighting_is_found_and_nothing_else(name):
+    scenario = SCENARIOS[name]()
+    copies = await packet_parser.find_interface_copies(BytesSource(scenario.pcap()))
+    found = {n: copies.original(n) for n in range(1, len(scenario.frames) + 1) if copies.original(n)}
+    assert found == scenario.copies
+    assert {n for n in found if copies.translated(n)} == scenario.translated
+    assert copies.count == len(scenario.copies)
+
+
+@needs_tshark
+@pytest.mark.parametrize("name", ["routed-v4", "routed-v4-loss", "routed-v6-loss", "bridged-v4-loss"])
+async def test_only_genuine_problems_are_left_once_repeats_are_set_aside(name):
+    scenario = SCENARIOS[name]()
+    data = scenario.pcap()
+    copies = await packet_parser.find_interface_copies(BytesSource(data))
+    packets = await packet_parser.get_packet_list(BytesSource(data), limit=1000, copies=copies)
+    first = {p.number for p in packets if not p.copy_of and _PROBLEM.search(p.info)}
+    assert first == scenario.retrans | scenario.dupacks
+    # Each copy reads as its own link shows it. There, a repeat of a genuine
+    # retransmission or duplicate ACK is still one, and the segment after the
+    # box's drop is "previous segment not captured". Nothing else is flagged.
+    by_number = {p.number: p for p in packets}
+    for p in packets:
+        if not p.copy_of:
+            continue
+        assert p.copy_link_view
+        flagged = bool(_PROBLEM.search(p.info) or "previous segment" in p.info.lower())
+        expected = p.copy_of in scenario.retrans | scenario.dupacks or p.number in scenario.lost_downstream
+        assert flagged == expected, (p.number, p.info)
+    assert all("previous segment" in by_number[n].info.lower() for n in scenario.lost_downstream)
+
+
+@needs_tshark
+async def test_a_repeat_keeps_its_mark_when_the_filter_drops_its_first_sighting():
+    scenario = SCENARIOS["routed-v4-loss"]()
+    data = scenario.pcap()
+    copies = await packet_parser.find_interface_copies(BytesSource(data))
+    packets = await packet_parser.get_packet_list(
+        BytesSource(data), limit=1000, display_filter="sll.ifindex == 3", copies=copies,
+    )
+    marked = {p.number: p.copy_of for p in packets if p.copy_of}
+    assert marked == {n: o for n, o in scenario.copies.items() if n in {p.number for p in packets}}
+    diagram, _total, _names = await packet_parser.get_diagram_packets(
+        BytesSource(data), 1000, display_filter="sll.ifindex == 3", copies=copies,
+    )
+    assert {p["number"]: p["copy_of"] for p in diagram if p["copy_of"]} == marked
+
+
+@needs_tshark
+@pytest.mark.parametrize("name", ["routed-v4-loss", "nat-v4-loss"])
+async def test_conversations_count_an_unchanged_repeat_once(name):
+    scenario = SCENARIOS[name]()
+    data = scenario.pcap()
+    copies = await packet_parser.find_interface_copies(BytesSource(data))
+    convs, endpoints = await packet_parser.get_conversations(BytesSource(data), copies=copies)
+    total = sum(c.packets_a_to_b + c.packets_b_to_a for c in convs)
+    unchanged = len(scenario.copies) - len(scenario.translated)
+    assert total == len(scenario.frames) - unchanged
+    if scenario.translated:
+        # Both sides of the NAT are real address pairs on the wire.
+        assert len(convs) == 2
+    # Filtered to one side, every sighting on it is counted: nothing there
+    # repeats anything else that was counted.
+    only_wan, _ = await packet_parser.get_conversations(
+        BytesSource(data), display_filter="sll.ifindex == 3", copies=copies,
+    )
+    wan_frames = sum(1 for f in scenario.frames if f[4:8] == b"\x00\x00\x00\x03")
+    assert sum(c.packets_a_to_b + c.packets_b_to_a for c in only_wan) == wan_frames
