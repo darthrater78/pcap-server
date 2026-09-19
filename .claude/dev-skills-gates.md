@@ -7,12 +7,19 @@ origin/main (082d219, includes PR #28 docs/beta7-live).
 Model: Sonnet 5. Shell: Linux bash.
 Scope: deep review of traffic diagram + capture logic with several interfaces.
 
-🔢 VERSION    ⏳ bumping to 1.1.0-beta.8
+🔢 VERSION    ✅ 1.1.0-beta.8 -- backend/main.py APP_VERSION, docker-compose.yml
+              image tag, CHANGELOG heading all agree; commit b4134eb. README
+              beta line intentionally left at 1.1.0-beta.7 until the image is
+              live (repo convention). Previous tag v1.1.0-beta.7 confirmed on
+              remote, points at a61203b.
 🔨 BUILD      ✅ check.sh 1816 passed; pytest 1818 after CHANGELOG; browser 270.
               Docker lab (router/client/server, real multi-interface captures):
               repeat sightings 5845/5845 routed, 5687/5687 NAT; problem counts
               equal per-link tshark truth; Stop + remote cleanup verified root and sudo.
-              Preview rebuilt from this tree, screenshots sent.
+              Rerun post-rebase (onto origin/main 082d219) and post-version-bump:
+              1818 passed, exit 0, tree unchanged during the run.
+              handoff offered (rebuild scripts/preview.sh for 1.1.0-beta.8), user
+              said "Commit" without trying it -- recorded as declined.
 🔒 SECURITY   ✅ 0 Critical, 0 High
               No new deps. New remote commands: pkill pattern built only from a path
               matching /tmp/pcap_<uuid>.pcap (else no command), signal from a fixed
