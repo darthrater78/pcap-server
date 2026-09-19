@@ -122,25 +122,26 @@ already known -- fixed by making `app.js initDiagramOptimize` fill an
 `id="topology-cap-max"` span from `DIAGRAM_CAPS` itself, so this cannot drift
 from the macro's actual behavior again.
 
-🔢 VERSION    ⬜ not decided. This changes a default and adds a UI, so it is
-              release-shaped work, but whether it ships as part of the next
-              beta or its own is the user's call, not made here.
-🔨 BUILD      ⚠️ PARTIAL, not the full gate. Targeted runs only, all green:
-              `tests/test_packet_parser.py -k diagram_packets` (6),
-              `tests/test_capture_upload.py -k diagram` (4),
-              `tests/test_main.py tests/test_capture_upload.py
-              tests/test_packet_parser.py tests/test_capture.py` in full
-              (323 passed), `tests/browser/test_diagrams_ui.py` in full (85
-              passed, this file is the one that exercises every changed
-              surface). scripts/check.sh -- the full suite CI/the BUILD gate
-              actually requires -- was NOT run this session (time). No
-              preview container built, no screenshots taken, no handoff
-              offered/declined in the usual sense: NEXT SESSION SHOULD RUN
-              scripts/check.sh on this branch before anything else, and
-              ideally preview.sh + a look at the new Admin > Settings radio
-              UI and a truncated diagram's notice banner by hand -- neither
-              has been seen rendered, only reasoned from code and Playwright
-              locator/text assertions.
+🔢 VERSION    ➖ resolved, not bumped here: user chose to roll this into the
+              next beta rather than cut it alone. APP_VERSION/compose
+              tag/CHANGELOG heading stay as-is on this branch; the bump
+              happens whenever that next beta is cut, folding this change in.
+🔨 BUILD      ✅ full gate now run: `scripts/check.sh` on this branch/commit
+              (ebf6b7a) -- 1818 passed, 0 failed, exit 0, 35.95s. Confirms the
+              prior session's targeted/full-file runs (see below) rather than
+              replacing them.
+              Prior targeted runs, all green: `tests/test_packet_parser.py -k
+              diagram_packets` (6), `tests/test_capture_upload.py -k diagram`
+              (4), `tests/test_main.py tests/test_capture_upload.py
+              tests/test_packet_parser.py tests/test_capture.py` in full (323
+              passed), `tests/browser/test_diagrams_ui.py` in full (85
+              passed).
+              STILL NOT DONE: no preview container built, no screenshots
+              taken, no by-hand look at the new Admin > Settings radio UI or
+              a truncated diagram's notice banner -- neither has been seen
+              rendered, only reasoned from code and Playwright locator/text
+              assertions. Worth doing before this ships in a beta, not
+              required to close this gate.
 🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
               subprocess/eval. PUT /api/admin/settings is unchanged (still
               admin-only, still validates any positive int) -- the two-preset
@@ -162,12 +163,18 @@ from the macro's actual behavior again.
 📦 RELEASE    ⬜ no PR opened (user asked for local commit only).
 🚀 SHIP       ⬜ n/a until RELEASE.
 
-NEXT STEPS, in order: (1) scripts/check.sh full run -- the only gate this
-session did not run for real (see BUILD above). (2) Decide VERSION track with
-the user. (3) Confirm with the user whether the "max packet size" reading of
-item 3 above (packet cap only, not the host/lane caps) was the intended
-scope. (4) Sequence Diagram cap is still just a discussion, not a commitment
--- revisit only if asked.
+RESOLVED THIS SESSION: (1) scripts/check.sh full run -- 1818 passed, see BUILD
+above. (2) VERSION track: user chose "roll into next beta" -- no bump on this
+branch, folds in whenever that beta is cut. (3) Scope of item 3's "max packet
+size" reading confirmed correct by the user -- host/lane caps keep
+hard-blocking, as built.
+
+STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
+a commitment -- revisit only if asked. (5) Before this lands in a beta: build
+the preview container and look at the new Admin > Settings radio UI and a
+truncated diagram's notice banner by hand -- not yet seen rendered.
+Not pushed; no PR opened -- still a local branch, per the user's original ask
+for a local commit only.
 
 ## ACTIVE: multi-interface reality fixes (2026-09-19, local)
 Track: release sequence -- user chose to bump to 1.1.0-beta.8 and push/PR now
