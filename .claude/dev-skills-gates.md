@@ -28,8 +28,9 @@ Scope: deep review of traffic diagram + capture logic with several interfaces.
               size + mtime, bounded to 8. New innerHTML (copy tag) escaped.
 📄 DOCS       ✅ CHANGELOG Unreleased, viewer.md, operating.md -- version heading
               to be renamed to 1.1.0-beta.8 as part of the VERSION bump.
-📦 RELEASE    ⬜
-🚀 SHIP       ⬜
+📦 RELEASE    ✅ PR #29 open: fix/multi-interface-reality -> main
+🚀 SHIP       ⬜ next: merge, confirm merge + CI on that commit, then hand the
+              tag block to the user.
 
 ## SHIPPED: v1.1.0-beta.7 -- UI feedback batch (2026-09-18, local)
 Track: release sequence. Branch feat/beta7-feedback (from main 4b14c6e).
