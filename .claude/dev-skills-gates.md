@@ -1,6 +1,6 @@
 # Dev Skills gate state
 
-## ACTIVE: v1.1.0-beta.7 -- UI feedback batch (2026-09-18, local)
+## SHIPPED: v1.1.0-beta.7 -- UI feedback batch (2026-09-18, local)
 Track: release sequence. Branch feat/beta7-feedback (from main 4b14c6e).
 Model: Opus 5 (user approved for this batch). Shell: Linux bash.
 Scope: traffic diagram / capture / viewer feedback; pcap compare = design note only.
@@ -15,8 +15,9 @@ Scope: traffic diagram / capture / viewer feedback; pcap compare = design note o
               interface printable<=80; new innerHTML sinks escaped; libpcap version
               from the remote probe parsed to digits only before it is stored.
 📄 DOCS       ✅ CHANGELOG beta.7, viewer.md, filters.md, operating.md, target-hosts.md, design note
-📦 RELEASE    ⬜
-🚀 SHIP       ⬜
+📦 RELEASE    ✅ PR #27 merged by user as a61203b
+🚀 SHIP       ✅ tag v1.1.0-beta.7 -> a61203b (user-pushed); Release run 35415933306 success
+              (smoke test in CI). README beta line -> 1.1.0-beta.7 in docs/beta7-live.
 
 ## SHIPPED: v1.1.0-beta.6 -- diagram zones/layouts, capture optimize, upload interfaces (2026-09-18, local)
 Track: release sequence. Branch feat/diagram-views-and-capture-optimize (from main 41b7c14).
