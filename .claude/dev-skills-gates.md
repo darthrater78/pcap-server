@@ -157,19 +157,19 @@ from the macro's actual behavior again.
               until the image is live (repo convention, own commit after).
               Previous tag v1.1.0-beta.8 confirmed on remote, points at
               acb969e.
-🔨 BUILD      ✅ full gate run twice: once pre-bump (1818 passed, ebf6b7a),
-              once more on the version-bumped tree after the CSS fix (1818
-              passed, 0 failed, exit 0, 35.90s, commit 7d58ebc + version
-              bump) -- the tree the PR will actually carry.
-              handoff offered: preview container rebuilt on this tree;
-              in-image APP_VERSION confirmed == 1.1.0-beta.9 by reading it
-              out of the running container; still up on :8099 for the user
-              to look at directly. Admin > Settings radio UI and the
-              truncated diagram's notice banner both seen rendered by hand
-              this session (script-driven, no interactive browser tool
-              available) -- found and fixed a real CSS bug in the radio UI
-              in the process (descendant selector over-matching, see note
-              near the top of this entry); screenshots sent to the user.
+🔨 BUILD      ✅ handoff offered. Full gate run twice: once pre-bump (1818
+              passed, ebf6b7a), once more on the version-bumped tree after
+              the CSS fix (1818 passed, 0 failed, exit 0, 35.90s, commit
+              7d58ebc + version bump) -- the tree the PR will actually carry.
+              Preview container rebuilt on this tree; in-image APP_VERSION
+              confirmed == 1.1.0-beta.9 by reading it out of the running
+              container; still up on :8099 for the user to look at directly.
+              Admin > Settings radio UI and the truncated diagram's notice
+              banner both seen rendered by hand this session (script-driven,
+              no interactive browser tool available) -- found and fixed a
+              real CSS bug in the radio UI in the process (descendant
+              selector over-matching, see note near the top of this entry);
+              screenshots sent to the user.
               tests/browser/test_diagrams_ui.py + test_capture_ui.py rerun
               after that fix: 150 passed.
 🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
