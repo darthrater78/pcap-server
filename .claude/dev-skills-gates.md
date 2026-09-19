@@ -1,11 +1,10 @@
 # Dev Skills gate state
 
-## ACTIVE: diagram packet caps -- two-tier setting + no more hard fail (2026-09-19, local)
+## SHIPPED: v1.1.0-beta.9 -- diagram packet caps + no more hard fail (2026-09-19, local)
 Track: release sequence -- user said "let's go to release" (session 3,
 2026-09-19), on branch feat/diagram-caps-and-truncation (from main's tip,
 includes PR #29 and PR #30 -- i.e. beta.8 plus its README bump).
-Model: Sonnet 5. Shell: Linux bash. Not pushed yet -- about to push and open
-the PR.
+Model: Sonnet 5. Shell: Linux bash.
 
 Started as a question ("where's the 100k diagram cap from") and became this
 implementation over the course of one session. Superseded the two local-only
@@ -191,17 +190,25 @@ from the macro's actual behavior again.
               response already contained. The CSS fix (direct-child
               combinator) adds no execution surface.
 📄 DOCS       ✅ see item 5 above, plus this session's CHANGELOG heading rename
-              (Unreleased -> 1.1.0-beta.9).
-📦 RELEASE    ⬜ about to push feat/diagram-caps-and-truncation and open the
-              PR into main.
-🚀 SHIP       ⬜ next: user merges, pushes the tag; confirm tag SHA + Release
-              run only (release.yml's own smoke step covers the image).
+              (Unreleased -> 1.1.0-beta.9), plus this commit's README beta
+              line bump (see below).
+📦 RELEASE    ✅ PR #31 merged -> main as 7afae37. Check passed on that merge
+              commit (run 35442959807) before the tag was handed over.
+🚀 SHIP       ✅ CLOSED. tag v1.1.0-beta.9 -> 7afae37 on the remote (user-
+              pushed), confirmed via ls-remote. Release run 35443258638
+              success -- image proven to run before it was pushed, then
+              pushed and its pull verified, GitHub Release (prerelease)
+              published. Per this repo's own no-redundant-checks rule, the
+              image was NOT pulled again here; release.yml's own smoke step
+              already covers that. README beta line -> 1.1.0-beta.9, this
+              commit, on docs/beta9-live.
 
 RESOLVED, THIS SESSION AND THE ONE BEFORE: (1) scripts/check.sh full run,
 twice. (2) VERSION: bumped to 1.1.0-beta.9 on "let's go to release". (3) Scope
 of item 3's "max packet size" reading confirmed correct by the user --
 host/lane caps keep hard-blocking, as built. (5) Preview container built,
-both UI pieces looked at by hand, one real bug found and fixed.
+both UI pieces looked at by hand, one real bug found and fixed. (6) Shipped:
+PR merged, tag pushed and verified, Release run green.
 
 STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
 a commitment -- revisit only if asked.
