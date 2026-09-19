@@ -13,6 +13,34 @@ pointer branches this began as (local/diagram-cap-handoff, local/compare-
 handoff is unrelated and still stands) -- deleted once real work started, per
 their own note.
 
+FOLLOW-UP SESSION (2026-09-19, same day): resumed to close the "not yet seen
+rendered" gap. Ran scripts/check.sh full (1818 passed, see BUILD below), then
+built the preview container and drove it with a standalone Playwright script
+(no interactive browser tool available this session) -- logged in as
+`preview`, screenshotted Admin > Settings live, and forced a truncation by
+setting `max_capture_packets=5` directly in the preview DB (restored to unset
+afterward) to see the notice banner on a real diagram.
+
+BUG FOUND AND FIXED BY THIS LOOK: `.admin-settings-grid .setting-item input`
+(style.css) is a descendant selector, so it also matched the two nested radio
+inputs inside `.diagram-cap-option` (two levels down, inside
+`.setting-item--wide`) and gave them the numeric-input box model --
+width:100%, padding, border. Screenshot showed the radio circles and their
+label text pulled apart, one radio floating in its own huge invisible box on
+its own line. Fixed by narrowing both rules (`:focus` too) to the direct-child
+combinator `.setting-item > input`, which only the normal numeric settings
+and the wide item's own hidden input match. This was invisible to every
+existing check: `parseInt`/type/value assertions in the API tests and
+Playwright's text/locator assertions in the browser suite don't look at
+layout. Re-verified visually after the fix (both radios render correctly);
+re-ran `tests/browser/test_diagrams_ui.py tests/browser/test_capture_ui.py`
+(150 passed) since those are the suites that touch this markup and settings
+form.
+
+The truncation notice itself renders correctly: a non-blocking banner ("Showing
+the first N of M packets...") above the diagram, which stays open and drawn --
+confirms item 3's behavior by hand, not just by Playwright locator checks.
+
 WHAT SHIPPED IN THIS COMMIT:
 
 1. **max_capture_packets now offers two presets, not a free number.** Admin >
@@ -136,12 +164,13 @@ from the macro's actual behavior again.
               tests/test_packet_parser.py tests/test_capture.py` in full (323
               passed), `tests/browser/test_diagrams_ui.py` in full (85
               passed).
-              STILL NOT DONE: no preview container built, no screenshots
-              taken, no by-hand look at the new Admin > Settings radio UI or
-              a truncated diagram's notice banner -- neither has been seen
-              rendered, only reasoned from code and Playwright locator/text
-              assertions. Worth doing before this ships in a beta, not
-              required to close this gate.
+              FOLLOW-UP SESSION: preview container built and driven by hand
+              (script, not the interactive browser tool -- see note above).
+              Admin > Settings radio UI and the truncated diagram's notice
+              banner both now seen rendered, not just reasoned from code --
+              found and fixed a real CSS bug in the radio UI along the way
+              (see above). tests/browser/test_diagrams_ui.py +
+              test_capture_ui.py rerun after the fix: 150 passed.
 🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
               subprocess/eval. PUT /api/admin/settings is unchanged (still
               admin-only, still validates any positive int) -- the two-preset
@@ -169,10 +198,13 @@ branch, folds in whenever that beta is cut. (3) Scope of item 3's "max packet
 size" reading confirmed correct by the user -- host/lane caps keep
 hard-blocking, as built.
 
+RESOLVED, FOLLOW-UP SESSION: (5) preview container built, both UI pieces
+looked at by hand -- see BUILD above. Found and fixed a real CSS layout bug
+in the Admin > Settings radio UI in the process (descendant selector
+over-matching; see the note near the top of this entry).
+
 STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
-a commitment -- revisit only if asked. (5) Before this lands in a beta: build
-the preview container and look at the new Admin > Settings radio UI and a
-truncated diagram's notice banner by hand -- not yet seen rendered.
+a commitment -- revisit only if asked.
 Not pushed; no PR opened -- still a local branch, per the user's original ask
 for a local commit only.
 

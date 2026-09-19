@@ -1961,7 +1961,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     color: var(--text-secondary);
 }
 
-.admin-settings-grid .setting-item input {
+.admin-settings-grid .setting-item > input {
     padding: 8px 10px;
     background: var(--bg-primary);
     border: 1px solid var(--border);
@@ -1972,7 +1972,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     width: 100%;
 }
 
-.admin-settings-grid .setting-item input:focus {
+.admin-settings-grid .setting-item > input:focus {
     border-color: var(--accent);
     outline: none;
 }
