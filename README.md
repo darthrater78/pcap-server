@@ -279,12 +279,14 @@ built and why.
 
 ## Roadmap
 
-- **Windows targets** — capture from Windows machines, likely via `dumpcap.exe`
-  over Npcap.
+- **Windows targets** — capture from Windows machines via `dumpcap.exe` over
+  Npcap. Planned in
+  [docs/design/windows-targets.md](docs/design/windows-targets.md).
 - **MCP server** — expose servers, captures and packet queries to agents over
   the Model Context Protocol.
 
-Details in [docs/architecture.md](docs/architecture.md#roadmap).
+Details in [docs/architecture.md](docs/architecture.md#roadmap), and
+[docs/design/](docs/design/README.md) for notes on things not built yet.
 
 ## Documentation
 

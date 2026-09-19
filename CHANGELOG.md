@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Two design notes, and an index for the ones already here
+  ([docs/design/](docs/design/README.md)). Nothing in this release changes
+  behaviour; both are proposals written before any code.
+  - **[Capturing from Windows hosts](docs/design/windows-targets.md)** —
+    `dumpcap` over Npcap rather than `pktmon` (which has no capture filter),
+    why multiple interfaces are *easier* on Windows than the `ifindex`
+    workaround Linux needs, and the three controls that have to be rewritten
+    rather than ported: POSIX shell quoting does not neutralise `cmd.exe`,
+    remote path validation has to refuse UNC paths and reserved device names,
+    and identifying the capture binary can lean on its Authenticode signature.
+  - **[Capturing on a Proxmox VE node](docs/design/proxmox-targets.md)** — it
+    already works, and the Debian part is not the nuance. A guest's
+    `tap<VMID>i<N>` is nearly always the right interface, `any` is a poor
+    default on a hypervisor, and the three ways an ordinary capture can harm
+    the environment: filling the node's root filesystem (where `pmxcfs` keeps
+    every VM's configuration), disturbing a cluster network whose failure mode
+    is HA fencing, and recording far more than was intended. Also the cases
+    where a capture silently sees nothing (PCI passthrough, SR-IOV, Open
+    vSwitch) and the self-capture gap when pcap-server runs in a VM on the
+    node it is pointed at.
+
 ## 1.1.0-beta.9 — 2026-09-19
 
 ### Changed

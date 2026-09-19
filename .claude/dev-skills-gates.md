@@ -1,5 +1,80 @@
 # Dev Skills gate state
 
+## IN PROGRESS: design notes -- Windows targets + Proxmox nodes (2026-09-19, remote)
+Track: documentation only. User asked explicitly for NO code changes -- "we're
+going to create a structure for later and commit it to the repo so we can pull
+it back up" -- to plan Windows target support and to establish whether a
+Proxmox node carries nuance that would stop a capture or risk the guests.
+Branch: claude/windows-pcap-proxmox-plan-mzqa76. Remote container session.
+
+WHAT THIS COMMIT IS: three new markdown files under docs/design/ (an index,
+windows-targets.md, proxmox-targets.md), a CHANGELOG Unreleased entry, and two
+roadmap pointers (README.md, docs/architecture.md) so the notes are findable
+from what already existed. No .py, .js, .css, .html, Dockerfile, workflow or
+dependency file is touched -- verified with
+`git status --porcelain | awk '{print $2}' | grep -v '\.md$'`, which returns
+nothing.
+
+Both notes state their limits in their own headers: written from reading this
+repository, with no real Windows host and no real Proxmox node available in
+this session. Each ends with an explicit list of what must be confirmed on
+hardware, so the unverified claims are collected rather than scattered through
+the prose as though they were settled.
+
+🔢 VERSION    ➖ N/A -- no version bump. Documentation of unbuilt proposals; the
+              shipped artifact is unchanged, so APP_VERSION, the compose image
+              tag and the CHANGELOG version headings all stay where beta.9 left
+              them. The new entry sits under `## Unreleased`, which is the
+              repo's convention for work awaiting a bump.
+🔨 BUILD      ➖ N/A -- nothing to build and nothing to hand off. No code
+              changed, so no image would differ from the beta.9 one already
+              published and already offered. The full suite was not re-run for
+              a markdown-only diff; what WAS checked is the thing this diff
+              could actually break -- every relative link and heading anchor in
+              the new and edited files, resolved against the filesystem with a
+              throwaway script: 0 bad out of all links checked.
+🔒 SECURITY   ✅ 0 Critical, 0 High. Markdown only -- no endpoint, no route, no
+              dependency, no subprocess, no eval, no DOM write, no template, no
+              new execution surface of any kind. The diff cannot change
+              runtime behaviour because nothing in it is loaded at runtime.
+              Checked for disclosure rather than for vulnerabilities, since
+              that is the only way a docs commit can do harm: no credentials,
+              keys, tokens, hostnames, IPs or environment values appear in the
+              new files (grep for password/token/secret/api-key/PRIVATE KEY
+              returns four hits, all of them ordinary prose about the *concept*
+              -- "passwordless sudo", "runas wants an interactive password
+              prompt", "Network logon token filtering"). Interface names used
+              as examples (vmbr0, tap101i0, veth200i0, enp1s0) are Proxmox's
+              own documented naming conventions, not anything read off a real
+              host -- no real host was reachable from this session.
+              Worth noting the opposite way round too: the security *content*
+              of these notes is the point of them. windows-targets.md exists
+              largely to record that three existing controls (POSIX shell
+              quoting via _shell_quote, remote path validation via _SAFE_PATH,
+              and binary identification via _is_safe_tcpdump_path) would each
+              appear to work against a Windows target while protecting
+              nothing, and to put rewriting them ahead of any capture in the
+              build order. proxmox-targets.md records two residual gaps in
+              code that ships today: the boot-id self-capture check cannot fire
+              when pcap-server runs in a VM on the node it is pointed at
+              (localnet.py is already correct about not over-claiming; the gap
+              is real and undocumented), and a reused ifindex can make an `any`
+              capture label one guest's traffic with another guest's name
+              (ssh_manager.py interface_indexes, recorded once at capture
+              start). Neither is introduced here and neither is fixed here --
+              both are now written down with the conditions that reach them.
+📄 DOCS       ✅ this commit IS the documentation. CHANGELOG Unreleased entry
+              added; README Roadmap's Windows bullet and the architecture.md
+              Roadmap section both now link the notes, so neither can be found
+              only by knowing the path. docs/design/README.md added as an index
+              over all three notes including the pre-existing
+              compare-captures.md, which had no index before.
+📦 RELEASE    ➖ N/A -- not a release. No tag, no PR asked for. The user asked
+              for the structure committed to the branch so it can be pulled
+              back up later; nothing beyond the push to
+              claude/windows-pcap-proxmox-plan-mzqa76 was requested.
+🚀 SHIP       ➖ N/A -- same reason. No artifact ships from a docs commit.
+
 ## SHIPPED: v1.1.0-beta.9 -- diagram packet caps + no more hard fail (2026-09-19, local)
 Track: release sequence -- user said "let's go to release" (session 3,
 2026-09-19), on branch feat/diagram-caps-and-truncation (from main's tip,

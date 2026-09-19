@@ -1007,7 +1007,11 @@ subprocess handling get driven in a real browser against a real server.
 ## Roadmap
 
 **Windows targets.** Capture from Windows machines as well as Linux and other
-Unix hosts. The SSH half carries over: Windows ships an OpenSSH server, and
+Unix hosts. Worked through in detail — including the argument-quoting, path
+validation and binary identification problems, which need rewriting rather than
+porting — in [the design note](design/windows-targets.md). There is also one
+for [capturing on a Proxmox VE node](design/proxmox-targets.md), which works
+today but where a hypervisor's defaults carry risks an ordinary host's do not. The SSH half carries over: Windows ships an OpenSSH server, and
 asyncssh's SFTP client fetches from it like any other. The target side does
 not, because it is POSIX throughout: interfaces are listed from
 `/sys/class/net`, the capture is staged in `/tmp` and run as `tcpdump -v -w`
