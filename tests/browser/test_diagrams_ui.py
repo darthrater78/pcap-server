@@ -120,11 +120,13 @@ async def test_a_link_click_filters_to_the_conversation_and_lists_all_its_protoc
     stats = await app_page.inner_text("#topology-stats-body")
     assert "selected link" in stats.lower() and "HTTP" in stats
 
-    # A second click on the same link clears the mark; the filter stays.
+    # A second click on the same link undoes the first: the mark goes, and
+    # the packet list is back to the diagram's own (empty) filter.
     await app_page.evaluate(
         "() => document.querySelector('#topology-svg .diagram-edge').dispatchEvent(new MouseEvent('click', { bubbles: true }))")
     assert await app_page.locator("#topology-svg .diagram-link-protocols").count() == 0
-    assert await app_page.input_value("#display-filter") == "ip.addr == 10.0.0.1 && ip.addr == 10.0.0.2"
+    assert await app_page.input_value("#display-filter") == ""
+    assert await app_page.locator("#btn-topology-clear-filter").is_hidden()
 
 
 async def test_topology_cap_warning_when_hosts_exceed_the_limit(app_page):
@@ -1321,3 +1323,275 @@ async def test_the_diagram_windows_can_be_resized(app_page):
     before = await app_page.evaluate("() => topologyState.width")
     await app_page.evaluate("() => { document.getElementById('topology-dialog').style.width = '700px'; }")
     await app_page.wait_for_function(f"() => topologyState.width < {before}")
+
+
+# --- beta.7 feedback ----------------------------------------------------------
+
+THREE_HOSTS = {
+    "conversations": [
+        {"a": "10.0.0.1", "b": "10.0.0.2", "packets_a_to_b": 2, "bytes_a_to_b": 120,
+         "packets_b_to_a": 1, "bytes_b_to_a": 60},
+        {"a": "10.0.0.2", "b": "10.0.0.3", "packets_a_to_b": 2, "bytes_a_to_b": 120,
+         "packets_b_to_a": 0, "bytes_b_to_a": 0},
+    ],
+    "endpoints": [
+        {"address": "10.0.0.1", "packets": 3, "bytes": 180},
+        {"address": "10.0.0.2", "packets": 5, "bytes": 300},
+        {"address": "10.0.0.3", "packets": 2, "bytes": 120},
+    ],
+}
+
+
+def _on(p, iface):
+    return {**p, "interface": iface}
+
+
+THREE_HOST_PACKETS = [
+    _on(_packet(1, "10.0.0.1", "10.0.0.2", "DNS"), "eth0"),
+    _on(_packet(2, "10.0.0.2", "10.0.0.1", "DNS"), "eth0"),
+    _on(_packet(3, "10.0.0.1", "10.0.0.2", "TCP", "[TCP Dup ACK 1#1] 80 > 1 [ACK]"), "eth0"),
+    _on(_packet(4, "10.0.0.2", "10.0.0.3", "TLS"), "wlan0"),
+    _on(_packet(5, "10.0.0.2", "10.0.0.3", "TLS"), "wlan0"),
+]
+
+
+async def _open_three_hosts(page, packets=THREE_HOST_PACKETS):
+    await page.evaluate(
+        """(response) => {
+            const real = window.api;
+            window.api = async (path, opts) => {
+                if (path.includes('/conversations')) return response.conv;
+                if (path.includes('/diagram-packets?')) return response.pkts;
+                return real(path, opts);
+            };
+        }""",
+        {"conv": THREE_HOSTS, "pkts": {"packets": packets, "total": len(packets)}},
+    )
+    await _open_viewer(page)
+    await page.click("#btn-topology")
+    await page.wait_for_selector("#topology-legend .diagram-legend-chip[data-key]")
+
+
+async def test_clear_filter_puts_the_packet_list_back_and_drops_the_highlight(app_page):
+    await _open_three_hosts(app_page)
+    await app_page.evaluate("() => onTopologyNodeClick(topologyState.byId.get('10.0.0.1'))")
+    assert await app_page.input_value("#display-filter") == "ip.addr == 10.0.0.1"
+    assert await app_page.is_visible("#btn-topology-clear-filter")
+    assert await app_page.locator("#topology-svg .diagram-node.is-faded").count() == 1
+
+    await app_page.click("#btn-topology-clear-filter")
+    assert await app_page.input_value("#display-filter") == ""
+    assert await app_page.locator("#topology-svg .is-faded").count() == 0
+    assert await app_page.is_hidden("#btn-topology-clear-filter")
+    assert await app_page.inner_text("#topology-selection") == ""
+
+
+async def test_a_changed_packet_list_filter_drops_the_diagrams_highlight(app_page):
+    await _open_three_hosts(app_page)
+    await app_page.evaluate("() => onTopologyNodeClick(topologyState.byId.get('10.0.0.1'))")
+    # The packet list's filter changed some other way: cleared, a view picked.
+    await app_page.evaluate("() => { $('display-filter').value = ''; applyDisplayFilter(); }")
+    assert await app_page.locator("#topology-svg .is-faded").count() == 0
+    assert await app_page.is_hidden("#btn-topology-clear-filter")
+
+
+async def test_duplicate_acks_are_a_problem_kind_of_their_own(app_page):
+    await _open_three_hosts(app_page)
+    chip = app_page.locator("#topology-legend [data-key='problem:dupack']")
+    assert "Duplicate ACKs (1)" in await chip.inner_text()
+    assert await app_page.locator("#topology-legend [data-key='problem:retrans']").count() == 0
+
+
+async def test_the_side_panes_scroll_and_their_sections_fold(app_page):
+    await _open_three_hosts(app_page)
+    for pane in ("#topology-chips", "#topology-stats"):
+        assert await app_page.eval_on_selector(pane, "el => getComputedStyle(el).overflowY") == "auto"
+    await app_page.click("#topology-legend .diagram-section-toggle[data-section='Name resolution']")
+    group = app_page.locator("#topology-legend .diagram-chip-group[aria-label='Name resolution']")
+    assert await group.locator(".diagram-legend-chip").count() == 0
+    assert "1" in await group.locator(".diagram-chip-group-count").inner_text()
+    await app_page.click("#topology-legend .diagram-section-toggle[data-section='Name resolution']")
+    assert await group.locator(".diagram-legend-chip").count() == 1
+    # A stats section folds on its heading, and stays folded across redraws.
+    await app_page.click("#topology-stats-body .diagram-stats-section[data-section='stats:Capture'] > summary")
+    await app_page.evaluate("() => renderTopologyStats()")
+    assert await app_page.eval_on_selector(
+        "#topology-stats-body .diagram-stats-section[data-section='stats:Capture']", "el => el.open") is False
+
+
+async def test_a_long_address_in_the_stats_wraps_instead_of_squeezing_the_labels(app_page):
+    await _open_three_hosts(app_page)
+    await app_page.evaluate("""() => {
+        const n = topologyState.nodes[0];
+        n.egress = true; n.name = 'fe80::1c2b:3aff:fe4d:5e6f.a-rather-long-host.example.internal';
+        renderTopologyStats();
+    }""")
+    widths = await app_page.eval_on_selector_all(
+        "#topology-stats-body th", "els => els.map(e => e.getBoundingClientRect().width)")
+    assert min(widths) > 50
+
+
+async def test_the_interface_filter_narrows_the_whole_diagram(app_page):
+    await _open_three_hosts(app_page)
+    assert await app_page.is_visible("#topology-iface-wrap")
+    await app_page.select_option("#topology-iface", "wlan0")
+    hidden = await app_page.evaluate("() => topologyState.nodes.filter(n => n.hidden).map(n => n.id)")
+    assert hidden == ["10.0.0.1"]
+    chips = await app_page.eval_on_selector_all(
+        "#topology-legend .diagram-legend-chip[data-key]", "els => els.map(e => e.dataset.key)")
+    assert chips == ["TLS"]
+    assert "on wlan0" in (await app_page.inner_text("#topology-stats-body")).lower()
+    assert await app_page.evaluate("() => currentLayoutState().interface") == "wlan0"
+    await app_page.select_option("#topology-iface", "")
+    assert await app_page.evaluate("() => topologyState.nodes.filter(n => n.hidden).length") == 0
+
+
+async def test_a_packet_reaching_a_faded_host_lights_it(app_page):
+    await _open_three_hosts(app_page)
+    await app_page.evaluate("() => onTopologyNodeClick(topologyState.byId.get('10.0.0.1'))")
+    # 10.0.0.3 is not a peer of 10.0.0.1, so it is faded; packet 4 goes to it.
+    await app_page.evaluate("() => { topologyPlayback.progress = 3.5; redrawTopologyFrame(); }")
+    lit = await app_page.evaluate(
+        "() => [...document.querySelectorAll('#topology-svg .diagram-node.is-faded.is-flow')].map(e => e.dataset.id)")
+    assert lit == ["10.0.0.3"]
+
+
+async def test_hosts_picked_with_shift_move_together(app_page):
+    await _open_three_hosts(app_page)
+    for host in ("10.0.0.1", "10.0.0.3"):
+        await app_page.click(f"#topology-svg .diagram-node[data-id='{host}'] circle", modifiers=["Shift"], force=True)
+    assert await app_page.input_value("#display-filter") == ""
+    assert sorted(await app_page.evaluate("() => [...topologyState.moveGroup]")) == ["10.0.0.1", "10.0.0.3"]
+    before = await app_page.evaluate("() => topologyState.nodes.map(n => [n.id, n.x, n.y])")
+    box = await app_page.locator("#topology-svg .diagram-node[data-id='10.0.0.1'] circle").bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    await app_page.mouse.move(x, y)
+    await app_page.mouse.down()
+    await app_page.mouse.move(x + 40, y + 30, steps=4)
+    await app_page.mouse.up()
+    after = dict((i, (ax, ay)) for i, ax, ay in await app_page.evaluate("() => topologyState.nodes.map(n => [n.id, n.x, n.y])"))
+    moved = {i: (round(after[i][0] - bx, 6), round(after[i][1] - by, 6)) for i, bx, by in before}
+    assert moved["10.0.0.1"] == moved["10.0.0.3"] != (0, 0)
+    assert moved["10.0.0.2"] == (0, 0)
+
+
+async def test_sequence_arrows_are_labelled_under_the_arrow(app_page):
+    await _stub_api(app_page, "/diagram-packets?", {"packets": PLAY_PACKETS, "total": len(PLAY_PACKETS)})
+    await _open_viewer(app_page)
+    await app_page.click("#btn-sequence")
+    await app_page.wait_for_selector("#sequence-svg .seq-arrow-label")
+    labels = await app_page.eval_on_selector_all("#sequence-svg .seq-arrow-label", "els => els.map(e => e.textContent)")
+    assert labels[0].startswith("#1 DNS")
+    assert len(labels) == len(PLAY_PACKETS)
+
+
+async def test_the_noise_clause_compiles_on_any_as_well_as_on_ethernet(app_page):
+    """On "any" (Linux cooked v2) tcpdump refused `ether host` -- the LLDP/CDP
+    exclusion -- and the capture never started. The cooked form is used there."""
+    await _capture_panel(app_page)
+    await app_page.evaluate("() => fillSelect($('cap-interface'), ['any', 'eth0'])")
+    await app_page.select_option("#cap-interface", "any")
+    await app_page.check("#topology-cap-enabled")
+    await app_page.check("#optimize-exclusions input[value='broadcast']")
+    bpf = await app_page.input_value("#cap-bpf")
+    assert "ether host" not in bpf and "broadcast" not in bpf.replace("link[10] = 1", "")
+    assert "link[0:2] = 0x0004" in bpf and "link[10] = 1" in bpf
+    # A named interface is Ethernet: the clause is rewritten for it.
+    await app_page.select_option("#cap-interface", "eth0")
+    bpf = await app_page.input_value("#cap-bpf")
+    assert "ether host 01:00:0c:cc:cc:cc" in bpf and "broadcast" in bpf and "link[" not in bpf
+
+
+async def test_unticking_the_diagram_puts_snap_length_back_to_automatic(app_page):
+    await _capture_panel(app_page)
+    await app_page.fill("#cap-bpf", "port 53")
+    await app_page.check("#topology-cap-enabled")
+    assert await app_page.input_value("#cap-snaplen") == "256"
+    await app_page.uncheck("#topology-cap-enabled")
+    assert await app_page.input_value("#cap-snaplen") == ""
+    assert await app_page.input_value("#cap-count") == ""
+    assert await app_page.input_value("#cap-bpf") == "port 53"
+    # A field changed since Apply is the operator's, and stays.
+    await app_page.check("#topology-cap-enabled")
+    await app_page.fill("#cap-snaplen", "1500")
+    await app_page.uncheck("#topology-cap-enabled")
+    assert await app_page.input_value("#cap-snaplen") == "1500"
+
+
+async def _pick_server(page, libpcap):
+    await page.evaluate("""(libpcap) => {
+        activeServers = [{ id: 'srv-1', hostname: 'box-1', libpcap_version: libpcap }];
+        const sel = document.getElementById('cap-server');
+        if (!sel.querySelector('option[value="srv-1"]')) sel.append(new Option('box-1', 'srv-1'));
+        sel.value = 'srv-1';
+    }""", libpcap)
+
+
+async def test_several_interfaces_are_offered_only_where_libpcap_allows(app_page):
+    await _capture_panel(app_page)
+    for libpcap, says in (("1.9.1", "this server has 1.9.1"), ("", "Check prerequisites")):
+        await _pick_server(app_page, libpcap)
+        await app_page.evaluate("() => { fillSelect($('cap-interface'), ['any', 'eth0', 'wlan0']); fillInterfaceChecks(['eth0', 'wlan0']); }")
+        assert await app_page.is_disabled("#cap-interfaces input[value='eth0']")
+        assert says in await app_page.text_content("#cap-interfaces-hint")
+
+
+async def test_several_ticked_interfaces_capture_on_any_by_name(app_page):
+    await _capture_panel(app_page)
+    await _pick_server(app_page, "1.10.4")
+    await app_page.evaluate("() => { fillSelect($('cap-interface'), ['any', 'eth0', 'wlan0']); fillInterfaceChecks(['eth0', 'wlan0']); }")
+    await app_page.evaluate("() => { $('cap-interfaces-multi').open = true; }")
+    await app_page.check("#cap-interfaces input[value='eth0']")
+    await app_page.check("#cap-interfaces input[value='wlan0']")
+    assert await app_page.is_disabled("#cap-interface")
+    body = await _start_capture_request(app_page, "")
+    assert body["interface"] == "any" and body["interfaces"] == ["eth0", "wlan0"]
+    await app_page.uncheck("#cap-interfaces input[value='wlan0']")
+    body = await _start_capture_request(app_page, "")
+    assert body["interface"] == "eth0" and "interfaces" not in body
+
+
+async def test_a_multi_interface_capture_shows_its_interfaces_and_its_own_filter(app_page):
+    shown = await app_page.evaluate("""() => {
+        const c = { interface: 'any', bpf_filter: '(ifindex 2 or ifindex 3) and (port 53)',
+                    interface_names: { 2: 'eth0', 3: 'wlan0' } };
+        return [captureInterfaceText(c), captureFilterParts(c).filter];
+    }""")
+    assert shown == ["eth0, wlan0", "port 53"]
+
+
+async def test_a_saved_filter_shows_by_name_on_the_capture(app_page):
+    names = await app_page.evaluate("""() => {
+        customFilters = [{ id: 'f1', label: 'Web servers', expression: 'tcp port 80 or tcp port 443' }];
+        return [
+            filterDisplayName('tcp port 80 or tcp port 443'),
+            filterDisplayName('(tcp port 80 or tcp port 443) and not (arp or stp)'),
+            filterDisplayName('not (arp or udp port 5353)'),
+            filterDisplayName('(tcp port 80 or tcp port 443) and not (host 10.0.0.9)'),
+        ];
+    }""")
+    assert names[0] == {"text": "Web servers", "named": True}
+    assert names[1] == {"text": "Web servers, noise left out", "named": True}
+    assert names[2] == {"text": "Noise left out", "named": True}
+    assert names[3]["named"] is False
+
+
+async def test_library_or_chip_section_or_box_and_lit_rows(app_page):
+    await _capture_panel(app_page)
+    await app_page.evaluate("() => { $('filter-library-details').open = true; }")
+    await app_page.fill("#cap-bpf", "")
+    rows = app_page.locator("#filter-library tr[data-expr]")
+    first = await rows.nth(0).get_attribute("data-expr")
+    second = await rows.nth(1).get_attribute("data-expr")
+    await rows.nth(0).locator(".filter-chip-use").click()
+    await rows.nth(1).locator(".filter-chip-or").click()
+    assert await app_page.input_value("#cap-bpf") == f"({first}) or ({second})"
+    assert await rows.nth(0).get_attribute("class") == "is-in-use"
+    assert await rows.nth(1).locator(".filter-chip-use").get_attribute("aria-pressed") == "true"
+    # With the section's Or box ticked, Use joins with `or` without asking.
+    section = rows.nth(2).locator("xpath=ancestor::section[contains(@class, 'filter-group')][1]")
+    await section.locator(".filter-group-or input").check()
+    third = await rows.nth(2).get_attribute("data-expr")
+    await rows.nth(2).locator(".filter-chip-use").click()
+    assert await app_page.locator("#filter-menu").count() == 0
+    assert (await app_page.input_value("#cap-bpf")).endswith(f" or ({third})")

@@ -26,6 +26,7 @@ from backend.ssh_manager import (
     evaluate_prereqs,
     host_key_strength,
     parse_interface_indexes,
+    libpcap_supports_multi_interface,
     parse_prereq_output,
     weaker_host_key_than_available,
 )
@@ -1216,3 +1217,43 @@ def test_run_tcpdump_proceeds_when_the_target_reports_no_boot_id(monkeypatch):
     asyncio.run(manager.run_tcpdump(_server(), ["-i", "any"], "/tmp/x.pcap"))
 
     assert len(conn.processes_created) == 1
+
+
+# --- libpcap version: several interfaces per capture ---------------------------
+
+
+@pytest.mark.parametrize("line,version", [
+    ("LIBPCAP=libpcap version 1.10.4 (with TPACKET_V3)", "1.10.4"),
+    ("LIBPCAP=libpcap version 1.9.1 (with TPACKET_V3)", "1.9.1"),
+    ("LIBPCAP=libpcap version 1.10.4; rm -rf /", "1.10.4"),
+    ("LIBPCAP=", ""),
+    ("LIBPCAP=libpcap version $(id)", ""),
+])
+def test_the_libpcap_version_is_parsed_to_a_bare_number(line, version):
+    assert parse_prereq_output(line + "\nPROBE_COMPLETE")["libpcap_version"] == version
+
+
+@pytest.mark.parametrize("version,supported", [
+    ("1.10.0", True), ("1.10.4", True), ("1.11", True), ("2.0.1", True),
+    ("1.9.1", False), ("1.8", False), ("", False), ("junk", False),
+])
+def test_multi_interface_needs_libpcap_1_10(version, supported):
+    assert libpcap_supports_multi_interface(version) is supported
+
+
+def _check_named(checks, name):
+    return next(c for c in checks if c["name"] == name)
+
+
+def test_the_prereq_check_reports_multi_interface_support():
+    base = "\n".join(["OSREL_BEGIN", 'PRETTY_NAME="Debian"', "OSREL_END", "UID=0",
+                      "ONPATH=/usr/bin/tcpdump", "FOUND=/usr/bin/tcpdump", "TMPWRITE=yes"])
+    new = parse_prereq_output(base + "\nLIBPCAP=libpcap version 1.10.4\nPROBE_COMPLETE")
+    old = parse_prereq_output(base + "\nLIBPCAP=libpcap version 1.9.1\nPROBE_COMPLETE")
+    unknown = parse_prereq_output(base + "\nPROBE_COMPLETE")
+    name = "Several interfaces per capture"
+    assert _check_named(evaluate_prereqs(new, False), name)["status"] == "ok"
+    # Optional, never a failure: one interface or "any" works everywhere.
+    older = _check_named(evaluate_prereqs(old, False), name)
+    assert older["status"] == "info" and "1.9.1" in older["detail"]
+    assert _check_named(evaluate_prereqs(unknown, False), name)["status"] == "info"

@@ -28,6 +28,8 @@ from backend.capture import (
     CaptureLimitExceeded,
     InterfaceAlreadyCapturing,
     CaptureManager,
+    UnknownInterface,
+    ifindex_clause,
 )
 from pydantic import ValidationError
 
@@ -1096,3 +1098,89 @@ async def test_collecting_while_locked_never_fetches_unsealed(locked_manager, tm
         await mgr._collect("c1", make_server(), "/tmp/c1.pcap", tmp_path / "c1.pcap", info)
     assert ssh.fetched == [], "nothing may be pulled down without a key to seal it"
     assert not (tmp_path / "c1.pcap").exists()
+
+
+# --- several interfaces at once -----------------------------------------------
+
+
+def test_ifindex_clause_keeps_the_operators_filter_whole():
+    assert ifindex_clause([2, 3], "") == "(ifindex 2 or ifindex 3)"
+    # Parenthesised, so its own `or` cannot rebind the interface clause.
+    assert ifindex_clause([2], "port 53 or port 853") == "(ifindex 2) and (port 53 or port 853)"
+
+
+def make_multi_server(libpcap: str = "1.10.4") -> ServerInfo:
+    return make_server().model_copy(update={"libpcap_version": libpcap})
+
+
+async def test_several_interfaces_run_one_capture_on_any_limited_by_index(tmp_path):
+    # Two readings: the lookup at start, then the table recorded for "any".
+    mgr, ssh = _naming_manager(tmp_path, [{1: "lo", 2: "eth0", 3: "wlan0"}, {1: "lo", 2: "eth0", 3: "wlan0"}])
+    try:
+        srv = make_multi_server()
+        req = CaptureRequest(server_id=srv.id, interfaces=["eth0", "wlan0"], bpf_filter="port 53")
+        info = await mgr.start(req, srv, user_id="u1")
+        assert info.interface == "any"
+        assert info.bpf_filter == "(ifindex 2 or ifindex 3) and (port 53)"
+        assert ssh.last_args[ssh.last_args.index("-i") + 1] == "any"
+        assert ssh.last_args[-1] == "(ifindex 2 or ifindex 3) and (port 53)"
+    finally:
+        await mgr.shutdown()
+
+
+async def test_one_ticked_interface_is_just_that_interface(tmp_path):
+    mgr, ssh = _naming_manager(tmp_path, [])
+    try:
+        srv = make_server()
+        info = await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0"]), srv, user_id="u1")
+        assert info.interface == "eth0" and info.bpf_filter == ""
+        assert ssh.index_calls == 0
+    finally:
+        await mgr.shutdown()
+
+
+async def test_an_unknown_interface_starts_nothing(tmp_path):
+    mgr, ssh = _naming_manager(tmp_path, [{2: "eth0"}])
+    try:
+        srv = make_multi_server()
+        with pytest.raises(UnknownInterface, match="wlan9"):
+            await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0", "wlan9"]), srv, user_id="u1")
+        assert ssh.run_tcpdump_calls == 0 and not mgr._captures
+    finally:
+        await mgr.shutdown()
+
+
+async def test_an_unreadable_interface_table_starts_nothing(tmp_path):
+    mgr, ssh = _naming_manager(tmp_path, [ConnectionError("down")])
+    try:
+        srv = make_multi_server()
+        with pytest.raises(UnknownInterface):
+            await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0", "wlan0"]), srv, user_id="u1")
+        assert ssh.run_tcpdump_calls == 0
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.parametrize("names", [["any", "eth0"], ["eth0;id"], ["-i"], ["x" * 65]])
+def test_interfaces_are_validated_like_an_interface(names):
+    with pytest.raises(ValueError):
+        CaptureRequest(server_id="s1", interfaces=names)
+
+
+def test_interfaces_are_deduplicated_and_capped():
+    assert CaptureRequest(server_id="s1", interfaces=["eth0", "eth0", "wlan0"]).interfaces == ["eth0", "wlan0"]
+    with pytest.raises(ValueError):
+        CaptureRequest(server_id="s1", interfaces=[f"eth{i}" for i in range(17)])
+
+
+@pytest.mark.parametrize("libpcap,says", [("1.9.1", "it has 1.9.1"), ("", "Check prerequisites")])
+async def test_several_interfaces_need_libpcap_1_10(tmp_path, libpcap, says):
+    """An older libpcap refuses the ifindex filter; refused before anything runs."""
+    mgr, ssh = _naming_manager(tmp_path, [{2: "eth0", 3: "wlan0"}])
+    try:
+        srv = make_multi_server(libpcap)
+        with pytest.raises(UnknownInterface, match=says):
+            await mgr.start(CaptureRequest(server_id=srv.id, interfaces=["eth0", "wlan0"]), srv, user_id="u1")
+        assert ssh.run_tcpdump_calls == 0 and ssh.index_calls == 0
+    finally:
+        await mgr.shutdown()

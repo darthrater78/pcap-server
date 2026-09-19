@@ -271,3 +271,26 @@ async def test_the_interface_column_stays_hidden_off_an_any_capture(app_page):
         "#packet-head-row th[data-col=interface]", "els => els.map(e => e.hidden)"
     )
     assert hidden == [True], "the column should still be present, just hidden"
+
+
+async def test_a_column_is_resized_by_dragging_its_headings_edge(app_page):
+    await _draw(app_page)
+    await app_page.evaluate("() => localStorage.removeItem('pcap.columnWidths')")
+    await app_page.evaluate("() => renderColumnHeaders(effectiveColumns(getSelectedFlags()))")
+    th = app_page.locator("#packet-head-row th[data-col='source']")
+    before = (await th.bounding_box())["width"]
+    grip = (await th.locator(".col-resize-handle").bounding_box())
+    x, y = grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2
+    await app_page.mouse.move(x, y)
+    await app_page.mouse.down()
+    await app_page.mouse.move(x + 90, y, steps=4)
+    await app_page.mouse.up()
+    after = (await th.bounding_box())["width"]
+    assert after > before + 60
+    # Kept for the next draw, and a double-click puts it back.
+    stored = await app_page.evaluate("() => JSON.parse(localStorage.getItem('pcap.columnWidths')).source")
+    assert stored > before + 60
+    await app_page.evaluate("() => renderColumnHeaders(effectiveColumns(getSelectedFlags()))")
+    assert (await th.bounding_box())["width"] > before + 60
+    await th.locator(".col-resize-handle").dblclick()
+    assert await app_page.evaluate("() => JSON.parse(localStorage.getItem('pcap.columnWidths')).source") is None

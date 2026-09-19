@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.1.0-beta.7 — 2026-09-18
+
+### Added
+
+- **Clear filter** on the Traffic Diagram. A click on a host or link filters
+  the packet list, and that filter used to stay until you closed the diagram
+  and cleared it in the viewer. The button puts back the filter the diagram
+  was drawn with and drops the highlight; clicking the same host or link again
+  does the same. If the packet list's filter changes another way, such as
+  being cleared or a view picked, the diagram's highlight goes too, including
+  in a **New window** diagram.
+- **Move several hosts at once**: Shift-click hosts, or Shift-drag a box
+  around them, then drag any one of them.
+- **Interface** on the Traffic Diagram's toolbar, when the packets name more
+  than one interface: narrows the whole diagram to one. Hosts, links, chips,
+  stats and the play all follow, and saved layouts keep it.
+- **Duplicate ACKs** are a Problems chip of their own, split out of
+  retransmissions.
+- The Traffic Diagram's Protocols groups and Stats sections **fold**,
+  remembered per browser.
+- **Several interfaces in one capture**: **Pick several** under Interface on
+  the Capture tab. The capture runs on `any`, limited to the ticked
+  interfaces by index, and is shown by interface name everywhere afterwards.
+  The `ifindex` filter needs libpcap 1.10 or later, so **Check prerequisites**
+  now reads the server's libpcap version and reports "Several interfaces per
+  capture" (informational, never a failure). The version is kept on the
+  server. Pick several is disabled on a server that is older or not yet
+  checked, and the API refuses such a request before anything runs.
+- Capture filter library: an **Or** chip on every row, an **Or** box on each
+  section (every Use there joins with `or`), and rows already in the field
+  are **lit**.
+- A capture taken with one of **your saved filters** shows the filter's name
+  rather than the expression, in the capture list, the viewer's header and
+  the diagrams. An Optimize noise clause on the end reads as "…, noise left
+  out".
+- **Go to #** in the viewer (and **Ctrl+G**): jump to a packet by number.
+- Packet list columns **resize** by dragging a heading's right edge (kept per
+  browser; double-click to reset).
+- The **Sequence Diagram** writes each packet's number, protocol and Info
+  line under its arrow, instead of only on hover.
+- A design note for comparing two captures side by side:
+  [docs/design/compare-captures.md](docs/design/compare-captures.md).
+
+### Fixed
+
+- **Optimize for diagrams broke captures on `any`**: tcpdump refused the
+  LLDP/CDP exclusion (`ether host …`: "ethernet addresses supported only on
+  ethernet/…" on LINUX_SLL2), as it would have refused "All other broadcast"
+  and "All other multicast". On `any` those exclusions now use the cooked
+  header's own fields, checked against tcpdump. Changing the interface
+  rewrites the clause for it.
+- Unticking an Optimize diagram now puts **Snap length** back to automatic
+  (and Max packets and the BPF field back to what they were), unless you
+  changed them since.
+- The Traffic Diagram's **stats pane showed its text one letter per line**
+  when the box's own address was long (an IPv6 address or a resolved name,
+  common on uploaded captures). Such values now wrap on a line of their own.
+- The Traffic Diagram's **Protocols and Stats panes could not scroll**:
+  anything past the bottom was cut off.
+- With a host selected, a packet reaching a **faded host** during a play now
+  lights that host and its label while the packet's trail is on it.
+
 ## 1.1.0-beta.6 — 2026-09-18
 
 ### Added

@@ -65,6 +65,15 @@ chasing a stall, `dns.qry.name` while reading a resolver's traffic,
   as typed. A name this server's tshark does not recognise is refused there and
   then, rather than becoming a column that is silently empty on every packet.
 
+**Drag a heading's right edge** to make that column wider or narrower. The
+width is kept in this browser, and a double-click on the edge puts it back.
+Past the window's width the list scrolls sideways.
+
+**Go to #** on the toolbar (or **Ctrl+G**, as in Wireshark) jumps to a packet
+by number. It scrolls the list to that packet and opens it. A packet the list
+does not hold, because it is filtered out or past the rows loaded, still opens
+below, with a note saying why it is not highlighted.
+
 Columns can be renamed, and the arrangement is **saved to your account** — not
 to the browser — so it is the same list on every capture and on whatever you
 sign in from next. **Reset to default columns** in the dialog puts it back.
@@ -87,6 +96,20 @@ interface that existed only in the middle of a capture shows as `#3`, and an
 older tcpdump that writes the first cooked format records no interface at all,
 so the column shows just the direction. Captures on a named interface have no
 such column.
+
+**Several interfaces at once.** On the Capture tab, **Pick several** under
+Interface lists the server's interfaces as checkboxes. Tick two or more and
+the capture runs on `any`, limited to those interfaces by index: one tcpdump
+and one file, with the Interface column above. The names are looked up on the
+server as the capture starts. The capture list, the viewer's header and the
+diagrams show the interfaces by name (`eth0, wlan0`), with the capture filter
+shown without the index clause in front of it. This uses tcpdump's `ifindex`
+filter, which needs libpcap 1.10 or later on the server. **Check
+prerequisites** reads the version (see
+[Target hosts](target-hosts.md#checking-a-server-before-you-capture)). On a
+server that has not been checked, or has an older libpcap, the list is
+disabled and says why. Ticking just one is the same as picking it from the
+list.
 
 **The name does not survive a download.** The mapping lives only in
 pcap-server's own database; the `.pcap` file itself — classic pcap, the same
@@ -172,7 +195,24 @@ defaults back.
 
 **Clicking a host** filters the packet list to it and lights up every host it
 talks to: its peers and the links to them are drawn on top at full strength,
-and everything else fades back. Click it again to clear.
+and everything else fades back. **Clear filter**, beside the filter the diagram
+applied, puts the packet list back to the filter the diagram was drawn with and
+clears the highlight. So does clicking the same host or link again. If the
+packet list's filter changes some other way, such as being cleared, a view
+picked or something typed (including in a **New window** diagram's main tab),
+the highlight goes too. While a play runs with a host selected, a faded host
+that a packet is travelling to or from lights up again, label and all, for as
+long as the packet's trail is on it.
+
+**Moving several hosts at once:** Shift-click hosts (or Ctrl/Cmd-click), or
+Shift-drag a box around them on empty space. The picked hosts get a dashed
+ring, and dragging any one of them moves them all. Click empty space to let go.
+
+**Interface**, on the toolbar, appears when the packets name more than one
+interface (an "any" capture, or an upload with mapped subnets). Pick one and
+the whole diagram narrows to it. Hosts and links that never crossed it leave
+the drawing, the chips count only its packets, the stats pane totals it, and
+Play plays only it. A saved layout remembers the choice.
 
 On an "any" capture (or an upload with mapped subnets) each host's label has a
 grey line under its address listing the **interfaces it was seen on**:
@@ -183,15 +223,18 @@ shows its name, then its address, then its interfaces, one line each.
 The chips are grouped by what the traffic is for — **Problems**, Name
 resolution, Directory & auth (AD), Web & APIs, File sharing, Remote access,
 Discovery & broadcast, Network services, Mail, Databases, Transport only,
-Other — and clicking a group's name picks the whole group. **Problems** is
-broken out by kind (resets, retransmissions, window problems, IP fragments,
-ICMP errors, malformed), each a chip of its own. With anything picked, the
+Other — and clicking a group's name picks the whole group; the ▾ beside it
+folds the group away (remembered per browser, with a count of what it holds
+and how much of it is picked). **Problems** is broken out by kind (resets,
+retransmissions, duplicate ACKs, window problems, IP fragments, ICMP errors,
+malformed), each a chip of its own. With anything picked, the
 unpicked chips step back (faded and dashed), and problem badges and red rings
 show only for the problem kinds that are picked — a play of just DNS shows
 none. A **JSON** chip is HTTP bodies carrying JSON, usually API calls: tshark
 names a packet by its innermost layer. A **search box** finds a host by name
 or address — Enter steps through matches, Esc clears. The **Protocols** column (left) and the **stats pane** (right) each fold
-to a narrow strip, remembered per browser. The stats pane (shown before any
+to a narrow strip, remembered per browser, and scroll when they hold more
+than fits. Each stats section folds on its heading. The stats pane (shown before any
 play) lists per-protocol totals, problems by
 kind, and how many hosts sit in each zone. Toolbar controls: zoom/pan and
 **Fit**, **Spacing** (fans out a dense layout), full screen, and **New
@@ -211,7 +254,9 @@ as…** keeps another. A capture's layouts are deleted with the capture.
 
 **Sequence Diagram** is closer to Wireshark's own Flow Graph: one lane per
 host, and every packet drawn as a time-ordered arrow between two lanes,
-colored by protocol. Click an arrow to jump straight to that packet's detail.
+colored by protocol, with the packet written under it: its number, protocol
+and Info line, cut only at the diagram's edge (the full line is on hover).
+Click an arrow, or its label, to jump straight to that packet's detail.
 Rows are spaced evenly rather than by real elapsed time, since a burst of
 packets a millisecond apart would otherwise collapse into an unreadable stack.
 A host name too long for its lane is shortened in the middle; hover it for the

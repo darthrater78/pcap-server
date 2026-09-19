@@ -47,6 +47,14 @@ A display filter tshark cannot parse is reported back with tshark's own message
 and the position it objected to. An empty packet list therefore always means the
 filter was valid and nothing matched it.
 
+Every row has **Or** as well: it joins that row to what the field holds as an
+alternative, `(what you have) or (this)`, with no question asked. Each section
+of the library has an **Or** box on its heading. Tick it and every **Use** in
+that section joins with `or` too — pick three ports from Web in a row and get
+any of the three. Rows already in the field are lit, so you can see which rows
+a filter was built from. The Use chip is filled when a row is in the field,
+and the Not chip when the row is left out.
+
 ## Leaving traffic out
 
 Every library row has a **Not** button beside **Use**: it leaves that traffic
@@ -76,11 +84,26 @@ rewrites the clause it added rather than stacking a second one. **Save as
 preset** keeps your choice of exclusions, snap length and max packets under a
 name, private to your account; pick it from **Your presets** next time.
 
+**Unticking** the diagram undoes it. Snap length goes back to automatic,
+Max packets back to what it was, and the BPF field loses the noise clause.
+Each one is reverted only if you have not changed it since.
+
+On **any** (and on several interfaces at once, which runs on `any`), tcpdump
+reads Linux "cooked" headers rather than Ethernet ones, and those carry no MAC
+addresses. There, `ether host`, `broadcast` and `multicast` do not compile, so
+the noise clause uses the cooked header's own fields instead: `link[10]` for
+broadcast and multicast, and the 802.2/SNAP bytes for CDP. Change the
+interface and the clause is rewritten for it.
+
 ## What a capture says it captured afterwards
 
 Each capture in the list carries a badge naming its filter: the library's own
-name where there is one, so `tcp port 443` shows as **HTTPS**, and the
-expression itself where there is not. The exact text is on hover either way.
+name where there is one, so `tcp port 443` shows as **HTTPS**, the name of
+one of **your own saved filters** when it was one of those, and the
+expression itself otherwise. A filter with the Optimize noise clause on the
+end reads as, for example, **Web servers, noise left out**. The viewer's
+header and the diagrams' capture details use the same names. The exact text
+is on hover either way.
 
 This matters more than it sounds. An empty packet list from a filtered capture
 and an empty packet list from a quiet network look identical, and they lead to

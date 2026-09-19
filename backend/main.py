@@ -39,6 +39,7 @@ from backend.capture import (
     CaptureLimitExceeded,
     CaptureManager,
     InterfaceAlreadyCapturing,
+    UnknownInterface,
     UploadRejected,
 )
 from backend.bpf import check_filter
@@ -120,7 +121,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.6"
+APP_VERSION = "1.1.0-beta.7"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -1099,6 +1100,7 @@ def _server_from_row(row: dict) -> ServerInfo:
         use_sudo=bool(row["use_sudo"]),
         tcpdump_path=row["tcpdump_path"] if "tcpdump_path" in row.keys() else "",
         os_name=row.get("os_name", ""),
+        libpcap_version=row.get("libpcap_version", ""),
         self_target_reason=row.get("self_target_reason", ""),
         kernel_verified_at=row.get("kernel_verified_at", ""),
         added_at=datetime.fromisoformat(row["added_at"]),
@@ -1606,6 +1608,10 @@ async def prereq_check(server_id: str, user: dict = Depends(get_current_user)):
     os_name = os_release.get("PRETTY_NAME") or os_release.get("NAME", "")
     if result["facts"]["complete"] and os_name != srv.os_name:
         db.set_active_server_os(server_id, user["id"], os_name)
+    # Same rule: a finished probe's answer is kept, even an empty one.
+    libpcap = result["facts"].get("libpcap_version", "")
+    if result["facts"]["complete"] and libpcap != srv.libpcap_version:
+        db.set_active_server_libpcap(server_id, user["id"], libpcap)
     # The probe reached the host, so its boot id is the best evidence available
     # about whether this is the machine we are running on. Checked after the
     # persistence above so a refused server still carries what was learned.
@@ -1617,6 +1623,7 @@ async def prereq_check(server_id: str, user: dict = Depends(get_current_user)):
         "checks": result["checks"],
         "tcpdump_path": discovered or srv.tcpdump_path,
         "os": os_name,
+        "libpcap_version": libpcap if result["facts"]["complete"] else srv.libpcap_version,
     }
 
 
@@ -2179,6 +2186,8 @@ async def start_capture(req: CaptureRequest, user: dict = Depends(get_current_us
         # 409, not 429: this is a conflict over one link that waiting will not
         # clear, so retrying the same request is not the remedy.
         raise HTTPException(409, str(exc))
+    except UnknownInterface as exc:
+        raise HTTPException(400, str(exc))
     except Exception:
         logger.exception("failed to start capture")
         raise HTTPException(500, "failed to start capture")
