@@ -14,8 +14,9 @@ handoff is unrelated and still stands) -- deleted once real work started, per
 their own note.
 
 FOLLOW-UP SESSION (2026-09-19, same day): resumed to close the "not yet seen
-rendered" gap. Ran scripts/check.sh full (1818 passed, see BUILD below), then
-built the preview container and drove it with a standalone Playwright script
+rendered" gap. Ran scripts/check.sh full (1818 passed, see the build gate
+entry further down), then built the preview container and drove it with a
+standalone Playwright script
 (no interactive browser tool available this session) -- logged in as
 `preview`, screenshotted Admin > Settings live, and forced a truncation by
 setting `max_capture_packets=5` directly in the preview DB (restored to unset
