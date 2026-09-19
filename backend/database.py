@@ -1206,7 +1206,13 @@ class Database:
 
     DEFAULTS: dict[str, str] = {
         "max_capture_seconds": "300",
-        "max_capture_packets": "100000",
+        # Also the Traffic Diagram's own ceiling (frontend/js/diagrams.js
+        # fetchPacketsCapped asks for no cap of its own, so this is the only
+        # one). The Admin panel offers exactly two values: 250,000, which
+        # needs nothing else, and 500,000, which the panel pairs with a
+        # recommendation to raise this container's memory limit and to use
+        # Optimize for diagrams on very large captures.
+        "max_capture_packets": "250000",
         "max_concurrent_captures": "5",
         "session_duration_hours": "8",
         "session_idle_timeout_minutes": "60",

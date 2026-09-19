@@ -267,7 +267,7 @@ async def test_get_diagram_packets_counts_every_match_but_keeps_only_the_cap():
     assert total == 7 and [p["number"] for p in packets] == list(range(1, 8))
     assert packets[0]["source"] == "10.0.0.1" and packets[0]["destination"] == "10.0.0.2"
     over, total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 5)
-    assert over == [] and total == 7
+    assert [p["number"] for p in over] == [1, 2, 3, 4, 5] and total == 7
 
 
 @needs_tshark

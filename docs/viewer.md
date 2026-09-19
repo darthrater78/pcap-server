@@ -306,9 +306,12 @@ Both read the current display filter the same way Conversations does, and both
 cap how much they will draw at once — 200 hosts for the Traffic Diagram and 40
 lanes for the Sequence Diagram; 10,000 packets for the Sequence Diagram (a row
 each), and for the Traffic Diagram as many as one capture can hold (**Max
-capture packets** in Settings, 100,000 by default). Above a cap they ask for a
-narrower filter rather than drawing a misleading or unusably dense picture, and
-the count they judge is what the filter matched, so narrowing it works. The two
+capture packets** in Settings — an admin picks 250,000, which needs nothing
+else, or 500,000, shown with what to check first). Above the *host* or *lane*
+cap the diagram still asks for a narrower filter, since drawing only some of
+the hosts a filter matched would draw the wrong picture. Above the *packet*
+cap it draws anyway, using the first packets up to that cap, and says so —
+narrowing the filter gets the rest, but a partial picture beats none. The two
 packet caps always apply; the **Optimize for diagrams** checkboxes on the
 **Capture** tab fit a capture to one of them before it is taken (see
 [Filters](filters.md#optimize-for-diagrams)). A long

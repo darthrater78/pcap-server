@@ -88,16 +88,18 @@ const OTHER_SLOT = { color: "var(--diagram-other)", shape: "circle", dash: "2 2"
 
 const TOPOLOGY_NODE_CAP = 200;
 const SEQUENCE_LANE_CAP = 40;
-// Each diagram's packet cap, always applied. The Sequence Diagram draws a row per packet, and
-// past a few thousand rows it is no longer something anyone reads. The
-// Traffic Diagram's matches max_capture_packets' default; the server clamps
-// either to that setting as it stands.
+// The Sequence Diagram's own packet cap, always applied: it draws a row per
+// packet, and past a few thousand rows it is no longer something anyone
+// reads (nor is it windowed/virtualized -- more rows means more SVG elements,
+// unlike the Traffic Diagram whose drawn complexity stays fixed at
+// TOPOLOGY_NODE_CAP regardless of packet count). The Traffic Diagram asks for
+// no cap of its own -- see fetchPacketsCapped -- so max_capture_packets, an
+// admin setting, is its only ceiling.
 const PACKET_DIAGRAM_CAP = 10000;
-const TOPOLOGY_PACKET_CAP = 100000;
 const TOPOLOGY_PACKETS_PER_SECOND_AT_1X = 40;
 // ...until a play at 1x would outlast this many seconds; past that the rate
-// grows with the capture, so 100,000 packets play in the same two minutes as
-// 5,000 rather than in forty.
+// grows with the capture, so a play of 250,000 packets finishes in the same
+// two minutes as one of 5,000, rather than in fifty times as long.
 const TOPOLOGY_PLAY_SECONDS_AT_1X = 120;
 // How many times a link can be crossed before its "heat" (opacity/width
 // boost during playback) stops climbing -- a link that carries most of the
@@ -615,12 +617,13 @@ function restoreLayoutPositions(state, saved) {
     return true;
 }
 
-// Shared by both diagrams: the display filter's own packet count decides
-// whether this renders at all. Truncating a diagram silently would just draw
-// a wrong picture, so above the cap this returns overCap instead of a
-// partial result. One request, one tshark pass (see the diagram-packets
-// route); the server says what the cap came to, since its ceiling is a
-// setting. `cap` is omitted to take that ceiling as it stands.
+// Shared by both diagrams: draws whatever the server could give it (up to
+// its own cap, an admin setting for the Traffic Diagram) rather than
+// refusing outright when the filter matched more -- `truncated` says so, and
+// the caller shows a notice rather than treating this as a failure. One
+// request, one tshark pass (see the diagram-packets route); the server says
+// what the cap came to, since its ceiling is a setting. `cap` is omitted to
+// take that ceiling as it stands.
 async function fetchPacketsCapped(captureId, filter, cap) {
     // Reads the same page-level "Resolve hostnames" toggle the packet list
     // uses (frontend/index.html's #resolve-names) -- one setting, not a
@@ -633,22 +636,35 @@ async function fetchPacketsCapped(captureId, filter, cap) {
     if (cap) params.set("limit", String(cap));
     const res = await api(`/api/captures/${captureId}/diagram-packets?${params}`);
     const limit = res.cap || cap || PACKET_DIAGRAM_CAP;
-    if (res.total > limit) return { overCap: true, total: res.total, cap: limit };
-    return { overCap: false, total: res.total, cap: limit, packets: res.packets, names: res.names || {} };
+    return {
+        truncated: res.total > limit, total: res.total, cap: limit,
+        packets: res.packets, names: res.names || {},
+    };
 }
 
-// The Capture tab's two diagram checkboxes used to switch these caps off, per
-// browser. They are now only the "optimize this capture for a diagram" macro
-// (app.js initDiagramOptimize) and start unticked, so the caps always apply:
-// an unticked box must not mean a Sequence Diagram of 100,000 rows. The
-// server still clamps either to max_capture_packets.
-function showDiagramCapWarning(kind, total, cap, filter, what = kind === "topology" ? "hosts" : "packets") {
+// A hard block: this diagram's own visual-complexity limit (hosts, not
+// packets) was exceeded, and unlike the packet cap there is no "draw the
+// first N" fallback that means anything -- which N hosts would it keep?
+// Narrowing the filter is the only way forward.
+function showDiagramCapWarning(kind, total, cap, filter, what = "hosts") {
     const box = $(`${kind}-cap-warning`);
+    box.className = "diagram-cap-warning";
     box.textContent = `${total.toLocaleString()} ${what} match ` +
         `${filter ? `"${filter}"` : "the whole capture"} -- above the ${cap.toLocaleString()} this diagram ` +
         `can render. Narrow the display filter or open a saved view, and try again.`;
     box.hidden = false;
     $(`${kind}-body`).hidden = true;
+}
+
+// Non-blocking: the packet cap fell short of what the filter matched, so the
+// diagram draws its first `cap` packets rather than nothing. Shown beside
+// the diagram, which stays open -- narrowing the filter gets the rest.
+function showDiagramTruncatedNotice(kind, total, cap, filter) {
+    const box = $(`${kind}-cap-warning`);
+    box.className = "diagram-cap-warning diagram-cap-warning--notice";
+    box.textContent = `Showing the first ${cap.toLocaleString()} of ${total.toLocaleString()} packets ` +
+        `matching ${filter ? `"${filter}"` : "the whole capture"} -- narrow the display filter to see the rest.`;
+    box.hidden = false;
 }
 
 // --- Where a host sits: inside the box, the LAN, or the internet -----------
@@ -1575,7 +1591,7 @@ function renderTopologySVG(svg, nodes, byId, edges, onNodeClick, onEdgeClick) {
 function topologyPackets() {
     if (!topologyState.packetsPromise) {
         const state = topologyState;
-        state.packetsPromise = fetchPacketsCapped(state.captureId, state.filter, TOPOLOGY_PACKET_CAP);
+        state.packetsPromise = fetchPacketsCapped(state.captureId, state.filter);
         // A failed fetch is not kept: the next press of Play tries again.
         state.packetsPromise.catch(() => { state.packetsPromise = null; });
     }
@@ -1588,9 +1604,11 @@ function topologyPackets() {
 function prefetchTopologyPackets() {
     const state = topologyState;
     topologyPackets().then((result) => {
-        // Over the cap, Play says so when pressed; until then the graph just
-        // goes without the packet-derived extras.
-        if (topologyState === state && !result.overCap) preparePlayback(result.packets);
+        if (topologyState !== state) return;
+        if (result.truncated) {
+            showDiagramTruncatedNotice("topology", result.total, result.cap, state.filter);
+        }
+        preparePlayback(result.packets);
     }, () => { /* Play reports a failed fetch; nothing to add here */ });
 }
 
@@ -2216,7 +2234,7 @@ async function selectTopologyItem(sel) {
     // packets -- the same fetch Play uses, so at most one per dialog.
     let result;
     try { result = await topologyPackets(); } catch { return; }
-    if (topologyState !== state || state.selection !== cur || result.overCap) return;
+    if (topologyState !== state || state.selection !== cur || !result.packets.length) return;
     if (!state.rank) state.rank = rankProtocols(result.packets, TOPOLOGY_SLOT_CAP);  // before preparePlayback
     const counts = new Map();
     let total = 0;
@@ -2456,9 +2474,10 @@ async function onTopologyPlayClick() {
             return;
         }
         $("btn-topology-play").disabled = false;
-        if (result.overCap) {
-            showDiagramCapWarning("topology", result.total, result.cap, topologyState.filter, "packets");
-            return;
+        // Normally already shown by prefetchTopologyPackets; repeated here in
+        // case Play was pressed before that fetch's own .then ran.
+        if (result.truncated) {
+            showDiagramTruncatedNotice("topology", result.total, result.cap, topologyState.filter);
         }
         preparePlayback(result.packets);
     }
@@ -2977,9 +2996,8 @@ async function openSequenceDialog() {
     dialog.showModal();
     try {
         const result = await fetchPacketsCapped(viewingCaptureId, filter, PACKET_DIAGRAM_CAP);
-        if (result.overCap) {
-            showDiagramCapWarning("sequence", result.total, result.cap, filter);
-            return;
+        if (result.truncated) {
+            showDiagramTruncatedNotice("sequence", result.total, result.cap, filter);
         }
         if (!result.packets.length) {
             $("sequence-legend").innerHTML = '<span class="diagram-legend-empty">No packets</span>';

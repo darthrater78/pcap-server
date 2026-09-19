@@ -2667,8 +2667,15 @@ function describeCapture(body, serverName) {
 //
 // The catalog below is the only place exclusion BPF comes from. A saved
 // preset stores catalog KEYS (server-validated to that shape), never BPF text.
+//
+// The Traffic Diagram's cap here is this macro's own starting point for Max
+// packets, matching max_capture_packets' default (Admin > Settings) -- an
+// admin who raised that setting to the 500,000 preset does not get a bigger
+// number here too, since this panel has no way to read that admin-only
+// setting. Either way the server enforces its own configured ceiling
+// regardless of what this macro fills in.
 const DIAGRAM_CAPS = [
-    { box: "topology-cap-enabled", cap: 100000, name: "Traffic Diagram" },
+    { box: "topology-cap-enabled", cap: 250000, name: "Traffic Diagram" },
     { box: "sequence-cap-enabled", cap: 10000, name: "Sequence Diagram" },
 ];
 
@@ -2881,6 +2888,11 @@ function initDiagramOptimize() {
     // Once per page: signing in again must not stack a second set of listeners.
     if (!$("optimize-panel") || diagramOptimizeReady) return;
     diagramOptimizeReady = true;
+    // The one place this number is written -- the label reads it rather than
+    // repeating it, so raising DIAGRAM_CAPS' topology entry cannot drift from
+    // what the checkbox's own text claims.
+    const topologyCap = DIAGRAM_CAPS.find((d) => d.box === "topology-cap-enabled");
+    if (topologyCap) $("topology-cap-max").textContent = topologyCap.cap.toLocaleString();
     renderExclusions(NOISE_EXCLUSIONS.filter((x) => x.rec).map((x) => x.key));
     for (const d of DIAGRAM_CAPS) {
         // A tick is the macro; an untick just stops enforcing that cap. One
@@ -6511,18 +6523,60 @@ const SETTING_LABELS = {
     rate_limit_uploads_per_min: "Capture uploads per minute",
 };
 
+// max_capture_packets is also the Traffic Diagram's own ceiling (see
+// frontend/js/diagrams.js), so it gets a choice of two sized presets with
+// what each implies, rather than a bare number -- a raw input here would not
+// say what picking a bigger one costs. A stored value that is neither
+// (an older install, or one edited directly) is shown as-is and left
+// unchecked; picking either radio replaces it, same as any other setting,
+// only on Save.
+const DIAGRAM_CAP_PRESETS = [
+    { value: 250000, label: "250,000 -- no other changes needed" },
+    {
+        value: 500000,
+        label: "500,000 -- larger diagrams. Recommended alongside it: raise this " +
+            "container's memory limit above its default, and use “Optimize for " +
+            "diagrams” on the Capture tab for very large captures.",
+    },
+];
+
+function renderCapturePacketsSetting(rawValue) {
+    const value = parseInt(rawValue, 10) || DIAGRAM_CAP_PRESETS[0].value;
+    const isPreset = DIAGRAM_CAP_PRESETS.some((p) => p.value === value);
+    const options = DIAGRAM_CAP_PRESETS.map((p) => `
+        <label class="diagram-cap-option">
+            <input type="radio" name="max-capture-packets-choice" value="${p.value}"
+                ${value === p.value ? "checked" : ""}>
+            <span>${escHtml(p.label)}</span>
+        </label>
+    `).join("");
+    const hint = isPreset ? "" : `<p class="setting-hint">Currently set to ${value.toLocaleString()} ` +
+        "(not one of the two presets below -- picking either replaces it).</p>";
+    return `
+        <div class="setting-item setting-item--wide">
+            <label>${escHtml(SETTING_LABELS.max_capture_packets)} (Traffic Diagram)</label>
+            ${hint}
+            <div class="diagram-cap-choice">${options}</div>
+            <input type="hidden" id="setting-max_capture_packets" value="${value}">
+        </div>
+    `;
+}
+
 async function loadAdminSettings() {
     try {
         const settings = await api("/api/admin/settings");
         const el = $("admin-settings");
         el.innerHTML = Object.entries(SETTING_LABELS)
-            .map(([key, label]) => `
+            .map(([key, label]) => key === "max_capture_packets" ? renderCapturePacketsSetting(settings[key]) : `
                 <div class="setting-item">
                     <label>${escHtml(label)}</label>
                     <input type="number" id="setting-${key}" value="${escHtml(settings[key] || "")}" min="1">
                 </div>
             `)
             .join("");
+        el.querySelectorAll('input[name="max-capture-packets-choice"]').forEach((radio) => {
+            radio.addEventListener("change", () => { $("setting-max_capture_packets").value = radio.value; });
+        });
     } catch (e) {
         $("admin-settings").innerHTML = `<span style="color:var(--danger)">${escHtml(e.message)}</span>`;
     }

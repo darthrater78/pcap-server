@@ -231,3 +231,8 @@ secrets:
 #       peak: the baseline is well under 200 MB, but parsing a very large
 #       capture with tshark can spike transiently, so leave generous headroom
 #       (a limit set too low will OOM-kill a legitimate large-capture view).
+#       If Admin > Settings' Max capture packets is raised to its 500,000
+#       preset, a Traffic Diagram at that size transiently adds roughly
+#       300-350 MB on top of baseline (the packet list plus its JSON
+#       encoding) -- raise this limit accordingly. The 250,000 preset stays
+#       comfortably inside the 1g default.

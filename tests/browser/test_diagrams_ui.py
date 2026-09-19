@@ -272,8 +272,11 @@ async def test_edge_heat_climbs_with_crossings_and_stays_capped(app_page):
     assert styled["opacity"] == "1"    # 0.35 + the full 0.65 bonus, never more
 
 
-async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):
-    await _stub_api(app_page, "/diagram-packets?", {"packets": [], "total": 10001})
+async def test_sequence_diagram_over_its_cap_draws_a_partial_picture(app_page):
+    # 10,001 matched, only 2 sent back (the mocked server cap) -- the diagram
+    # draws those 2 and says the picture is partial, rather than refusing.
+    packets = [_packet(1, "10.0.0.1", "10.0.0.2"), _packet(2, "10.0.0.1", "10.0.0.2")]
+    await _stub_api(app_page, "/diagram-packets?", {"packets": packets, "total": 10001, "cap": 10000})
     await _open_viewer(app_page)
 
     await app_page.click("#btn-sequence")
@@ -282,7 +285,8 @@ async def test_sequence_cap_warning_when_packets_exceed_the_limit(app_page):
     assert await app_page.is_visible("#sequence-cap-warning")
     assert "10,001" in await app_page.inner_text("#sequence-cap-warning") \
         or "10001" in await app_page.inner_text("#sequence-cap-warning")
-    assert await app_page.is_hidden("#sequence-body")
+    assert not await app_page.is_hidden("#sequence-body")
+    assert await app_page.locator("#sequence-svg .seq-arrow").count() == 2
 
 
 async def test_the_legend_holds_eight_protocols_each_a_distinct_mark(app_page):
@@ -919,21 +923,28 @@ async def test_traffic_diagram_plays_a_capture_past_the_sequence_cap(app_page):
     assert await app_page.is_hidden("#topology-cap-warning")
 
 
-async def test_traffic_diagram_warning_reports_the_servers_cap(app_page):
+async def test_traffic_diagram_over_its_cap_draws_a_partial_picture(app_page):
+    # 150,000 matched, only 100 sent back (the mocked server cap) -- the
+    # diagram draws those 100 and says the picture is partial, rather than
+    # refusing to draw at all.
+    packets = [_packet(i, "10.0.0.1", "10.0.0.2") for i in range(1, 101)]
     await app_page.evaluate(
         """(r) => { const real = window.api; window.api = async (path, opts) =>
-            path.includes('/conversations') ? r
-            : path.includes('/diagram-packets?') ? { packets: [], total: 150000, cap: 100000 }
-            : real(path, opts); }""",
-        CONVERSATIONS_PAYLOAD,
+            path.includes('/conversations') ? r.conv
+            : path.includes('/diagram-packets?') ? r.pkts : real(path, opts); }""",
+        {"conv": CONVERSATIONS_PAYLOAD, "pkts": {"packets": packets, "total": 150000, "cap": 100}},
     )
     await _open_viewer(app_page)
     await app_page.click("#btn-topology")
     await app_page.wait_for_selector("#topology-svg .diagram-node")
-    await app_page.click("#btn-topology-play")
     await app_page.wait_for_selector("#topology-cap-warning:not([hidden])")
     text = await app_page.inner_text("#topology-cap-warning")
-    assert "150,000 packets" in text and "100,000" in text
+    assert "100" in text and "150,000" in text
+    assert not await app_page.is_hidden("#topology-body")
+    await app_page.click("#btn-topology-play")
+    await app_page.wait_for_function(
+        "() => document.getElementById('topology-playback-count').textContent.endsWith('/ 100')"
+    )
 
 
 async def test_sequence_diagram_asks_for_its_own_cap(app_page):
@@ -969,7 +980,10 @@ async def test_edge_heat_carried_forward_matches_a_recount(app_page):
 
 async def test_each_diagram_always_asks_for_its_own_cap(app_page):
     """The Capture tab's checkboxes no longer switch the drawing caps off:
-    unticked (the default), each diagram still asks for no more than it draws."""
+    unticked (the default), each diagram still asks for no more than it draws.
+    The Traffic Diagram asks for no limit of its own (the server's configured
+    max_capture_packets is its only ceiling); the Sequence Diagram keeps its
+    own fixed, lower one."""
     await app_page.evaluate(
         """(r) => { window.__calls = []; const real = window.api; window.api = async (path, opts) => {
             window.__calls.push(path);
@@ -982,8 +996,10 @@ async def test_each_diagram_always_asks_for_its_own_cap(app_page):
     await _open_viewer(app_page)
     await app_page.click("#btn-topology")
     await app_page.wait_for_function(
-        "() => window.__calls.some((c) => c.includes('/diagram-packets?') && c.includes('limit=100000'))"
+        "() => window.__calls.some((c) => c.includes('/diagram-packets?'))"
     )
+    calls = await app_page.evaluate("() => window.__calls")
+    assert any("/diagram-packets?" in c and "limit=" not in c for c in calls)
     await app_page.evaluate("() => $('topology-dialog').close()")
     await app_page.click("#btn-sequence")
     await app_page.wait_for_function(
@@ -992,7 +1008,7 @@ async def test_each_diagram_always_asks_for_its_own_cap(app_page):
 
 
 async def test_the_cap_checkboxes_show_their_max_and_have_tooltips(app_page):
-    for sel, shown in (("label:has(#topology-cap-enabled)", "100,000"), ("label:has(#sequence-cap-enabled)", "10,000")):
+    for sel, shown in (("label:has(#topology-cap-enabled)", "250,000"), ("label:has(#sequence-cap-enabled)", "10,000")):
         assert shown in await app_page.inner_text(sel)
         assert "ticked" in (await app_page.get_attribute(sel, "title")).lower()
 
@@ -1246,8 +1262,8 @@ async def test_a_ticked_diagram_polices_the_capture_limit(app_page):
     await app_page.fill("#cap-count", "")
     await app_page.check("#topology-cap-enabled")
     assert not await app_page.is_checked("#sequence-cap-enabled")
-    assert await app_page.input_value("#cap-count") == "100000"
-    assert (await _start_capture_request(app_page, ""))["count"] == 100000
+    assert await app_page.input_value("#cap-count") == "250000"
+    assert (await _start_capture_request(app_page, ""))["count"] == 250000
     # Neither ticked: no limit is added.
     await app_page.uncheck("#topology-cap-enabled")
     assert "count" not in await _start_capture_request(app_page, "")

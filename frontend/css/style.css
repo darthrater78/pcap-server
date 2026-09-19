@@ -1977,6 +1977,32 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     outline: none;
 }
 
+.admin-settings-grid .setting-item--wide {
+    grid-column: 1 / -1;
+}
+
+.diagram-cap-choice {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.diagram-cap-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.diagram-cap-option input {
+    margin-top: 3px;
+}
+
+.setting-hint {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
 .admin-table-container {
     overflow-x: auto;
 }
@@ -3436,6 +3462,12 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     background: var(--bg-surface);
     color: var(--text-primary);
     font-size: 0.8125rem;
+}
+
+/* A truncated-but-drawn diagram, not a refused one: informational, not an
+   error, and shown alongside the diagram rather than in place of it. */
+.diagram-cap-warning--notice {
+    border-color: var(--accent);
 }
 
 .diagram-body {
