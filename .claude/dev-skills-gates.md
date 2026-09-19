@@ -12,7 +12,7 @@ Scope: deep review of traffic diagram + capture logic with several interfaces.
               beta line intentionally left at 1.1.0-beta.7 until the image is
               live (repo convention). Previous tag v1.1.0-beta.7 confirmed on
               remote, points at a61203b.
-🔨 BUILD      ✅ check.sh 1816 passed; pytest 1818 after CHANGELOG; browser 270.
+🔨 BUILD      ✅ check.sh 1818 passed; handoff offered, user declined to try it
               Docker lab (router/client/server, real multi-interface captures):
               repeat sightings 5845/5845 routed, 5687/5687 NAT; problem counts
               equal per-link tshark truth; Stop + remote cleanup verified root and sudo.
