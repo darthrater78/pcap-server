@@ -57,7 +57,6 @@ from backend.models import (
     CapturePresetRequest,
     CaptureView,
     CaptureViewRequest,
-    SubnetMapRequest,
     DiagramView,
     DiagramViewRequest,
     ColumnLayout,
@@ -125,7 +124,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0-beta.9"
+APP_VERSION = "1.1.0"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -2267,11 +2266,6 @@ def _upload_label(filename: str) -> str:
 async def upload_capture(
     request: Request,
     filename: str = Query("", max_length=255),
-    # Which subnet sits behind which interface, for a file captured on more
-    # than one: the same JSON the subnet-map route takes, sent with the file
-    # so the capture is stored with it in one step. Checked before a byte of
-    # the file is read.
-    subnet_map: str = Query("", max_length=8192),
     user: dict = Depends(get_current_user),
 ):
     # The read-only-over-HTTP middleware already refuses every mutating /api/
@@ -2282,20 +2276,11 @@ async def upload_capture(
     _require_secure_transport(request)
     if not upload_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many uploads, slow down")
-    mappings: list[dict] = []
-    if subnet_map:
-        try:
-            mappings = [m.model_dump() for m in SubnetMapRequest.model_validate_json(subnet_map).mappings]
-        except ValueError as exc:
-            raise HTTPException(400, f"the interface mapping is not valid: {exc}")
-
     max_bytes = db.get_setting_int("max_upload_mb") * 1024 * 1024
     try:
         info = await capture_manager.import_upload(
             user["id"], _upload_label(filename), request.stream(), max_bytes,
         )
-        if mappings:
-            info = capture_manager.set_subnet_map(info.id, mappings)
         return info
     except UploadRejected as exc:
         # 400, not 500: everything this raises is a statement about the file
@@ -2318,21 +2303,6 @@ async def stop_capture(capture_id: str, user: dict = Depends(get_current_user)):
         return await capture_manager.stop(capture_id)
     except KeyError:
         raise HTTPException(404, "capture not found")
-
-
-@app.put("/api/captures/{capture_id}/subnet-map")
-async def set_subnet_map(
-    capture_id: str,
-    body: SubnetMapRequest,
-    user: dict = Depends(get_current_user),
-):
-    """Which subnet sits behind which interface, for a capture whose packets
-    do not say (an upload, or one taken on a single named interface). The
-    viewer and diagrams derive each packet's interface and in/out from it.
-    An empty list removes the mapping."""
-    _require_own_capture(capture_id, user)
-    mappings = [m.model_dump() for m in body.mappings]
-    return capture_manager.set_subnet_map(capture_id, mappings)
 
 
 @app.post("/api/captures/{capture_id}/rename")
@@ -2784,7 +2754,7 @@ async def list_packets(
             vault.source_for(path), offset=offset, limit=limit,
             display_filter=display_filter, view_flags=view_flags,
             resolve_names=resolve_names, interface_names=info.interface_names,
-            extra_fields=extra_fields, subnet_map=info.subnet_map,
+            extra_fields=extra_fields,
             copies=await _copies_for(info, path),
         )
         return {"packets": packets, "total": info.packet_count}
@@ -2827,7 +2797,7 @@ async def list_diagram_packets(
         packets, total, names = await get_diagram_packets(
             vault.source_for(path), cap, display_filter=display_filter,
             resolve_names=resolve_names, interface_names=info.interface_names,
-            subnet_map=info.subnet_map, copies=await _copies_for(info, path),
+            copies=await _copies_for(info, path),
         )
     except DisplayFilterError as exc:
         raise HTTPException(400, {"code": "bad_display_filter", "reason": str(exc)})

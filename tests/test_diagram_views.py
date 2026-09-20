@@ -141,34 +141,3 @@ def test_a_preset_holds_catalog_keys_not_bpf(secure_client, enrolled, settings):
 
 def test_deleting_an_unknown_preset_is_not_found(secure_client, enrolled):
     assert secure_client.delete("/api/capture-presets/nope").status_code == 404
-
-
-# --- subnet -> interface mapping on a capture -------------------------------
-
-
-def test_a_subnet_map_is_stored_on_the_capture(secure_client, capture):
-    resp = secure_client.put(f"/api/captures/{capture}/subnet-map", json={"mappings": [
-        {"cidr": "10.42.0.5/16", "name": "cni0"}, {"cidr": "192.168.1.0/24", "name": "eth0"},
-    ]})
-    assert resp.status_code == 200
-    assert resp.json()["subnet_map"] == [
-        {"cidr": "10.42.0.0/16", "name": "cni0"}, {"cidr": "192.168.1.0/24", "name": "eth0"},
-    ]
-    stored = next(r for r in main.db.list_captures() if r["id"] == capture)
-    assert stored["subnet_map"][0]["name"] == "cni0"
-
-
-@pytest.mark.parametrize("bad", [
-    {"cidr": "not-a-subnet", "name": "eth0"},
-    {"cidr": "10.0.0.0/8", "name": "-rf"},
-    {"cidr": "10.0.0.0/8", "name": "eth0; rm"},
-    {"cidr": "10.0.0.0/8", "name": "x" * 40},
-])
-def test_a_bad_subnet_mapping_is_refused(secure_client, capture, bad):
-    resp = secure_client.put(f"/api/captures/{capture}/subnet-map", json={"mappings": [bad]})
-    assert resp.status_code == 422
-
-
-def test_too_many_subnet_mappings_are_refused(secure_client, capture):
-    rows = [{"cidr": f"10.{i}.0.0/16", "name": f"if{i}"} for i in range(33)]
-    assert secure_client.put(f"/api/captures/{capture}/subnet-map", json={"mappings": rows}).status_code == 422

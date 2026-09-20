@@ -27,10 +27,24 @@
 #     uses) is swapped in place, account kept; that one needs a restart.
 #
 # PREVIEW_PORT (default 8099) picks the host port. It listens on every
-# interface so it can be opened from another device on the LAN; over plain
-# HTTP from there the app is read-only, which is all a look at the UI needs.
-# The capture is loaded from inside the container over loopback, the one
-# place plain HTTP is allowed to write.
+# interface so it can be opened from another device on the LAN.
+#
+# It expects a TLS-terminating reverse proxy in front of it, because that is
+# how the user reaches this preview. So it runs with TRUST_PROXY_HEADERS=true
+# and COOKIE_SECURE=true, the pair docs/reverse-proxy.md describes: the first
+# makes the app believe the proxy's X-Forwarded-Proto: https, which is what
+# lifts the read-only-over-plain-HTTP rule so the UI can be used rather than
+# only looked at; the second marks the session cookie Secure, which the
+# browser will keep because its own hop to the proxy is HTTPS.
+#
+# Reached directly over plain HTTP instead (http://host:8099), sign-in will
+# not stick -- the browser discards a Secure cookie on a plain-HTTP origin.
+# Use the proxy's URL, or set COOKIE_SECURE=false here for a direct look.
+# Trusting the header means anyone who can reach this port directly can claim
+# HTTPS by sending it; that is acceptable only because this container holds
+# nothing but the fake capture, and it is another reason not to point it at
+# real data. The capture is still loaded from inside the container over
+# loopback, which needs no proxy.
 #
 # The login is fixed and printed below, and sessions never time out (no idle
 # timeout, a year-long session). That is only acceptable because the
@@ -84,7 +98,13 @@ case "${1:-up}" in
     *) echo "usage: $0 [up|code|down]" >&2; exit 2 ;;
 esac
 
-SRC_HASH=$(cd "$ROOT" && find backend Dockerfile entrypoint.sh -type f -not -path '*/__pycache__/*' -print0 \
+# This script is in the hash with the sources it builds from, because it is
+# what chooses the container's environment and flags. Without it, editing a
+# `docker run` argument here -- COOKIE_SECURE, TRUST_PROXY_HEADERS, a mount --
+# left the old container running under the OLD setting and reported "unchanged",
+# which reads exactly like success.
+SRC_HASH=$(cd "$ROOT" && find backend Dockerfile entrypoint.sh scripts/preview.sh \
+    -type f -not -path '*/__pycache__/*' -print0 \
     | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
 # The sample capture's own fingerprint: when its generator changes, the
 # running preview swaps in the new capture rather than keeping the old one.
@@ -107,7 +127,8 @@ else
     fi
     docker run -d --name "$NAME" -p "$PORT:8080" --label "preview.src=$SRC_HASH" \
         -e PCAP_MASTER_KEY="$(cat "$KEY_FILE")" \
-        -e COOKIE_SECURE=false \
+        -e COOKIE_SECURE=true \
+        -e TRUST_PROXY_HEADERS=true \
         -v "$NAME-data:/app/data" -v "$NAME-captures:/app/captures" \
         -v "$ROOT/frontend:/app/frontend:ro" \
         --tmpfs /app/ssh-keys --tmpfs /tmp \
@@ -127,7 +148,16 @@ import http.cookiejar, json, os, sqlite3, sys, time, urllib.request
 import pyotp
 
 base = "http://127.0.0.1:8080"
-opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+# COOKIE_SECURE=true (see the header) marks the session cookie Secure, and a
+# cookiejar will not SEND a Secure cookie over http -- so seeding over loopback
+# would log in with a 200 and then get 401 on every call after it. Browsers
+# make an exception for localhost; urllib does not. Loopback never leaves the
+# machine, which is the same reason the app itself treats it as secure, so the
+# policy is told to allow it here rather than weakening the cookie.
+_policy = http.cookiejar.DefaultCookiePolicy(secure_protocols=("https", "http"))
+opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar(_policy))
+)
 
 def call(method, path, body=None, raw=None):
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)

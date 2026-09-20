@@ -358,20 +358,45 @@ def test_the_origin_migration_backfills_existing_rows_as_captures(tmp_path):
     Database(path)  # and a second open does not trip over the column
 
 
-def test_an_upload_can_carry_its_interface_mapping(secure_client, enrolled):
-    """Sent with the file, so the capture is stored with it in one step."""
-    import json
-    mapping = json.dumps({"mappings": [{"cidr": "10.0.0.0/8", "name": "eth1"}]})
-    resp = secure_client.post(UPLOAD, params={"filename": "multi.pcap", "subnet_map": mapping}, content=PCAP)
-    assert resp.status_code == 200
-    assert resp.json()["subnet_map"] == [{"cidr": "10.0.0.0/8", "name": "eth1"}]
-    packets = secure_client.get(f"/api/captures/{resp.json()['id']}/packets").json()["packets"]
-    assert packets and all(p["interface"] == "eth1" and p["direction"] in ("in", "out") for p in packets)
 
 
-def test_a_bad_interface_mapping_is_refused_before_the_file_is_kept(secure_client, enrolled):
-    before = _leftovers()
-    resp = secure_client.post(UPLOAD, params={"filename": "x.pcap", "subnet_map": '{"mappings":[{"cidr":"nope","name":"eth0"}]}'},
-                              content=PCAP)
-    assert resp.status_code == 400
-    assert _leftovers() == before
+# --- what a file records about its own interfaces ---------------------------
+
+def _any_capture() -> bytes:
+    """A Linux cooked v2 capture, as "tcpdump -i any" writes: ifindex 2 and 5."""
+    from tests.packet_builders import sll2
+
+    def frame(ifindex: int, pkttype: int, src: str, dst: str) -> bytes:
+        return sll2(mac("00:00:00:00:00:01"), 0x0800,
+                    ipv4(ip4(src), ip4(dst), 17, udp(ip4(src), ip4(dst), 53, 40000, b"x")),
+                    ifindex=ifindex, pkttype=pkttype)
+
+    return pcap([frame(2, 0, "10.0.0.5", "1.1.1.1"), frame(2, 4, "10.0.0.5", "1.1.1.1"),
+                 frame(5, 0, "10.42.0.2", "10.42.0.3")], linktype=276)
+
+
+def test_an_upload_records_the_interface_names_its_file_carries(secure_client, enrolled):
+    """Read once at upload, so the capture list can say whether there is
+    anything left for the operator to tell it without rescanning the file."""
+    from tests.packet_builders import pcapng
+    frame = _frame(0)
+    data = pcapng(
+        [{"name": r"\Device\NPF_{A0412FA8-7A7F-4FE1-98F3-B0FC91480BE0}", "description": "IOT"},
+         {"name": "eth0"}],
+        [(0, frame, None), (1, frame, None)],
+    )
+    resp = secure_client.post(UPLOAD, params={"filename": "windows.pcapng"}, content=data)
+    assert resp.status_code == 200, resp.text
+    # The friendly name, never the GUID; the plain Linux name as it stands.
+    assert resp.json()["recorded_interfaces"] == ["IOT", "eth0"]
+    listed = [c for c in secure_client.get("/api/captures").json() if c["id"] == resp.json()["id"]][0]
+    assert listed["recorded_interfaces"] == ["IOT", "eth0"]
+
+
+def test_an_upload_that_names_nothing_records_nothing(secure_client, enrolled):
+    """A plain Ethernet capture and an "any" capture both leave it empty --
+    the first has no names, the second has only numbers."""
+    plain = secure_client.post(UPLOAD, params={"filename": "plain.pcap"}, content=PCAP)
+    assert plain.json()["recorded_interfaces"] == []
+    anyc = secure_client.post(UPLOAD, params={"filename": "any.pcap"}, content=_any_capture())
+    assert anyc.json()["recorded_interfaces"] == []

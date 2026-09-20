@@ -103,6 +103,47 @@ def pcap(frames: list[bytes], linktype: int = 1, snaplen: int = 65535,
     return out
 
 
+def _pcapng_block(kind: int, body: bytes) -> bytes:
+    body += b"\0" * (-len(body) % 4)
+    total = len(body) + 12
+    return struct.pack("<II", kind, total) + body + struct.pack("<I", total)
+
+
+def _pcapng_options(options: list[tuple[int, bytes]]) -> bytes:
+    out = b""
+    for code, value in options:
+        out += struct.pack("<HH", code, len(value)) + value + b"\0" * (-len(value) % 4)
+    return (out + struct.pack("<HH", 0, 0)) if options else b""
+
+
+def pcapng(interfaces: list[dict], packets: list[tuple[int, bytes, int | None]]) -> bytes:
+    """A pcapng: one interface block per {"name", "description", "linktype"} dict
+    (name and description optional), then (interface_id, frame, direction) packets.
+    direction is the epb_flags direction bits (1 in, 2 out) or None for no flags,
+    which is what dumpcap writes.
+
+    `linktype` is a LINKTYPE_* number, which is NOT the encapsulation number
+    capinfos and `frame.encap_type` print back: Ethernet is 1 in both, but raw
+    IP is LINKTYPE_RAW 101 going in and encap 7 coming out. Passing the encap
+    number writes some other link type, and the frame quietly dissects as
+    nothing recognisable rather than failing.
+    """
+    out = _pcapng_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    for iface in interfaces:
+        opts = []
+        if iface.get("name"):
+            opts.append((2, iface["name"].encode()))
+        if iface.get("description"):
+            opts.append((3, iface["description"].encode()))
+        body = struct.pack("<HHI", iface.get("linktype", 1), 0, 65535) + _pcapng_options(opts)
+        out += _pcapng_block(1, body)
+    for i, (iface_id, frame, direction) in enumerate(packets):
+        opts = [] if direction is None else [(2, struct.pack("<I", direction))]
+        body = struct.pack("<IIIII", iface_id, 0, i * 1000, len(frame), len(frame))
+        out += _pcapng_block(6, body + frame + b"\0" * (-len(frame) % 4) + _pcapng_options(opts))
+    return out
+
+
 def read_pcap(data: bytes) -> list[tuple[int, int, bytes]]:
     """(incl_len, orig_len, frame) for each record of a little-endian pcap."""
     records = []

@@ -4117,25 +4117,6 @@ body.diagram-window #btn-topology-new-window { display: none; }
 }
 
 /* Upload: captured on several interfaces? Then the Interfaces dialog. */
-.upload-multi { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-top: 12px; font-size: 0.8125rem; color: var(--text-primary); cursor: pointer; }
-.upload-multi .hint { flex-basis: 100%; padding-left: 20px; }
-.upload-subnet-summary { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 20px; font: 0.75rem var(--font-mono); color: var(--text-primary); flex-wrap: wrap; }
-.upload-multi input { margin: 0; }
-.subnet-map-dialog { width: min(560px, calc(100vw - 32px)); }
-.subnet-map-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.subnet-map-table th { text-align: left; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 0 6px 4px 0; font-weight: 600; }
-.subnet-map-table td { padding: 3px 6px 3px 0; }
-.subnet-map-table input {
-    width: 100%; padding: 6px 8px; font: 0.8125rem var(--font-mono);
-    color: var(--text-primary); background: var(--bg-surface);
-    border: 1px solid var(--border); border-radius: 6px;
-}
-.subnet-map-table input:focus { outline: none; border-color: var(--accent); }
-.subnet-map-dialog > .hint { display: block; font-size: 0.8125rem; line-height: 1.5; margin-top: 4px; }
-.subnet-map-dialog h2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.subnet-map-dialog .subnet-map-foot .hint { font-size: 0.8125rem; }
-.subnet-map-table td:last-child { width: 36px; }
-.subnet-map-foot { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; flex-wrap: wrap; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* Zone color pickers, one per key in the diagram's color legend. */
