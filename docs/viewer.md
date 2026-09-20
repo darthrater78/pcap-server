@@ -97,6 +97,12 @@ older tcpdump that writes the first cooked format records no interface at all,
 so the column shows just the direction. Captures on a named interface have no
 such column.
 
+An upload can have this column too, when its own file records the interfaces
+— see [Interfaces on an uploaded capture](#interfaces-on-an-uploaded-capture),
+which also covers what an upload cannot tell you. An uploaded `tcpdump -i any`
+file shows numbers rather than names (`#2`, `#3`): the numbers are all the
+file records, and this server never saw the host they came from.
+
 **Several interfaces at once.** On the Capture tab, **Pick several** under
 Interface lists the server's interfaces as checkboxes. Tick two or more and
 the capture runs on `any`, limited to those interfaces by index: one tcpdump
@@ -241,12 +247,14 @@ Shift-drag a box around them on empty space. The picked hosts get a dashed
 ring, and dragging any one of them moves them all. Click empty space to let go.
 
 **Interface**, on the toolbar, appears when the packets name more than one
-interface (an "any" capture, or an upload with mapped subnets). Pick one and
+interface (an "any" capture, or an upload whose file names several). Pick
+one and
 the whole diagram narrows to it. Hosts and links that never crossed it leave
 the drawing, the chips count only its packets, the stats pane totals it, and
 Play plays only it. A saved layout remembers the choice.
 
-On an "any" capture (or an upload with mapped subnets) each host's label has a
+On an "any" capture (or an upload whose file names its interfaces) each host's
+label has a
 grey line under its address listing the **interfaces it was seen on**:
 `cni0 · ens18 +1` means the host crossed `cni0` and `ens18` and one more
 interface (hover the host for the full list). With names resolved, a host
@@ -331,22 +339,64 @@ query — same tradeoff as everywhere else it appears in this app.
 
 ### Interfaces on an uploaded capture
 
-A capture from somewhere else — a Wireshark pcapng taken on several
-interfaces, say — does not carry the Linux cooked header an "any" capture
-here has, so its packets have no interface of their own to show. Tell it which
-subnet sits behind which: tick **Captured on more than one interface** in
-the upload fly-out, and the **Interfaces** dialog opens right away — enter
-each subnet and the interface it was captured on (e.g. `192.168.1.0/24`
-`eth0`, `10.42.0.0/16` `cni0`), and the mapping goes up with the file.
-**Interfaces** on the capture opens the same dialog later, with the private
-subnets it found in the capture listed to name.
-Each packet then shows that interface and a direction, as a capture on "any"
-would: to a mapped subnet is **out** on its interface, from one is **in**, and
-a packet routed between two mapped subnets shows where it leaves (out on the
-destination's). Where the pcapng recorded a packet's direction, that wins, and
-the subnets only say which interface. The Traffic Diagram reads the same
-interfaces for its zones, so mapping a pod range to `cni0` puts those hosts
-inside the box.
+What an upload can tell you depends on how it was captured, not on which
+operating system it came from. pcap-server shows **only what the file itself
+records** — it does not infer an interface from anything else:
+
+| How the file was captured | Interface | Direction |
+| --- | --- | --- |
+| Wireshark or `dumpcap`, several interfaces ticked | the file's own names | — |
+| Wireshark or `dumpcap`, one interface | — | — |
+| `tcpdump -i any` | a number, `#2` | the kernel's own |
+| Wireshark on `any` (Linux) | — | the kernel's own |
+| Saved as legacy `.pcap` | — | — |
+
+**A Wireshark capture on several interfaces really does name them, and those
+names are used as they stand** — one per packet, kept through *Save As* and
+*File > Merge*. On Windows the file stores a device GUID as the name and the
+friendly name beside it, and it is the friendly name you see (`Ethernet`, not
+`\Device\NPF_{…}`). A file that names nothing usable — a GUID alone, or the
+pseudo-interface `any` — counts as naming nothing.
+
+**Saving as legacy `.pcap` destroys the interfaces.** The old format cannot
+hold them, so a multi-interface capture re-saved that way arrives as one
+undifferentiated stream. Keep pcapng.
+
+**Nothing Wireshark or `dumpcap` writes records which way a packet went.**
+That is a libpcap limitation rather than a missing option: its per-packet
+header has no direction field to write. Only a cooked capture (`-i any`) and
+non-libpcap sources such as `netsh trace` carry one.
+
+#### A known gap: an upload is not as good as a capture taken here
+
+This is the one place an uploaded pcap is meaningfully worse than a capture
+pcap-server took itself, and it is worth knowing before you plan around it.
+
+A capture taken here on **`any`**, or on several interfaces at once, gets the
+Linux cooked header: every packet carries the kernel's own interface index
+*and* its own direction, so the Interface column is complete and exact, the
+Traffic Diagram can place hosts by the link they were seen on, and
+`sll.ifindex` filters work. None of that is inference.
+
+An upload gets whatever its file happens to hold, which for the most common
+case — a single-interface Wireshark capture, or anything re-saved as legacy
+`.pcap` — is **nothing**: no interface and no direction, and the Interface
+column does not appear at all.
+
+**There is no way to supply the missing information after the fact, and that
+is deliberate.** Earlier releases let you map subnets to interface names and
+derived an interface and a direction from each packet's addresses. It was
+removed in 1.1.0 because a packet's addresses cannot actually say which link
+it crossed: a subnet is not an interface, one that is merely routed through or
+talked to is not one either, and a packet with both ends inside mapped subnets
+has no single right answer. The result looked like recorded fact and was a
+guess, which is worse than an empty column.
+
+**If you need interfaces and directions, capture on `any` here rather than
+uploading.** Where that is not possible, `tcpdump -i any -w file.pcap` on the
+far host and uploading *that* keeps the direction and the interface numbers,
+because they are inside the file — the numbers show as `#2`, `#3`, since this
+server never saw that host to read its interface names.
 
 ## Saved views
 

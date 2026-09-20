@@ -27,13 +27,13 @@ def _with_json(row, column: str) -> dict:
     return out
 
 
-def _subnet_map(stored: str) -> list[dict]:
-    """A stored mapping, or none if it is empty or will not parse."""
+def _recorded_interfaces(stored: str) -> list[str]:
+    """The interface names a capture's own file carries, or [] for none."""
     try:
         value = json.loads(stored) if stored else []
     except ValueError:
         return []
-    return [m for m in value if isinstance(m, dict) and "cidr" in m and "name" in m] if isinstance(value, list) else []
+    return [n for n in value if isinstance(n, str) and n] if isinstance(value, list) else []
 
 
 def _interface_names(stored: str) -> dict[str, str]:
@@ -161,8 +161,8 @@ class Database:
                 interface TEXT NOT NULL DEFAULT '',
                 bpf_filter TEXT NOT NULL DEFAULT '',
                 interface_names TEXT NOT NULL DEFAULT '',
-                subnet_map TEXT NOT NULL DEFAULT '',
-                origin TEXT NOT NULL DEFAULT 'capture'
+                origin TEXT NOT NULL DEFAULT 'capture',
+                recorded_interfaces TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS known_usernames (
@@ -372,15 +372,25 @@ class Database:
         if "interface_names" not in capture_columns:
             # '' reads back as no table, so older captures show bare indexes.
             conn.execute("ALTER TABLE captures ADD COLUMN interface_names TEXT NOT NULL DEFAULT ''")
-        if "subnet_map" not in capture_columns:
-            # '' reads back as no mapping, which is what every older capture has.
-            conn.execute("ALTER TABLE captures ADD COLUMN subnet_map TEXT NOT NULL DEFAULT ''")
         if "origin" not in capture_columns:
             # 'capture' rather than '': every row that predates uploads IS a
             # capture this server took, so the backfill is a fact, not a guess.
             # That is why this column gets a real default while bpf_filter got
             # an empty one -- there is nothing unknown to represent here.
             conn.execute("ALTER TABLE captures ADD COLUMN origin TEXT NOT NULL DEFAULT 'capture'")
+        if "subnet_map" in capture_columns:
+            # The subnet -> interface mapping is gone (see docs/viewer.md and
+            # the 1.1.0 CHANGELOG): it guessed an interface from addresses,
+            # which is not something a packet's addresses can actually say.
+            # Dropped rather than left behind, so nothing reads a stale
+            # mapping back and shows it as fact.
+            conn.execute("ALTER TABLE captures DROP COLUMN subnet_map")
+        if "recorded_interfaces" not in capture_columns:
+            # The interface names a capture's own file carries, read once when
+            # it is stored. '' is right for every older row: unread, not known
+            # to be none -- and the only thing this drives is whether the
+            # Interfaces button is offered, which is how it has always behaved.
+            conn.execute("ALTER TABLE captures ADD COLUMN recorded_interfaces TEXT NOT NULL DEFAULT ''")
         self._fold_saved_servers(conn)
         conn.commit()
 
@@ -787,20 +797,20 @@ class Database:
 
     def upsert_capture(self, row: dict) -> None:
         names = row.get("interface_names") or {}
-        subnets = row.get("subnet_map") or []
+        recorded = row.get("recorded_interfaces") or []
         row = {
             **row,
             "interface_names": json.dumps({str(k): v for k, v in names.items()}) if names else "",
-            "subnet_map": json.dumps(subnets) if subnets else "",
+            "recorded_interfaces": json.dumps(recorded) if recorded else "",
         }
         self._conn().execute(
             """INSERT OR REPLACE INTO captures
                (id, name, user_id, server_id, server_label, status, started_at, stopped_at, command,
                 remote_path, local_path, packet_count, file_size, error, interface,
-                bpf_filter, interface_names, subnet_map, origin)
+                bpf_filter, interface_names, origin, recorded_interfaces)
                VALUES (:id, :name, :user_id, :server_id, :server_label, :status, :started_at, :stopped_at, :command,
                        :remote_path, :local_path, :packet_count, :file_size, :error, :interface,
-                       :bpf_filter, :interface_names, :subnet_map, :origin)""",
+                       :bpf_filter, :interface_names, :origin, :recorded_interfaces)""",
             row,
         )
         self._conn().commit()
@@ -809,7 +819,7 @@ class Database:
         rows = self._conn().execute("SELECT * FROM captures ORDER BY started_at").fetchall()
         return [
             {**dict(r), "interface_names": _interface_names(r["interface_names"]),
-             "subnet_map": _subnet_map(r["subnet_map"])}
+             "recorded_interfaces": _recorded_interfaces(r["recorded_interfaces"])}
             for r in rows
         ]
 

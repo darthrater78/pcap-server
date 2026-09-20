@@ -382,18 +382,6 @@
                                 <button id="btn-upload-capture" class="btn btn-secondary" disabled>Upload</button>
                                 <span id="upload-msg" class="hint" role="status" aria-live="polite"></span>
                             </div>
-                            <!-- Captured on more than one interface? Ticking opens the
-                                 Interfaces dialog now, and the mapping goes up with the
-                                 file (app.js openSubnetMapDialog, onUploadCaptureClick). -->
-                            <label class="upload-multi">
-                                <input type="checkbox" id="upload-multi-iface">
-                                Captured on more than one interface
-                                <span class="hint">Say which subnet was on which interface; it is saved with the upload</span>
-                            </label>
-                            <div id="upload-subnet-summary" class="upload-subnet-summary" hidden>
-                                <span id="upload-subnet-list"></span>
-                                <button type="button" id="btn-upload-subnets-edit" class="btn btn-sm btn-secondary">Edit</button>
-                            </div>
                         </div>
                     </div>
                     <button id="btn-start-capture" class="btn btn-primary btn-start">
@@ -927,26 +915,6 @@
     </div>
     <div class="sanitize-actions">
         <button type="button" class="btn btn-sm btn-primary" data-close-dialog>Close</button>
-    </div>
-</dialog>
-
-<!-- Which subnet sits behind which interface, for a capture whose packets do
-     not say (an upload, or one named interface). Each packet then gets that
-     interface and an in/out direction (packet_parser.SubnetMap). -->
-<dialog id="subnet-map-dialog" class="stats-dialog subnet-map-dialog" aria-labelledby="subnet-map-title">
-    <h2 id="subnet-map-title" class="sanitize-title">Interfaces<span id="subnet-map-capture" class="diagram-context"></span></h2>
-    <p class="hint">Name the interface each subnet was captured on. A packet to a mapped subnet is <strong>out</strong> on its interface, one from it is <strong>in</strong>; routed between two, it shows where it leaves. A direction the pcapng recorded wins. Leave a name empty to skip that subnet.</p>
-    <table class="subnet-map-table">
-        <thead><tr><th scope="col">Subnet</th><th scope="col">Interface</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr></thead>
-        <tbody id="subnet-map-rows"></tbody>
-    </table>
-    <div class="subnet-map-foot">
-        <button type="button" id="btn-subnet-map-add" class="btn btn-sm btn-secondary">Add a subnet</button>
-        <span id="subnet-map-msg" class="hint" role="status" aria-live="polite"></span>
-    </div>
-    <div class="sanitize-actions">
-        <button type="button" class="btn btn-sm btn-secondary" data-close-dialog>Skip</button>
-        <button type="button" id="btn-subnet-map-save" class="btn btn-sm btn-primary">Save interfaces</button>
     </div>
 </dialog>
 

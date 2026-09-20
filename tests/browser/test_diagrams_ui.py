@@ -1191,31 +1191,6 @@ async def test_link_colors_can_be_changed_and_reset(app_page):
     assert await app_page.evaluate(f"() => getComputedStyle(document.querySelector('{edge}')).stroke") != "rgb(255, 0, 170)"
 
 
-async def test_the_interfaces_dialog_suggests_subnets_and_saves_the_named_ones(app_page):
-    await app_page.evaluate("""(conv) => {
-        window.__put = null;
-        captures = [{ id: 'cap-1', name: 'uploaded', interface: '', status: 'completed', subnet_map: [] }];
-        const real = window.api;
-        window.api = async (path, opts) => {
-            if (path.includes('/conversations')) return conv;
-            if (path.includes('/subnet-map')) { window.__put = JSON.parse(opts.body); return {}; }
-            if (path === '/api/captures') return captures;
-            return real(path, opts);
-        };
-    }""", NAMED)
-    await app_page.evaluate("() => openSubnetMapDialog('cap-1')")
-    await app_page.wait_for_selector("#subnet-map-rows .subnet-cidr")
-    cidrs = await app_page.eval_on_selector_all("#subnet-map-rows .subnet-cidr", "els => els.map(e => e.value)")
-    # Private /24s from the capture; the public address is not offered.
-    assert set(cidrs) == {"10.254.253.0/24", "10.42.0.0/24"}
-    await app_page.locator("#subnet-map-rows .subnet-name").nth(cidrs.index("10.42.0.0/24")).fill("cni0")
-    await app_page.click("#btn-subnet-map-save")
-    await app_page.wait_for_function("() => window.__put !== null")
-    # Only the named row is saved.
-    assert await app_page.evaluate("() => window.__put") == {"mappings": [{"cidr": "10.42.0.0/24", "name": "cni0"}]}
-    assert await app_page.locator("#subnet-map-dialog[open]").count() == 0
-
-
 async def test_protocols_and_stats_both_fold_away(app_page):
     await _open_named(app_page)
     for pane in ("#topology-chips", "#topology-stats"):
@@ -1283,54 +1258,6 @@ async def test_every_problem_kind_is_colored_in_the_packet_list(app_page):
     ].map((info) => packetClass({ protocol: 'IPV4', info }))""")
     assert classes[:6] == ["pkt-bad"] * 6
     assert classes[6] != "pkt-bad"
-
-
-async def test_the_interface_mapping_is_entered_before_the_upload_and_sent_with_it(app_page):
-    await _capture_panel(app_page)
-    await app_page.evaluate("""() => {
-        window.__upload = null;
-        const real = window.api;
-        window.api = async (path, opts) => {
-            if (path.startsWith('/api/captures/upload')) {
-                window.__upload = path;
-                return { id: 'up-1', packet_count: 3, subnet_map: [{ cidr: '192.168.1.0/24', name: 'eth0' }] };
-            }
-            if (path === '/api/captures') return [];
-            return real(path, opts);
-        };
-    }""")
-    await app_page.click("#btn-upload-toggle")
-    await app_page.set_input_files("#upload-file", files=[
-        {"name": "multi.pcapng", "mimeType": "application/octet-stream", "buffer": b"\x0a\x0d\x0d\x0a" + b"\x00" * 60}])
-    await app_page.check("#upload-multi-iface")
-    # The dialog opens now, before anything is sent.
-    await app_page.wait_for_selector("#subnet-map-dialog[open]")
-    assert await app_page.inner_text("#btn-subnet-map-save") == "Use for this upload"
-    assert window_upload_is_none(await app_page.evaluate("() => window.__upload"))
-    await app_page.locator("#subnet-map-rows .subnet-cidr").first.fill("192.168.1.0/24")
-    await app_page.locator("#subnet-map-rows .subnet-name").first.fill("eth0")
-    await app_page.click("#btn-subnet-map-save")
-    assert "eth0 192.168.1.0/24" in await app_page.inner_text("#upload-subnet-summary")
-    await app_page.evaluate("() => onUploadCaptureClick()")
-    await app_page.wait_for_function("() => window.__upload !== null")
-    sent = await app_page.evaluate("() => decodeURIComponent(window.__upload)")
-    assert '"cidr":"192.168.1.0/24"' in sent and '"name":"eth0"' in sent
-    # Done with: the next upload starts clean.
-    assert not await app_page.is_checked("#upload-multi-iface")
-
-
-def window_upload_is_none(value):
-    return value is None
-
-
-async def test_skipping_the_mapping_unticks_the_box(app_page):
-    await _capture_panel(app_page)
-    await app_page.click("#btn-upload-toggle")
-    await app_page.check("#upload-multi-iface")
-    await app_page.wait_for_selector("#subnet-map-dialog[open]")
-    await app_page.click("#subnet-map-dialog [data-close-dialog]")
-    # The dialog's close event fires after the click returns.
-    await app_page.wait_for_function("() => !document.getElementById('upload-multi-iface').checked")
 
 
 async def test_the_diagram_windows_can_be_resized(app_page):

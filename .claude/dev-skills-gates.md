@@ -1,989 +1,135 @@
 # Dev Skills gate state
-
-## SHIPPED: v1.1.0-beta.9 -- diagram packet caps + no more hard fail (2026-09-19, local)
-Track: release sequence -- user said "let's go to release" (session 3,
-2026-09-19), on branch feat/diagram-caps-and-truncation (from main's tip,
-includes PR #29 and PR #30 -- i.e. beta.8 plus its README bump).
-Model: Sonnet 5. Shell: Linux bash.
-
-Started as a question ("where's the 100k diagram cap from") and became this
-implementation over the course of one session. Superseded the two local-only
-pointer branches this began as (local/diagram-cap-handoff, local/compare-
-handoff is unrelated and still stands) -- deleted once real work started, per
-their own note.
-
-FOLLOW-UP SESSION (2026-09-19, same day): resumed to close the "not yet seen
-rendered" gap. Ran scripts/check.sh full (1818 passed, see the build gate
-entry further down), then built the preview container and drove it with a
-standalone Playwright script
-(no interactive browser tool available this session) -- logged in as
-`preview`, screenshotted Admin > Settings live, and forced a truncation by
-setting `max_capture_packets=5` directly in the preview DB (restored to unset
-afterward) to see the notice banner on a real diagram.
-
-BUG FOUND AND FIXED BY THIS LOOK: `.admin-settings-grid .setting-item input`
-(style.css) is a descendant selector, so it also matched the two nested radio
-inputs inside `.diagram-cap-option` (two levels down, inside
-`.setting-item--wide`) and gave them the numeric-input box model --
-width:100%, padding, border. Screenshot showed the radio circles and their
-label text pulled apart, one radio floating in its own huge invisible box on
-its own line. Fixed by narrowing both rules (`:focus` too) to the direct-child
-combinator `.setting-item > input`, which only the normal numeric settings
-and the wide item's own hidden input match. This was invisible to every
-existing check: `parseInt`/type/value assertions in the API tests and
-Playwright's text/locator assertions in the browser suite don't look at
-layout. Re-verified visually after the fix (both radios render correctly);
-re-ran `tests/browser/test_diagrams_ui.py tests/browser/test_capture_ui.py`
-(150 passed) since those are the suites that touch this markup and settings
-form.
-
-The truncation notice itself renders correctly: a non-blocking banner ("Showing
-the first N of M packets...") above the diagram, which stays open and drawn --
-confirms item 3's behavior by hand, not just by Playwright locator checks.
-
-WHAT SHIPPED IN THIS COMMIT:
-
-1. **max_capture_packets now offers two presets, not a free number.** Admin >
-   Settings renders this one setting (it doubles as the Traffic Diagram's own
-   ceiling) as two radio options instead of `SETTING_LABELS`' usual numeric
-   input:
-   - **250,000** -- new default (was 100,000; `backend/database.py` DEFAULTS),
-     needs no other changes.
-   - **500,000** -- shown with what to check first: raise the container's
-     `mem_limit` (docker-compose.yml's comment block now says by how much,
-     ~300-350 MB extra transient), and use "Optimize for diagrams" on very
-     large captures.
-   `frontend/js/app.js` `renderCapturePacketsSetting` builds this (a stored
-   value that is neither preset -- an older install, or a hand-edited DB --
-   is shown as-is via a hint line, unchecked; picking either radio replaces
-   it, same as any setting, only on Save). Backend validation is unchanged
-   (any positive int still accepted; the two-value UI is a UX choice, not a
-   new constraint), so a direct DB edit to a third value still works.
-
-2. **The Traffic Diagram now actually respects whatever max_capture_packets
-   is set to**, which it did NOT before this session: it used to hardcode its
-   own request ceiling (`TOPOLOGY_PACKET_CAP = 100000` in diagrams.js),
-   passed as an explicit `limit` that silently overrode a higher admin
-   setting. That constant is now deleted; `fetchPacketsCapped` is called with
-   no `cap` argument for the Traffic Diagram (`topologyPackets()`,
-   diagrams.js), which per its own existing contract means "take the
-   server's ceiling as it stands." This is what makes the two-tier setting
-   above actually do anything for the diagram, not just the raw capture
-   limit. The Sequence Diagram is unaffected -- it keeps its own separate,
-   unchanged `PACKET_DIAGRAM_CAP = 10000`, passed explicitly as before (see
-   "NOT changed" below for why).
-
-3. **A capture over a diagram's packet cap now draws a partial diagram
-   instead of refusing.** This was the user's explicit ask: "it should not
-   be a hard fail... automatically filter for whatever the max packet size
-   is." Changed:
-   - `backend/packet_parser.py` `get_diagram_packets`: previously, when
-     `matched > cap`, it discarded the packets it had already built and
-     returned `([], matched, {})` -- all or nothing. Now it always returns
-     the packets it built (already bounded to `cap` by the existing
-     per-line check), so `matched > len(packets)` is the truncation signal
-     rather than a reason to return nothing.
-   - `frontend/js/diagrams.js` `fetchPacketsCapped`: returns `{truncated,
-     total, cap, packets, names}` always, replacing the old `{overCap: true,
-     ...}` / `{overCap: false, ..., packets}` split.
-   - New `showDiagramTruncatedNotice` (non-blocking, `.diagram-cap-warning
-     --notice` CSS variant using `--accent` not `--danger`) shown alongside
-     the still-open diagram. `showDiagramCapWarning` (renamed in effect,
-     same name kept) is now ONLY for the visual-complexity caps below, which
-     still hard-block.
-   - Call sites updated: `prefetchTopologyPackets` (shows the notice as soon
-     as the dialog's own prefetch resolves -- this is the actual first place
-     a result is seen, since it primes `preparePlayback` before Play is ever
-     clicked; the check inside `onTopologyPlayClick` is now a harmless
-     repeat for the case Play is pressed before prefetch resolves),
-     `selectTopologyItem` (dropped the `result.overCap` guard, checks
-     `!result.packets.length` instead), `openSequenceDialog`.
-   - **NOT changed, deliberately**: the two visual-complexity caps
-     (`TOPOLOGY_NODE_CAP = 200` distinct hosts, `SEQUENCE_LANE_CAP = 40` host
-     lanes) still hard-block via the original `showDiagramCapWarning`. Drawing
-     only some of the hosts/lanes a filter matched would be a wrong picture,
-     not a partial one -- there's no principled "first N hosts" the way
-     there's a principled "first N packets" (packets have a natural order;
-     which hosts would survive a cut is arbitrary). The user's ask was
-     specifically about "max packet size," and this reading was not
-     revisited with them -- flag if that's wrong.
-
-4. **Sequence Diagram's own cap (10,000) was NOT raised.** Discussed at
-   length with the user and deliberately left alone: unlike the Traffic
-   Diagram (whose drawn complexity stays fixed at `TOPOLOGY_NODE_CAP`
-   regardless of packet count), the Sequence Diagram renders one DOM row per
-   packet with no windowing (`renderSequenceSVG`, diagrams.js) -- at today's
-   10,000 cap that's already a ~340,000px-tall SVG and ~30,000 DOM elements,
-   built synchronously on dialog open. Raising it meaningfully needs actual
-   scroll-window virtualization first, which is a small feature, not a
-   config change. This was explained to the user; no explicit go-ahead was
-   given to even the "safe ~2x" bump floated in conversation, so it was left
-   untouched rather than assumed.
-
-5. **Docs/CHANGELOG**: `docs/architecture.md`, `docs/operating.md`,
-   `docs/viewer.md`, `docs/filters.md` updated for the new default and the
-   truncate-vs-block distinction. `docker-compose.yml`'s `mem_limit` comment
-   gained the 500k-preset memory note. `CHANGELOG.md` gained an `Unreleased`
-   section (no such heading existed before this commit) with both changes.
-   `docs/design/compare-captures.md`'s "100,000" mention is about an UNBUILT
-   feature -- deliberately left alone, per .claude/compare-handoff.md.
-
-TESTS: backend -- `tests/test_packet_parser.py` (the exact assertion of the
-old all-or-nothing contract, `over == []`, changed to assert the first `cap`
-packets), `tests/test_capture_upload.py` (two tests renamed/rewritten off the
-old `packets: []` expectation). Browser -- `tests/browser/test_diagrams_ui.py`:
-rewrote `test_traffic_diagram_warning_reports_the_servers_cap` (renamed
-..._over_its_cap_draws_a_partial_picture) and
-`test_sequence_cap_warning_when_packets_exceed_the_limit` (renamed
-..._draws_a_partial_picture) to mock actual returned packets and assert the
-diagram body is NOT hidden and something is actually drawn, rather than
-asserting the old blocking behavior; fixed `test_each_diagram_always_asks_
-for_its_own_cap`'s topology assertion (no `limit=` param is sent for the
-Traffic Diagram at all now, not `limit=100000`); fixed the two tests
-asserting the checkbox/capture-panel text "100,000" (now 250,000) --
-`test_the_cap_checkboxes_show_their_max_and_have_tooltips` and
-`test_a_ticked_diagram_polices_the_capture_limit`. One more bug found only by
-actually running the suite (not by reading the code): the Capture tab's
-checkbox label text ("Traffic Diagram max 100,000 packets") was hardcoded
-directly in `frontend/index.html`, a THIRD hand-sync point beyond the two
-already known -- fixed by making `app.js initDiagramOptimize` fill an
-`id="topology-cap-max"` span from `DIAGRAM_CAPS` itself, so this cannot drift
-from the macro's actual behavior again.
-
-🔢 VERSION    ✅ 1.1.0-beta.9 -- backend/main.py APP_VERSION, docker-compose.yml
-              image tag, CHANGELOG heading (Unreleased -> 1.1.0-beta.9) all
-              agree. README beta line intentionally left at 1.1.0-beta.8
-              until the image is live (repo convention, own commit after).
-              Previous tag v1.1.0-beta.8 confirmed on remote, points at
-              acb969e.
-🔨 BUILD      ✅ handoff offered. Full gate run twice: once pre-bump (1818
-              passed, ebf6b7a), once more on the version-bumped tree after
-              the CSS fix (1818 passed, 0 failed, exit 0, 35.90s, commit
-              7d58ebc + version bump) -- the tree the PR will actually carry.
-              Preview container rebuilt on this tree; in-image APP_VERSION
-              confirmed == 1.1.0-beta.9 by reading it out of the running
-              container; still up on :8099 for the user to look at directly.
-              Admin > Settings radio UI and the truncated diagram's notice
-              banner both seen rendered by hand this session (script-driven,
-              no interactive browser tool available) -- found and fixed a
-              real CSS bug in the radio UI in the process (descendant
-              selector over-matching, see note near the top of this entry);
-              screenshots sent to the user.
-              tests/browser/test_diagrams_ui.py + test_capture_ui.py rerun
-              after that fix: 150 passed.
-🔒 SECURITY   ✅ 0 Critical, 0 High. No new endpoint, no new dependency, no new
-              subprocess/eval. PUT /api/admin/settings is unchanged (still
-              admin-only, still validates any positive int) -- the two-preset
-              UI is a client-side rendering choice over the same route, not a
-              new validation path; a direct DB edit to a third value still
-              works and is shown, not hidden. New DOM writes reviewed one by
-              one: `renderCapturePacketsSetting`'s only interpolated value is
-              `parseInt(rawValue, 10)` (always a number, cannot carry HTML)
-              plus a hardcoded preset catalog (not user data) run through
-              escHtml anyway; `showDiagramTruncatedNotice` and the edited
-              `showDiagramCapWarning` write the display filter's text via
-              `.textContent`, matching the pre-existing pattern, never
-              innerHTML. get_diagram_packets' changed return value carries the
-              same per-packet fields the route already sent -- returning them
-              on the truncated path instead of discarding them adds no new
-              data to the response, just more of what a non-truncated
-              response already contained. The CSS fix (direct-child
-              combinator) adds no execution surface.
-📄 DOCS       ✅ see item 5 above, plus this session's CHANGELOG heading rename
-              (Unreleased -> 1.1.0-beta.9), plus this commit's README beta
-              line bump (see below).
-📦 RELEASE    ✅ PR #31 merged -> main as 7afae37. Check passed on that merge
-              commit (run 35442959807) before the tag was handed over.
-🚀 SHIP       ✅ CLOSED. tag v1.1.0-beta.9 -> 7afae37 on the remote (user-
-              pushed), confirmed via ls-remote. Release run 35443258638
-              success -- image proven to run before it was pushed, then
-              pushed and its pull verified, GitHub Release (prerelease)
-              published. Per this repo's own no-redundant-checks rule, the
-              image was NOT pulled again here; release.yml's own smoke step
-              already covers that. README beta line -> 1.1.0-beta.9, this
-              commit, on docs/beta9-live.
-
-RESOLVED, THIS SESSION AND THE ONE BEFORE: (1) scripts/check.sh full run,
-twice. (2) VERSION: bumped to 1.1.0-beta.9 on "let's go to release". (3) Scope
-of item 3's "max packet size" reading confirmed correct by the user --
-host/lane caps keep hard-blocking, as built. (5) Preview container built,
-both UI pieces looked at by hand, one real bug found and fixed. (6) Shipped:
-PR merged, tag pushed and verified, Release run green.
-
-STILL OPEN: (4) Sequence Diagram cap (10,000) is still just a discussion, not
-a commitment -- revisit only if asked.
-
-## ACTIVE: multi-interface reality fixes (2026-09-19, local)
-Track: release sequence -- user chose to bump to 1.1.0-beta.8 and push/PR now
-(session start, 2026-09-19). Branch fix/multi-interface-reality, rebased onto
-origin/main (082d219, includes PR #28 docs/beta7-live).
-Model: Sonnet 5. Shell: Linux bash.
-Scope: deep review of traffic diagram + capture logic with several interfaces.
-
-🔢 VERSION    ✅ 1.1.0-beta.8 -- backend/main.py APP_VERSION, docker-compose.yml
-              image tag, CHANGELOG heading all agree; commit b4134eb. README
-              beta line intentionally left at 1.1.0-beta.7 until the image is
-              live (repo convention). Previous tag v1.1.0-beta.7 confirmed on
-              remote, points at a61203b.
-🔨 BUILD      ✅ check.sh 1818 passed; handoff offered, user declined to try it
-              Docker lab (router/client/server, real multi-interface captures):
-              repeat sightings 5845/5845 routed, 5687/5687 NAT; problem counts
-              equal per-link tshark truth; Stop + remote cleanup verified root and sudo.
-              Rerun post-rebase (onto origin/main 082d219) and post-version-bump:
-              1818 passed, exit 0, tree unchanged during the run.
-              handoff offered (rebuild scripts/preview.sh for 1.1.0-beta.8), user
-              said "Commit" without trying it -- recorded as declined.
-🔒 SECURITY   ✅ 0 Critical, 0 High
-              No new deps. New remote commands: pkill pattern built only from a path
-              matching /tmp/pcap_<uuid>.pcap (else no command), signal from a fixed
-              set; rm path shell-quoted, as before. Per-link display filters built
-              from ints parsed from tshark output. Copy cache keyed by capture id +
-              size + mtime, bounded to 8. New innerHTML (copy tag) escaped.
-📄 DOCS       ✅ CHANGELOG Unreleased, viewer.md, operating.md -- version heading
-              to be renamed to 1.1.0-beta.8 as part of the VERSION bump.
-📦 RELEASE    ✅ PR #29 open: fix/multi-interface-reality -> main
-🚀 SHIP       ⬜ next: merge, confirm merge + CI on that commit, then hand the
-              tag block to the user.
-
-## SHIPPED: v1.1.0-beta.7 -- UI feedback batch (2026-09-18, local)
-Track: release sequence. Branch feat/beta7-feedback (from main 4b14c6e).
-Model: Opus 5 (user approved for this batch). Shell: Linux bash.
-Scope: traffic diagram / capture / viewer feedback; pcap compare = design note only.
-
-🔢 VERSION    ✅ 1.1.0-beta.7
-              APP_VERSION + compose tag + CHANGELOG; README beta line after image is live.
-🔨 BUILD      ✅ check.sh 1788 passed (incl. libpcap prereq); handoff offered: preview container rebuilt
-              from this tree (scripts/preview.sh), screenshots sent; awaiting user look.
-🔒 SECURITY   ✅ 0 Critical, 0 High
-              pip-audit clean, no new deps; interfaces validated (regex, max 16, not
-              "any"); ifindex values are ints from the parsed sysfs table; layout
-              interface printable<=80; new innerHTML sinks escaped; libpcap version
-              from the remote probe parsed to digits only before it is stored.
-📄 DOCS       ✅ CHANGELOG beta.7, viewer.md, filters.md, operating.md, target-hosts.md, design note
-📦 RELEASE    ✅ PR #27 merged by user as a61203b
-🚀 SHIP       ✅ tag v1.1.0-beta.7 -> a61203b (user-pushed); Release run 35415933306 success
-              (smoke test in CI). README beta line -> 1.1.0-beta.7 in docs/beta7-live.
-
-## SHIPPED: v1.1.0-beta.6 -- diagram zones/layouts, capture optimize, upload interfaces (2026-09-18, local)
-Track: release sequence. Branch feat/diagram-views-and-capture-optimize (from main 41b7c14).
-Model: Opus 5 (user approved). Shell: Linux bash.
-
-🔢 VERSION    ✅ 1.1.0-beta.6
-              APP_VERSION + docker-compose image tag + CHANGELOG; README beta line
-              waits until the image is live (own commit). v1.1.0-beta.5 tagged on remote.
-🔨 BUILD      ✅ check.sh 1738 passed; handoff offered, user tried preview
-              preview container built from this branch: in-image APP_VERSION ok, 0 tracebacks
-🔒 SECURITY   ✅ 0 Critical, 0 High
-              pip-audit clean; no new deps; new inputs validated/bounded/user-scoped;
-              innerHTML sinks escaped; SQL f-strings interpolate a constant only.
-📄 DOCS       ✅ CHANGELOG 1.1.0-beta.6, viewer.md, filters.md
-📦 RELEASE    ✅ PR #23 merged by user as e387d10
-🚀 SHIP       ✅ tag v1.1.0-beta.6 -> e387d10 (user-pushed); Release run 35384287672 success
-              (smoke test in CI). First tag push landed on 41b7c14 before the merge; the
-              gate refused it (run 35384165318), nothing published; user re-tagged.
-              README beta line -> 1.1.0-beta.6 in docs/beta6-live.
-
-## SHIPPED: v1.1.0-beta.5 -- large-capture diagrams + label fix (2026-09-18, local)
-Track: release sequence, closed. Branch feat/large-capture-diagrams -> PR #22.
-
-🔢 VERSION    ✅ 1.1.0-beta.5
-🔨 BUILD      ✅ check.sh 1686 passed (checkbox tree); handoff offered, user tried preview
-🔒 SECURITY   ✅ 0 Critical, 0 High; Medium accepted by user ("mem is fine")
-📄 DOCS       ✅ CHANGELOG, viewer.md, operating.md, architecture.md
-📦 RELEASE    ✅ PR #22, notes approved; merged by user as a39e8a2
-🚀 SHIP       ✅ all four post-ship checks verified
-              tag v1.1.0-beta.5 -> a39e8a2 (user-pushed); Check on a39e8a2 green;
-              Release run 35364572080 success; pre-release published 15:49Z;
-              ghcr :1.1.0-beta.5 pulled, sha256:f6cfe5f0..., APP_VERSION ok, removed.
-              README beta line bumped by user in 41b7c14, after image was live.
-
-## SHIPPED: v1.1.0-beta.4 (2026-09-18) + README bump now that it's live
-Track: release-track docs fix, on docs/beta4-live (from origin/main efdfc08).
-Model: Sonnet 5. Shell: Linux bash.
-
-🚀 SHIP CLOSED for v1.1.0-beta.4. All four post-ship checks:
- * tag v1.1.0-beta.4 -> efdfc08 on the remote (main tip, PR #19 + PR #20 both
-   merged), confirmed by the user running the presented tag block.
- * PR #19 and PR #20 both MERGED. Merge commit 87754cb (PR #19) had a Check
-   failure on first run -- tests/browser/test_capture_ui.py::test_closing_a_
-   background_tab_leaves_the_open_one_alone, a Playwright click timeout,
-   unrelated to this diff (docs/version-only) and not reproduced in the local
-   full-suite run moments earlier (1672/1672). Reran via `gh run rerun
-   --failed`; run 35353175653 succeeded on retry. efdfc08 (PR #20, README-only)
-   got no Check run by design (README.md is in check.yml's paths-ignore) --
-   the ancestor-fallback case release.yml's gate exists for, exercised live
-   for the first time.
- * Release run 35355487897 success (Release workflow, triggered by the tag).
- * GitHub release "v1.1.0-beta.4 (Pre-release)", prerelease: true,
-   2026-09-18T14:20:57Z.
- * Image ghcr :1.1.0-beta.4 -> sha256:bc2a1756458ae208cb9ec50871559b147ce73842
-   eefbe016dae057dff26c04c9 (a real digest), pulled and verified locally, then
-   removed.
-
-Now closing the loop the process note itself asks for: the image is
-confirmed live, so README's beta line moves from 1.1.0-beta.3 to
-1.1.0-beta.4, in its own commit, per the note added in PR #20.
-
-🔢 VERSION    ➖ N/A -- README pointer only, not a version declaration.
-🔨 BUILD      ➖ N/A -- README.md only.
-🔒 SECURITY   ➖ N/A -- no code.
-📄 DOCS       ✅ this commit IS the doc update -- bumps the beta line now that
-              `docker pull ghcr.io/darthrater78/pcap-server:1.1.0-beta.4`
-              is verified working (see SHIP above).
-📦 RELEASE    ✅ PR #21 open: docs/beta4-live -> main.
-🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
-
-## Fix: README beta line reverted to the deployed tag (2026-09-18, local)
-Track: release-track fix, on fix/beta-readme-premature-tag (from origin/main
-87754cb, the just-merged 1.1.0-beta.4 PR). Model: Sonnet 5. Shell: Linux bash.
-
-User caught it: the beta.4 PR (#19) bumped README's beta announcement to
-1.1.0-beta.4 in the same commit as the version bump -- before the tag was
-pushed or the image published. Anyone on main right now gets a 404 pulling
-that tag. This is the exact dev.40 mistake, repeated. Fix: the README line
-reverts to 1.1.0-beta.3 (still the actually-deployed image) and gains a
-process note in the surrounding HTML comment -- bump that one line only after
-`docker pull` of the new tag works, in its own commit, never bundled with the
-version-bump PR. Also switched the announcement to a GitHub `[!IMPORTANT]`
-alert for real visual weight (was a plain blockquote).
-
-🔢 VERSION    ➖ N/A -- reverts a value forward of what's deployed; carries no
-              version of its own. backend/main.py APP_VERSION and
-              docker-compose.yml correctly stay at 1.1.0-beta.4 (that's what
-              main's code now is, pending its own tag/ship) -- only the
-              README pointer, which this project treats as "what's live on
-              ghcr" rather than "what's on main", moves back.
-🔨 BUILD      ➖ N/A -- README.md only, no app/test code touched.
-🔒 SECURITY   ➖ N/A -- no code; a Markdown/HTML-comment edit, no new sinks.
-📄 DOCS       ✅ this commit IS the docs fix -- see summary above.
-📦 RELEASE    ✅ PR #20 open: fix/beta-readme-premature-tag -> main.
-🚀 SHIP       ➖ N/A -- no version bump, no tag, no artifact from this change.
-
-## HANDOFF: Traffic Diagram overhaul + preview container -> 1.1.0-beta.4 release (2026-09-18, local)
-Track: release sequence, on claude/dev-skills-beta-workflow-cwzvx5 (from
-origin/main 65bf7d4, tip c8dc667). Model: Sonnet 5 (user switched down,
-"no more coding if possible" -- docs/version-only work from here). Shell:
-Linux bash. Previous version v1.1.0-beta.3 confirmed tagged on remote
-(ls-remote, points at 65bf7d4).
-
-🔢 VERSION    ✅ bumped 1.1.0-beta.3 -> 1.1.0-beta.4 in backend/main.py
-              (APP_VERSION), docker-compose.yml (image tag), README.md (beta
-              badge). docs/security.md's "Before 1.1.0-beta.3" is a historical
-              note, correctly left alone. No other hardcoded refs found (grep).
-              repo/release-notes links unchanged (REPO_URL-derived, already
-              correct pattern). Previous tag v1.1.0-beta.3 verified on remote.
-🔨 BUILD      ✅ handoff offered and verified by hand. full suite via
-              scripts/check.sh on the tagged tree (75ee7f7): 1672 passed,
-              0 failed, 0 skipped, 366.86s, real tshark/capinfos/chromium/
-              docker. The prior sanitizer flake did not reproduce this run.
-              docker build localhost/pcap-server:1.1.0-beta.4, run with a
-              throwaway MASTER_KEY_FILE, / 200, /api/auth/status 200,
-              in-image APP_VERSION == 1.1.0-beta.4, encryption enabled, no
-              traceback in the log. Image and smoke key removed after.
-🔒 SECURITY   ✅ carried over -- 0 Critical/High on the code diff (prior
-              entry); this commit adds no code, only strings/docs.
-📄 DOCS       ✅ docs/viewer.md Traffic/Sequence Diagram section rewritten:
-              protocol picker, 15 marks (3 hue x 5 shape, was 8), Problems
-              chip/badges/stats, host search, stats pane incl. per-host
-              interfaces, Fit/Spacing/full screen/New window, click-to-filter
-              stays open, rewind-at-end, most-used-protocol badge, window
-              titles. CHANGELOG 1.1.0-beta.4 entry added (Added: picker, 15
-              marks, Problems, search, stats pane, toolbar controls, playback
-              polish; Changed: diagram button is now the lead tool). No
-              removed features to scrub. scripts/preview.sh is a dev-only
-              throwaway tool, not shipped in the image -- intentionally not
-              user-doc'd or changelog'd.
-📦 RELEASE    ✅ PR #19 open: claude/dev-skills-beta-workflow-cwzvx5 -> main.
-              Branch was synced with origin before every push (no divergence).
-              Release notes shown to the user in chat; approved ("yes").
-🚀 SHIP       ⬜ next: merge PR #19, confirm merge + CI on that commit, then
-              hand the tag block to the user.
-
-What shipped in this commit (frontend + scripts only; no backend change):
-- Traffic Diagram: end-of-play most-used-protocol badge per host; legend =
-  multi-select protocol picker (applies to the next play; unrelated hosts and
-  links hide); every protocol gets its own chip; 15 colored marks (3
-  validated hues x 5 shapes -- adding a 4th hue fails the dataviz validator,
-  measured); "Problems" chip + red link badges + stats rows + red ring during
-  play (resets, retransmissions, window, IP fragments, ICMP errors,
-  malformed); host search box (Enter steps through matches, Esc clears);
-  collapsible stats pane (protocols shown before any play); click a host or
-  link = filter the packet list, diagram stays open, link lists all its
-  protocols; zoom/pan/Fit, Spacing, full screen, New window (diagram-only
-  page; clicks relay to the main tab over BroadcastChannel); Resolve names
-  toggle; per-host interfaces on "any" captures; speed usable before play;
-  play rewinds at end with the picture kept; capture + view name in both
-  diagram titles; readable labels; node glyphs keep screen size when zoomed
-  out; automatic view never zooms below the separation floor.
-- Viewer: Traffic Diagram button is the lead tool (accent + icon, after Apply).
-- scripts/preview.sh + scripts/preview_pcap.py: throwaway preview on :8099.
-  See memory preview-container.md for the user's requirements.
-
-Next steps, in order:
-1. Run scripts/check.sh on this commit; expect only the sanitizer flake.
-   Decide whether to fix that flake (seed the random payload).
-2. Open items the user raised but did not decide: stats Top talkers/Busiest
-   links do not follow the protocol pick; problem badges can sit on a host
-   label on short links; a 4-hue palette option was offered, not chosen.
-3. Release prep for the next beta: VERSION bump, docs/viewer.md, CHANGELOG.
-
-## IN PROGRESS: next beta -- upload tests, locked-vault fix, upload fly-out (2026-09-18, local)
-Track: work commit on claude/dev-skills-beta-workflow-cwzvx5 (resumed from the
-upload-diagrams handoff below). dev-skills v2.24.0. Environment: LOCAL (same
-clone as the user's terminal) -- git is presented, not run; the cloud
-session's "remote container" notes below no longer describe where this runs.
-Model: Opus 5 (session switched mid-way); user continued without objection.
-
-Done this session, uncommitted:
- * tests/test_capture_upload.py -- 25 tests (sealed on disk, 0600, uuid name,
-   round-trip download, packets route, record fields, odd labels, other-user
-   404, 4 refusals, oversize with and without Content-Length, locked 503,
-   plain HTTP 403, rate limit, 401, origin migration backfill). Mutation-
-   checked: chunked-cap and locked-vault tests fail with their guard removed.
- * HIGH, the pre-existing twin, REPRODUCED then FIXED. With the vault locked
-   (every passphrase-mode restart until unlock): a pasted/uploaded SSH key was
-   written as plaintext and NEVER re-sealed (migrate_plaintext_keys only runs
-   at a startup that has a key -- passphrase mode never does); a collected
-   capture landed as plaintext <id>.pcap until the next unlock. Now
-   CaptureManager._refuse_while_locked (shared with import_upload) guards
-   start() and _collect(); _store_ssh_key refuses 503; start route maps
-   CryptoError -> 503. 4 new tests, all fail against the old code. The
-   existing test_uploaded_key_is_plaintext_when_no_cryptor encoded the bug
-   (it modelled "no key" as a LOCKED vault) -- split into encryption-disabled
-   (plaintext, correct) and locked (503).
- * UI BUG found by the new browser test: onUploadCaptureClick's finally reset
-   #upload-msg, so "Uploaded N packets" / "Upload failed: ..." were never
-   shown. Fixed (syncUploadButton re-enables without touching the message).
- * Upload moved into a fly-out off the Captures heading (user: "the capture
-   screen is getting kind of cramped"). Non-modal; Escape (focus back to the
-   toggle), outside click and the toggle close it; stays open after an upload.
-   Screenshotted light/dark/390px.
- * Browser tests: 3 upload + 4 fly-out in test_capture_ui.py, 8-slot legend in
-   test_diagrams_ui.py.
-
-FOUND, NOT FIXED (asked): .stats-dialog {display:flex} overrides the UA
-dialog:not([open]){display:none}, so every closed stats/host-key dialog is
-rendered below the 100vh app shell -- invisible, but its buttons are likely
-still in the tab order. Pre-existing.
-
-Later the same session, on the user's direction:
- * Fly-out moved from the Captures heading to the capture card footer beside
-   Start capture, opening upward over the form (user: "looks kind of clumsy";
-   chose the footer via AskUserQuestion). Anchored to the footer, width
-   against the footer, full-width button under 480px.
- * Sequence Diagram lane labels fitted to their room (gap to neighbours and
-   2x distance to either edge), middle-ellipsised, full name in <title>. The
-   leftmost resolved hostname was clipped off the left edge.
- * Legend swatches 18x14 -> 26x20 (shape is the channel past three hues).
- * dialog:not([open]) { display:none } -- the closed-dialog bug above, FIXED
-   (user: "Yes fix it"). Also removed a 108px horizontal overflow at 390px.
- * 3 more browser tests (label fit, short labels whole, closed dialogs + page
-   width); the two regression ones fail against the pre-fix frontend.
-
-🔢 VERSION    ⬜ not owed yet (next beta will bump to 1.1.0-beta.3)
-🔨 BUILD      ✅ full suite on the FINAL tree: check.sh EXIT=0, 1647 passed,
-              0 failed, 0 skipped, 336s, real tshark/capinfos/chromium. Looked
-              at in a real browser: upload fly-out (desktop dark, 390px light),
-              both diagrams on a real uploaded 83-packet pcap with name
-              resolution. Handoff offered: screenshots sent to the user; no
-              image built (work commit, not a release).
-🔒 SECURITY   ✅ 0 Critical, 0 High on the final diff. One High (locked-vault
-              plaintext writes: SSH keys + captures) fixed in this diff.
-              pip-audit requirements.txt: no known vulnerabilities; no
-              dependency or Dockerfile change. No new innerHTML/eval sinks --
-              lane labels and titles via textContent. Quality: fitLaneLabel /
-              laneLabelRoom small and pure; _refuse_while_locked shared by the
-              three write paths instead of three copies.
-📄 DOCS       ⬜
-📦 RELEASE    ⬜
-🚀 SHIP       ⬜
-
-## (previous) pcap upload + traffic-diagram fixes (2026-09-18)
-Track: work commit (branch only). No version bump, no tag, no artifact, nothing
-published. Flagged to the user; they can call it a release instead.
-Branch: claude/dev-skills-beta-workflow-cwzvx5, restarted from origin/main.
-Environment: remote container. Claude executes git; tag pushes go to the user.
-User asked for: upload a pcap to view it, sealed and encrypted exactly as a
-capture is and marked as an upload; DNS resolution fixed in the traffic
-diagram; more protocols shown there.
-
-🔢 VERSION    ⬜ not owed on a work commit. APP_VERSION stays 1.1.0-beta.2,
-              which is what ghcr actually holds.
-🔨 BUILD      ✅ handoff n/a -- remote container. Precisely: /usr/bin/docker
-              EXISTS here (check.sh's tool line lists it, and earlier gate
-              records saying "no docker" read as if it did not), but there is
-              no daemon -- `docker info` fails on a missing
-              /var/run/docker.sock -- so no image can be built or started, and
-              there is no artifact for the user to try by hand.
-              Full suite via scripts/check.sh on the committed tree: 1604
-              passed, 3 skipped, exit 0, 553.78s, with real
-              tshark/tcpdump/capinfos and chromium. 1607 collected against
-              1594 at beta.2. The 3 skips are test_entrypoint.py's
-              pre-existing root-writes-0500 cases.
-              Run three times this session; only this run counts. The first
-              two were invalidated by edits landing mid-run (pip-audit
-              installed into .venv, then the quality refactor of
-              _write_sealed_upload) and neither was recorded as a result.
-              Targeted re-run of the two highest-risk browser files
-              (test_diagrams_ui.py, test_capture_ui.py) before the commit: 68
-              passed.
-              NOT required on this track; run and recorded because the change
-              is code.
-🔒 SECURITY   ✅ 0 Critical, 0 High. One High found and fixed in this session's
-              own new code; one pre-existing twin raised and left open. Detail
-              below.
-📄 DOCS       ⬜ no CHANGELOG entry, correct for a work commit (dev.33/34
-              precedent). A release owes one.
-📦 RELEASE    ⬜ no PR opened.
-🚀 SHIP       ⬜ nothing tagged, nothing published.
-
-STOPPED MID-TASK on the user's instruction: "Stop the work for now, commit
-what's done and write a handoff to the repo." The features work and are
-verified by hand; the tests that would guard the UPLOAD are NOT written (the
-DNS fix does have 5 of its own). Full state in
-.claude/upload-diagrams-handoff.md, which is the file to start from.
-
-COMMITTED AND PUSHED: ca937c5 (the DNS fix and its tests, kept as its own
-commit so the bugfix is reviewable alone) and 19be0ef (uploads, the eight
-protocol slots, this record and the handoff), on
-claude/dev-skills-beta-workflow-cwzvx5, confirmed on the remote at 19be0ef.
-No PR. This gate-record update is a third commit on top of those two.
-
-SECURITY GATE, in full.
-
-Code: 0 Critical, 0 High.
- * ONE HIGH, FOUND BY THIS GATE AND FIXED, in code written this session. A
-   locked vault presents cryptor=None, indistinguishable from "encryption is
-   disabled", so an upload arriving while the vault waited for its passphrase
-   was written IN THE CLEAR -- stored as <uuid>.pcap with no .enc suffix, on an
-   installation whose whole premise is encryption at rest. This is the
-   fail-open vault.py refuses to start up into, reached by another door.
-   Reproduced before fixing: the pcap magic was the first four bytes on disk.
-   Now refused fail-closed before anything is written, as a 503, because the
-   remedy is an admin unlocking and the same request then working.
- * Path handling: the client-supplied filename NEVER becomes a path. The stored
-   file is named by a server-generated uuid4 via vault.stored_path(); the
-   filename is only a display label, allowlisted, and dropped rather than
-   rewritten if it does not match. Traversal is structurally impossible here
-   rather than filtered.
- * Resource bound: the upload cap is counted off the request stream, so a
-   chunked body with no Content-Length cannot bypass it -- verified live (400
-   from the route, with nothing left on disk). This CLOSES the residual the
-   _body_limit comment used to state, for the one route where it mattered.
-   The middleware's Content-Length check remains as the cheap early refusal.
-   Own rate limiter as well, lower than capture starts, because unlike a
-   capture start nothing else bounds how fast one user can fill the volume.
- * File mode: os.open(..., O_CREAT|O_EXCL, 0o600), so there is no window
-   between creation and a chmod, and no reuse of an existing path.
- * Partial writes: sealed into <name>.partial and moved into place only after
-   the whole body has arrived and capinfos has read it back; removed on every
-   failure path. Verified no .partial survives any of the six refusals.
- * XSS: the one new innerHTML attribute interpolation (the legend swatch's
-   fill/stroke/stroke-dasharray) takes values only from the module-level
-   PROTOCOL_SLOTS constant, never from server or user data. The protocol name
-   beside it is escHtml'd as before. Every new upload message is written with
-   textContent; the filename reaches the URL through encodeURIComponent.
- * Transport: HTTPS enforced twice -- the read-only-over-HTTP middleware and an
-   explicit _require_secure_transport, kept deliberately rather than trimmed,
-   because this body is packet data.
- * No new dependency, no new subprocess, no new shell, no eval, no pickle, no
-   new permission. capinfos runs through the existing vault source, as the
-   capture path already does.
-
-Dependencies: pip-audit 2.10.1 (installed into the throwaway .venv for this,
-which is gitignored). backend/requirements.txt and requirements-dev.txt both
-"No known vulnerabilities found". 0 Critical, 0 High. .github/dependabot.yml
-already exists, so nothing to recommend there.
-
-OPEN, RAISED, NOT FIXED -- the pre-existing twin of the High above. Nothing
-anywhere refuses a WRITE while vault.locked is true: the only `locked` checks
-in main.py are the status field and the unlock route's own guard. _collect
-passes `self._vault.cryptor if self._vault else None` to fetch_file, and
-_store_ssh_key does the same for keys, so a capture completing -- or an SSH key
-uploaded -- while the vault is locked looks like it lands unencrypted too. NOT
-verified, only reasoned from the code; only the upload path was actually
-reproduced. Left out because it is a vault-wide change across three write
-paths, wants its own tests, and the session was stopped. Verify it the same way
-before fixing. If it reproduces it is a High.
-
-Quality review of the changed code:
- * FIXED: _write_sealed_upload nested 5 deep, over the 3-level limit. Split
-   into _check_upload_size, _header_looks_like_a_capture, _write_upload_chunk
-   and _check_upload_finished; now 33 non-comment lines at depth 3, and each
-   piece has a name saying what it decides.
- * FIXED: import_upload ran long. The record construction moved to
-   _upload_record. Now 54 non-comment lines at depth 2 -- still longer than the
-   ~40 guideline, ACCEPTED rather than split further: what remains is three
-   named phases plus two try/except blocks whose only job is removing a partial
-   file, and separating those from what they clean up would make the failure
-   handling harder to follow, not easier.
- * No N+1, no blocking I/O added on the event loop beyond what
-   SSHManager._download already does inline for the same work and for the
-   reason stated there, no unbounded cache, no listener without teardown, no
-   new index needed (the new column is never queried on).
- * No new import, so no dependency-file drift and nothing owed in the
-   Dockerfile.
-
-Verified by hand, not by committed tests -- THIS IS THE GAP:
- * upload sealed on disk, download byte-identical round trip, packets route
-   reads it, appears in the capture list
- * refusals: not a pcap, empty, under four bytes, pcap header on garbage,
-   oversize declared (413), oversize chunked (400), plain HTTP (403),
-   rate limited (429), locked vault (503)
- * DNS: both routes return host.example.com with resolution on, addresses with
-   it off, and every playback lookup resolves
- * 5 new parser tests, confirmed to discriminate: 3 fail against the pre-fix
-   parser, and the agreement test fails against a deliberately half-fixed tree
-   (flags fixed, conversations not) -- which is the trap the fix walks into.
-
-Findings so far, all checked against real tshark 4.2.2 output in this
-container rather than inferred from the code:
-
-Finding 1. backend/packet_parser.py's _RESOLVE_ON passes `-N mnt`. Those
-letters are the complete set of resolutions tshark will perform, so leaving
-`d` out actively disables the one source that works on a stored pcap: names
-learned from the capture's own DNS answers. External reverse-DNS is asked for
-and, in a container behind no resolver, answers nothing. Proven on a two-frame
-pcap built from tests/packet_builders.py -- a DNS A answer for
-host.example.com plus a TCP frame to that address. Under `-N mnt` the
-destination column reads 10.0.0.9; under `-N mntd` it reads host.example.com.
-This affects the packet list too, not only the diagrams.
-
-Finding 2. get_conversations reads `-e ip.src` / `-e ip.dst`, which never
-resolve, whatever the flags say. Its docstring claims otherwise. The resolved
-values live in the separate `ip.src_host` / `ip.dst_host` fields, confirmed on
-the same pcap: `ip.dst` gives 10.0.0.9 while `ip.dst_host` gives
-host.example.com, matching _ws.col.Destination exactly.
-
-Finding 3, corrected after measuring rather than reasoning. The first write-up
-of this said playback already drew nothing. It does not. Because finding 1
-means NOTHING resolved anywhere, both routes returned addresses and agreed with
-each other, so playback worked and simply never showed a name -- which is the
-symptom as reported, no more. The mismatch is a trap the fix walks into: fixing
-the flags alone gives /packets names while /conversations keeps addresses, and
-then drawTopologyFrame's `byId.get(p.source)` misses on every packet, hits
-`if (!a || !b) continue`, and the animation goes blank. So the two fixes are
-one change and neither ships without the other.
-Verified on the two-frame pcap through the real routes: with both fixes and
-resolution on, /conversations returns host.example.com and /packets returns
-host.example.com, and every playback lookup resolves.
-
-Finding 4. The diagram palette caps at three protocols, in style.css and in
-diagrams.js rankProtocols. Everything past the third shares one grey "Other"
-swatch. This is the "more protocols" ask.
-
-## SHIPPED: v1.1.0-beta.2 (2026-09-18) -- the interrupted ship, finished
-
-🚀 SHIP ✅ CLOSED AND SHIPPED. All four post-ship checks:
- * tag v1.1.0-beta.2 -> 8c2e1bf on the remote (the PR #16 merge commit), moved
-   off 0038140 by the user running the presented block. Both halves of the
-   re-push (delete, then create) went through; never executed here.
- * Release run 35299208966 success. All three gate steps green. The Check step
-   waited 9 minutes for the merge commit's own run and logged "Check passed for
-   8c2e1bf..." -- the PRIMARY lookup. The ancestor fallback added in this
-   release was NOT exercised; it ships proven by tests, not by a live release.
-   The first release to actually use it will be a docs-only one.
- * GitHub release "v1.1.0-beta.2 (Pre-release)", prerelease: true, 02:35:01Z.
- * Image ghcr :1.1.0-beta.2 -> sha256:2d5a4ad900550cc688c52794f66662666fc7450a
-   f33ab4b1cd89ae54670b7ba9 (a real digest, not e3b0c442). Floating tags
-   correctly did NOT move: :dev still 2c094523 (dev.40), :latest still c686ea5a
-   (1.0.0), both matching what earlier sessions recorded.
-
-## Work commit: CI trigger waste (2026-09-18)
-Track: work commit -- CI plumbing, no version bump, no artifact, no publish.
-Not added to CHANGELOG, matching the dev.33/34 CI commits' precedent.
-It WILL merge to main via PR, which current SKILL.md S2 reads as a release
-sequence; this repo's own recorded decision (dev-skills 2.23.0, in the dev.40
-section below) says intent to publish is what makes a release, and there is
-none here. Flagged to the user rather than settled unilaterally.
-
-Branch restarted from origin/main (8c2e1bf) because PR #16 is merged -- follow-up
-work is a fresh change, not commits stacked on merged history.
-
-User: "Are we doing the right tests for the right use case? We seem to be doing
-the same long test for every action to github" -> then "do all three".
-
-Three findings, all verified against real run data, not inferred:
- 1. check.yml's `pull_request:` had NO paths-ignore while `push:` had a
-    carefully reasoned one. A .claude/-only commit was skipped on push and ran
-    the full ~10min suite on the PR. Runs 139 (1b406da) and 140 (4791c7e) on
-    2026-09-18 are exactly this, twice, in one session.
- 2. No concurrency group on check.yml or lint-workflows.yml -- three quick
-    commits ran three full suites to completion.
- 3. push ['**'] + bare pull_request double-fired on one SHA. PR #14's branch:
-    runs 134 (push) and 135 (pull_request), same commit 3157794.
-
-Browser-suite timing, relevant to the original question: 186 browser tests
-took 8m48s measured alone (contended with another run, so inflated), against
-1597 tests in ~9m for the whole suite. The ~12% of tests driving a real
-chromium are essentially the entire wall clock. If more time needs cutting, the
-lever is pytest-xdist or sharding those, which skips no tests -- not
-path-based selection.
-
-Fixes: pull_request gains the same paths-ignore (written out again -- GitHub
-Actions has no YAML anchors); concurrency on both workflows, cancel-in-progress
-everywhere EXCEPT main (a cancelled run is not a passing one, and release.yml's
-gate would then refuse to tag that merge commit); push narrowed to [main],
-which is the only branch the gate needs a push run on.
-release.yml's pattern reader gains `sort -u`, because check.yml now carries the
-list twice and sed reads both ranges.
-
-FOURTH ITEM, added on the user's "add the image smoke test too": release.yml
-built the image and pushed it in ONE step, so `docker build` exiting 0 was the
-only thing between a broken image and GHCR. Nothing ever started the container.
-Every artifact check in the release records below -- "boots, / 200, 0
-tracebacks, APP_VERSION correct in-image" -- was done BY HAND, locally, before
-tagging. CI never did it. This session could not either (no docker in the
-container), so :1.1.0-beta.2 was published without anyone here starting it (the
-code was unchanged from beta.2's own smoke run, so that was sound -- but by
-luck of the diff, not by design).
-
-Now: build with load: true, prove it runs, then a cache-hit rebuild that
-pushes. Six assertions -- / 200 within 60s, /api/auth/status 200, /api/servers
-401, in-image APP_VERSION == the tag, no Traceback in the log, "encryption
-enabled" present. The version check is the independent half of the gate job's:
-that one reads the repo at the tagged SHA, this reads the code INSIDE the
-artifact, and only the second catches a Dockerfile that copied the wrong tree.
-The v1.0.0 incident (:1.0.0 published holding 0.1.0-dev.40) is that shape one
-layer down.
-Uses a real throwaway key, not ALLOW_UNENCRYPTED_CAPTURES (encryption is what
-docker-compose.yml ships). No bind mounts for data/captures/ssh-keys -- the
-Dockerfile already creates them owned by appuser, and mounting host dirs is
-exactly how the dev.34 by-hand smoke run failed for reasons unrelated to the
-image.
-
-NOT RUN. Docker is not usable in this container, so the smoke test is verified
-only by actionlint+shellcheck, `bash -n`, YAML parse, and the in-image sed
-checked against the real backend/main.py (returns 1.1.0-beta.2). One real bug
-was found and fixed during that check: `curl -fsS` exits non-zero on a 4xx, so
-under `set -e` a wrong status code would have aborted the step with curl's
-error instead of the message naming the code. THE FIRST RELEASE AFTER THIS
-MERGES IS THE PROOF. If the smoke step is itself broken the release fails at
-that step rather than publishing something bad -- the safe direction, but not a
-substitute for having run it.
-
-DELIBERATELY NOT DONE: splitting the suite by path (run browser tests only when
-frontend/ changes). scripts/check.sh is one entrypoint shared by CI and local
-dev, with a comment saying it exists so the two cannot drift; path-based
-selection breaks that property, and the run you skip is the one that catches it.
-The waste was never that the suite is thorough -- it is that it ran on commits
-containing no code.
-
-RISK RAISED AND RESOLVED: if Check were a required status check on main, a PR
-whose every file is in paths-ignore would report no run and sit on "Expected --
-waiting for status" forever. No tool in this session could read branch
-protection, so it was flagged rather than assumed. The user checked and sent
-the settings page: "Classic branch protections have not been configured", no
-rulesets either. Check is NOT required, so the filter is safe and the skip-job
-remedy is not needed. check.yml keeps the note inline against the day
-protection is added.
-
-Consequence worth recording: with no protection on main, release.yml's gate is
-the ONLY thing standing between a commit and a published image -- nothing
-requires a PR, a review, or a green check to reach main. The design still
-holds (a direct push to main gets a Check run, since that trigger survived the
-narrowing, and the gate requires it to pass), but it holds alone.
-
-VERIFIED LIVE on the push of 38181b8: that commit changed workflows AND tests/,
-which under the old triggers would have run the full suite on a branch push.
-Only Lint workflows ran (run 25, 8s). No Check run. Fix 3 confirmed.
-The waste is now measured, not estimated: runs 139 and 140 -- the two
-.claude/-only PR runs -- took 12m02s and 11m36s. ~24 minutes of CI in one
-session on commits containing no code.
-
-🔢 VERSION    ➖ N/A -- structural: this change ships no artifact and publishes
-              nothing, so there is no version for it to carry. APP_VERSION
-              stays 1.1.0-beta.2, which is what ghcr actually holds; bumping it
-              here would leave the declared version disagreeing with the
-              published image and assert a release that is not happening. This
-              is the repo's own recorded convention (dev-skills 2.23.0, in the
-              dev.40 section below, adopted on the user's direction): intent to
-              publish -- a bump, a tag or an artifact -- is what makes a
-              release, and a merge to main without one is a work commit.
-              Reached because the gate-preflight hook refused the PR with
-              VERSION ⬜; the track question had been flagged to the user twice
-              and left open, so it was settled here on that recorded convention
-              and surfaced to them to overrule rather than decided silently.
-              NOT a "we'll do it later" skip: there is no later bump owed for
-              this change at all. The next real release bumps from
-              1.1.0-beta.2 as if this had never happened.
-🔨 BUILD      ✅ handoff n/a (remote container; docker is not usable here at
-              all, which is also why the smoke test itself could not be run).
-              Full suite via scripts/check.sh: 1594 passed, 3 skipped, exit 0,
-              556.99s. actionlint 1.7.12 + shellcheck clean over all three
-              workflows. The 4 new workflow-shape tests were checked against
-              8c2e1bf's check.yml and 3 of them fail there, so they
-              discriminate.
-              FIFTH ITEM, on the user's "do the first-parent fix": the ancestor
-              search walked /commits?sha=, which follows EVERY parent in date
-              order. That was harmless while check.yml ran on all branches --
-              a merged PR's own commits had push runs of their own. Narrowing
-              the push trigger to main (item 3, same session) made it a defect:
-              those commits stopped having push runs, so a long enough PR could
-              fill the 50-commit window with commits that can never match, and
-              the release would refuse for want of looking one step further
-              back along main. Self-inflicted, caught before it shipped.
-              Now walks parents[0] one commit at a time, bounded at 20 -- and
-              20 first-parent steps is 20 of main's OWN commits, where the
-              realistic depth is one. `// empty` so a root commit ends the walk
-              rather than becoming the string "null".
-              3 new tests (first-parent not a flat list, the bound, the root
-              commit). 29 pass. shellcheck caught a stale `local ancestors` on
-              the way through.
-              Scope: grepped -- tests/test_release_workflow.py is the only test
-              that reads release.yml, so those 29 are the complete affected set
-              on this tree. The full suite (1594 passed) ran on the tree before
-              this fix; the PR's own Check run covers it after, since tests/ is
-              deliberately NOT in the new paths-ignore.
-
-🔒 SECURITY   ✅ 0 Critical, 0 High. Triggers and concurrency add no execution
-              surface -- they only narrow which pushes start a run; no new
-              action, no new SHA, no permissions change anywhere.
-
-              The one item with real content is the smoke step: the release
-              job holds contents: write and packages: write, and it now RUNS
-              this repo's code rather than only building it. Checked rather
-              than waved through: `docker run` passes no host environment into
-              the container, so GITHUB_TOKEN is not reachable from inside it;
-              only MASTER_KEY_FILE and one read-only bind of a /dev/urandom
-              key that never leaves the runner. The two values read back out
-              of the container (in-image APP_VERSION, the log text) are
-              compared and grepped, never eval'd. A hung container is bounded
-              twice, by the step's own 60s poll deadline and the job's 30min
-              timeout.
-
-              Quality: the step fails closed everywhere -- a container that
-              exits during the poll is detected rather than waited out, and
-              cleanup() dumps the container log on every exit path so a smoke
-              failure never needs a re-run to find out what happened.
-📄 DOCS       ➖ N/A -- CI plumbing, not app CHANGELOG material (repo precedent:
-              the dev.33/34 CI commits). The reasoning is in the workflows' own
-              comments, as the rest of this repo's CI decisions are.
-📦 RELEASE    ✅ PR #17 MERGED -> main (merge commit 1040454). Opened as:
-              Opened on the user's "commit the record, do the first-parent fix,
-              then open the PR". First attempt refused by the gate-preflight
-              hook on VERSION ⬜ (see that gate above); settled as N/A with the
-              reason stated, then retried. The block was not worked around.
-🚀 SHIP       ➖ N/A -- work commit: no tag, no artifact, nothing published.
-
-CLOSED. On the merge, main's new triggers went live and behaved: Lint workflows
-run 29 (9s) and Check run 144 both fired on 1040454, Check because the merge
-touched tests/ which is deliberately NOT in paths-ignore. Run 144 is also the
-first FULL-suite run of the first-parent fix -- only the 29 targeted tests were
-run on that tree locally, since tests/test_release_workflow.py is the only test
-that reads release.yml.
-
-STILL UNPROVEN, carried forward: the release.yml smoke step has never executed
-(no docker in this container). The NEXT TAG is what proves both it and the
-ancestor fallback from PR #16 -- neither has run in anger. A broken smoke step
-fails the release rather than publishing something bad, so it fails safe, but
-that is not the same as having run.
-
-FOR THE NEXT SESSION: if more CI time needs cutting, the lever is pytest-xdist
-or sharding the 186 browser tests, which are very nearly the entire wall clock
-of a 1594-test run. NOT path-based test selection -- scripts/check.sh is one
-entrypoint shared by CI and local dev so the two cannot drift, and splitting by
-path breaks exactly that.
-
-## Release sequence: release.yml gate fallback -> finish v1.1.0-beta.2 (2026-09-18)
-Track: started as a work commit; became a release sequence when the user
-asked to move the tag and unblock beta.2, which needs the fix on main.
-Branch: claude/dev-skills-beta-workflow-cwzvx5.
-Environment: remote container (Claude executes git; tag pushes go to the user).
-User: "fix the issue with the .2 beta release workflow".
-
-Diagnosis: release run 35296493378 (tag v1.1.0-beta.2 on 0038140, the PR #15
-handoff merge) failed its gate in 8s -- "Check has never run for 0038140".
-check.yml's paths-ignore skips .claude/**, so the docs-only merge that became
-main's head got no Check run, and the gate had no fallback. Nothing was
-published; :1.1.0-beta.2 does not exist on ghcr.io.
-
-🔢 VERSION    ✅ 1.1.0-beta.2, unchanged -- this completes the ship that
-              PR #14 started rather than bumping past it. All refs agree:
-              backend/main.py APP_VERSION, docker-compose.yml image tag,
-              README beta block, CHANGELOG heading. Prior version
-              v1.1.0-beta.1 confirmed tagged on remote (ed4ba63). The tag
-              being moved keeps naming the version the commit declares, so
-              release.yml's own APP_VERSION check still matches.
-🔨 BUILD      ✅ handoff n/a (remote container -- this session's clone is in an
-              ephemeral container the user's terminal never sees, so there is
-              no artifact here for them to try). Recorded as n/a rather than
-              "offered": the accurate reason is structural, not a decline.
-              Worth stating alongside it, though it is not what makes the gate
-              pass: this diff touches release.yml, tests/, CHANGELOG.md and
-              this file only. No app code, and the Dockerfile copies none of
-              those paths, so the image built from this tree is byte-identical
-              to the one beta.2's suite already tested at 88b4b59. The user was
-              given the local `docker build` + smoke command anyway, to run on
-              their own box if they want it.
-
-              actionlint 1.7.12
-              (repo's pinned version + checksum) with shellcheck on PATH, exit
-              0 over all three workflows; lint-workflows.yml run 35298127820
-              green on the pushed commit.
-
-              The first pass on this verified the step with a throwaway
-              harness in a scratch dir, having missed that
-              tests/test_release_workflow.py already does exactly this for the
-              APP_VERSION step -- lifts the `run:` body out of release.yml as
-              text and runs it against a stub gh. The 13 new cases now live
-              there in that same style: own run passing, own run failed
-              (refuse, and asserts the ancestor lookup is never reached), the
-              real beta.2 shape against the real check.yml, identical tree,
-              code file differing from the ancestor, nearest-ancestor
-              selection, ancestor tested only by a pull_request run, no tested
-              ancestor, unreadable paths-ignore, a glob the step will not
-              guess at, an unreadable compare, and a guard on check.yml's
-              paths-ignore keeping the shape the step's sed expects.
-              23 passed. Checked against HEAD~1's release.yml that 8 of the
-              new cases fail without the fix, so they discriminate.
-
-              Full suite via scripts/check.sh: 1591 passed, 3 skipped, exit 0,
-              542.91s, with real tshark/tcpdump/capinfos and chromium. 1594
-              collected = the 1581 at beta.2 plus these 13. The 3 skips are
-              test_entrypoint.py's pre-existing root-writes-0500 cases.
-🔒 SECURITY   ✅ 0 Critical, 0 High. Reviewed as a gate-weakening question,
-              not a code-injection one. The fallback publishes only when the
-              diff from a tested ancestor is confined to check.yml's own
-              paths-ignore list, and none of those paths enter the image
-              (Dockerfile copies backend/, frontend/, entrypoint.sh,
-              requirements.txt, backend/tls/fetch_lego.py -- nothing else), so
-              the published artifact is the tested one. Fails closed on every
-              branch it cannot establish. Ancestor search restricted to push
-              runs, because a pull_request run tests the merge ref, not the
-              commit. No new permissions (actions: read, contents: read cover
-              the added contents/commits/compare calls); external strings are
-              compared, never eval'd; a filename containing a newline splits
-              into entries that match no pattern and so refuse.
-📄 DOCS       ✅ CHANGELOG 1.1.0-beta.2 entry gains a "Releases" bullet; the
-              reasoning is in release.yml's own comments, as the rest of that
-              file's decisions are.
-📦 RELEASE    ✅ PR #16 open: claude/dev-skills-beta-workflow-cwzvx5 -> main,
-              3 commits (e3f6961 fix, 24f233f tests, 1b406da gate record).
-              Opened on the user's "yes open the PR". First attempt was
-              REFUSED by the gate-preflight hook -- BUILD was ✅ with no
-              artifact-handoff annotation and this repo has a Dockerfile. The
-              annotation was added (n/a, remote container) and the PR retried;
-              the block was not worked around.
-🚀 SHIP       ✅ -- SEE THE SHIPPED SECTION AT THE TOP OF THIS FILE. What
-              follows was written before the tag moved and is kept as the
-              record of the decision, not as current state.
-              At the time: v1.1.0-beta.2 was tagged on 0038140 and was never
-              published; run 35296493378 refused it. Once the PR merges, the
-              tag moves onto the new main head, which carries the fix (a tag
-              push runs release.yml as of the TAGGED ref, so re-running
-              35296493378 could never have picked it up).
-
-              Note the merge commit will touch tests/, which is not in
-              paths-ignore -- so Check runs on it normally and this release
-              will satisfy the gate's PRIMARY lookup. The fallback added here
-              is not exercised by it; the first release that really leans on
-              it will be a future docs-only one.
-
-              The tag re-push is the user's block to run (SKILL.md 5.8:
-              delete + create, never Claude's, in any environment). SHIP stays
-              ⏳ until git ls-remote --tags origin confirms the tag on the
-              merge commit AND the release run publishes the image.
+Track: release sequence -- 1.1.0 stable, no more betas (user, 2026-09-20)
+Mode: manual
+Version: 1.1.0
+Model: Opus 5 (ceiling flagged; user's standing per-task approval for this repo)
+Shell: Linux bash. Env: LOCAL -- same clone as the user's terminal.
+Updated: 2026-09-20
+
+## ACTIVE: v1.1.0 -- first stable since 1.0.0, moves :latest
+Branch claude/interface-directionality-findings, from main 0c99359 (beta.9).
+Started from .claude/interface-directionality-handoff.md; that handoff is
+closed by this work, and beta.10/beta.11 were never cut -- the user took it
+straight to stable.
+
+THE SHAPE OF THIS RELEASE CHANGED MID-SESSION, twice, on the user's call.
+It began as "fix the two upload defects", grew a subnet-mapping UI and an
+interface-naming feature, and ended by DELETING the subnet mapping entirely:
+"the mappings dont do anything anyway... it does not work like i want it to,
+and its a gap from a native pcapserver capture." Full removal was chosen from
+three options (AskUserQuestion): UI, routes, parser, and the stored column.
+
+WHY THE REMOVAL IS RIGHT, not just asked for: the mapping inferred an
+interface and a direction from a packet's ADDRESSES, which cannot say which
+link a packet crossed. Measured, not argued -- with both ends mapped
+(172.16 -> 100.26 and back) place() always returned the DESTINATION's
+interface and always "out", so the reverse direction never showed "in" at
+all. A subnet is not an interface; one merely routed through is not one
+either. It read like recorded fact and was a guess.
+
+WHAT SHIPS INSTEAD: only what a capture's own file records. Settled by the
+two Windows captures the user sent (see the handoff for the measurement).
+
+🔢 VERSION    ✅ 1.1.0 -- backend/main.py APP_VERSION + docker-compose.yml
+              agree; CHANGELOG heading added. STABLE, so the references a
+              beta deliberately leaves alone moved too: README Quick start
+              link -> v1.1.0, docs/reverse-proxy.md -> 1.1.0 (x2), and the
+              README beta-notice block is GONE rather than bumped (this is
+              not a beta). Previous tag v1.1.0-beta.9 confirmed on the
+              remote -> 7afae37.
+🔨 BUILD      ✅ handoff offered and taken; scripts/check.sh EXIT=0 on the final tree.
+              1814 passed, 0 failed, 0 skipped, 36.70s, with real
+              tshark/tcpdump/capinfos/chromium. The handoff was EARLIER in the
+              session, on the pre-removal tree:
+              preview container driven by hand on :8099 with the user's own
+              Windows capture uploaded into it. That look found a real bug no
+              test could (stale notice text), and the preview work is what
+              led the user to the removal. The removed UI needs no re-look;
+              what remains of the frontend is covered by 270 browser tests.
+🔒 SECURITY   ✅ 0 open -- 0 Critical, 0 High. backend+frontend net -178 lines
+              (226 added, 404 removed): one route gone
+              (PUT /api/captures/{id}/subnet-map), two request models, a
+              stored column and a parser class, so the attack surface only
+              shrinks. Earlier copies of this row said "-879", which counted
+              this file's own 1106-line prune as deleted product code -- the
+              whole-tree figure is -15, and neither number means anything
+              about attack surface. The one thing that GREW it is reviewed
+              in full below.
+📄 DOCS       ✅ docs/viewer.md rewritten: what each kind of upload records,
+              the legacy-.pcap footgun, and a named section on the GAP the
+              user asked to be documented -- an upload is not as good as a
+              capture taken here, why, and what to do instead. CHANGELOG 1.1.0
+              leads with Removed and says stored mappings are dropped.
+📦 RELEASE    ✅ branch synced with origin (fetch 2026-09-20, no divergence);
+              commit approved by the user; PR opened on this commit; release
+              notes = the CHANGELOG 1.1.0 section, approved with it.
+🚀 SHIP       ⏳ 1.1.0 is STABLE -- the tag moves :latest, unlike every beta
+              this repo has shipped since 1.0.0. Plan: merge the PR, then the
+              user pushes v1.1.0 from /home/serveradmin/pcap-server; then
+              verify the tag SHA on the remote and the Release run only.
+
+SECURITY, the one item with content: an interface name now originates in an
+UPLOADED FILE (a pcapng's if_name/if_description), where before it came from
+the operator's mapping or this server's own reading of a host it controls.
+Every render site checked one by one -- the packet list cell escapes it in the
+body, the title and the data attribute; the diagram writes labels and tooltips
+with textContent; bounded to 64 chars at the parser. MEASURED, not reasoned: a
+crafted if_description containing a TAB or NEWLINE does not shift the
+tab-separated columns, because tshark backslash-escapes both. No filter is
+ever built from a name (grepped: only sll.ifindex == {int} and
+frame.interface_id == {int}). pip-audit clean on both requirements files.
+
+WHAT WAS KEPT from the earlier half of the session:
+ * the hex direction parse (tshark prints the pcapng flag in hex; the lookup
+   was decimal, so that path had never once run);
+ * recorded interface names used as they stand, description preferred over a
+   GUID-shaped name, "any" and bare GUIDs treated as naming nothing;
+ * recorded_interfaces read once at upload and stored on the capture;
+ * the Interface column showing on an upload that records interfaces -- it was
+   hidden on exactly those captures, so the names had nowhere to appear;
+ * the right-click filter on that column for uploads;
+ * scripts/preview.sh: COOKIE_SECURE=true + TRUST_PROXY_HEADERS=true for the
+   user's proxy, preview.sh itself folded into the rebuild hash (a docker-run
+   flag change used to report "unchanged" and keep the old container), and the
+   seed's cookie policy fixed -- a Secure cookie is not SENT over loopback
+   http by urllib, so seeding logged in 200 then 401'd on everything after.
+   Verified from wiped volumes, which is the path that would have broken.
+
+TESTS: the suite is smaller and the removed features' tests went with them.
+New/kept coverage: the hex parse incl. leading zeros, what counts as an
+identifying name, the two-source precedence, a built Windows-shaped pcapng
+through both the list and diagram paths, get_interfaces on a file that records
+names and one that records none, recorded_interfaces stored at upload, the
+Interface column appearing and staying hidden, and the recorded-name
+right-click filter.
+
+NEXT: commit approval, then Gate 5.
+
+## SHIPPED -- one line each; full records in git log and CHANGELOG.md
+Pruned 2026-09-20 from 1072 lines: the file is read WHOLE by
+.claude/hooks/gate-preflight.sh on every git write, so its length is a
+per-operation cost, and six closed releases in full were most of it.
+
+- **v1.1.0-beta.9** diagram packet caps + partial diagrams instead of a hard
+  fail. PR #31 -> 7afae37, Release run 35443258638. Found and fixed a real CSS
+  bug by looking at the rendered preview (a descendant selector over-matching
+  nested radio inputs) that no test could see.
+- **v1.1.0-beta.8** multi-interface reality fixes. PR #29, tag -> acb969e.
+- **v1.1.0-beta.7** UI feedback batch. PR #27 -> a61203b, run 35415933306.
+- **v1.1.0-beta.6** diagram zones/layouts, capture optimize, upload interfaces.
+  PR #23 -> e387d10. First tag landed before the merge; the release gate
+  refused it and published nothing -- working as designed.
+- **v1.1.0-beta.5** large-capture diagrams + label fix. PR #22 -> a39e8a2.
+- **v1.1.0-beta.4** Traffic Diagram overhaul + preview container. PR #19/#20,
+  tag -> efdfc08. Its README-only commit was the first live exercise of
+  release.yml's ancestor fallback.
+- **v1.1.0-beta.2** the interrupted ship, finished. Tag moved onto the PR #16
+  merge commit by the user; run 35299208966.
+- **Work commit, 2026-09-18: CI trigger waste.** check.yml push -> [main],
+  pull_request given the same paths-ignore, concurrency on both workflows, and
+  release.yml gained the image smoke test. PR #17 -> 1040454. Measured: two
+  .claude/-only PR runs had cost 12m02s and 11m36s on commits containing no
+  code.
 
 ## Carry forward — the only part of the history that is still load-bearing
 

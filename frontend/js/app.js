@@ -490,7 +490,6 @@ function enterApp() {
     loadDisplayFilters();
     initDiagramOptimize();
     loadCapturePresets();
-    initSubnetMapDialog();
     // Before the first capture is opened: the Viewer draws its headings from
     // this, and the default columns flashing into the operator's own layout
     // is exactly the kind of jump a stored preference should not cause.
@@ -3039,15 +3038,25 @@ function setUploadFlyout(open) {
 }
 
 // Not modal, so it closes the way a menu does: Escape, or a click anywhere
-// outside it. Left open after an upload so its result can be read; the new
-// row in the list below is visible either way.
+// outside it -- but only while it is the top layer. The Interfaces dialog
+// opens FROM this fly-out and sits above it, so every click and every Escape
+// meant for that dialog would otherwise read as "outside the fly-out" and
+// shut the thing the operator is still working in. A dialog is a layer, not
+// an outside.
+function aDialogIsOpen() {
+    return !!document.querySelector("dialog[open]");
+}
+
 function initUploadFlyout() {
     $("btn-upload-toggle")?.addEventListener("click", () => setUploadFlyout($("upload-flyout").hidden));
     document.addEventListener("click", (ev) => {
+        if (aDialogIsOpen() || ev.target.closest("dialog")) return;
         if (!ev.target.closest(".upload-flyout-anchor")) setUploadFlyout(false);
     });
     document.addEventListener("keydown", (ev) => {
         if (ev.key !== "Escape" || $("upload-flyout")?.hidden !== false) return;
+        // Escape belongs to the topmost layer: let the dialog take it.
+        if (aDialogIsOpen()) return;
         setUploadFlyout(false);
         $("btn-upload-toggle").focus();
     });
@@ -3068,147 +3077,6 @@ function onUploadFilePicked() {
     $("upload-msg").classList.remove("upload-msg-error");
 }
 
-// --- Interfaces dialog: subnet -> interface name -----------------------------
-
-let subnetMapCaptureId = null;
-// The mapping chosen for the next upload, before the file is sent: it goes up
-// in the same request (the upload route's subnet_map).
-let pendingUploadSubnets = [];
-
-function subnetMapRow(cidr = "", name = "") {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-        <td><input type="text" class="subnet-cidr" placeholder="192.168.1.0/24" spellcheck="false" aria-label="Subnet"></td>
-        <td><input type="text" class="subnet-name" placeholder="eth0" spellcheck="false" maxlength="32" aria-label="Interface name"></td>
-        <td><button type="button" class="btn btn-sm btn-danger btn-quiet subnet-remove" aria-label="Remove this subnet">&times;</button></td>`;
-    tr.querySelector(".subnet-cidr").value = cidr;
-    tr.querySelector(".subnet-name").value = name;
-    tr.querySelector(".subnet-remove").addEventListener("click", () => tr.remove());
-    return tr;
-}
-
-// Private IPv4 addresses in the capture, grouped into /24s: the subnets most
-// likely to sit behind an interface of their own, offered with no name so
-// only the ones named are kept.
-async function suggestSubnets(captureId) {
-    let data;
-    try {
-        data = await api(`/api/captures/${encodeURIComponent(captureId)}/conversations`);
-    } catch {
-        return [];
-    }
-    const seen = new Map();
-    for (const e of data.endpoints || []) {
-        const v4 = parseIPv4(e.address);
-        if (v4 === null || addressZone(e.address, false) !== "lan") continue;
-        if (inV4Net(v4, "224.0.0.0", 4) || inV4Net(v4, "255.255.255.255", 32) || inV4Net(v4, "0.0.0.0", 8)) continue;
-        const net = e.address.split(".").slice(0, 3).join(".") + ".0/24";
-        seen.set(net, (seen.get(net) || 0) + e.packets);
-    }
-    return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([net]) => net);
-}
-
-// With a capture id: that capture's mapping, saved to it. With none: the
-// mapping for the upload about to be sent, kept until Upload is pressed.
-async function openSubnetMapDialog(captureId = null) {
-    const c = captureId ? captures.find((x) => x.id === captureId) : null;
-    subnetMapCaptureId = captureId;
-    const rows = $("subnet-map-rows");
-    rows.textContent = "";
-    $("subnet-map-msg").textContent = "";
-    const file = $("upload-file")?.files?.[0];
-    $("subnet-map-capture").innerHTML = c
-        ? `<span class="diagram-context-capture">${escHtml(c.name || c.id)}</span>`
-        : `<span class="diagram-context-capture">${escHtml(file ? file.name : "the next upload")}</span>`;
-    $("btn-subnet-map-save").textContent = captureId ? "Save interfaces" : "Use for this upload";
-    const existing = captureId ? ((c && c.subnet_map) || []) : pendingUploadSubnets;
-    for (const m of existing) rows.append(subnetMapRow(m.cidr, m.name));
-    $("subnet-map-dialog").showModal();
-    if (!captureId) {
-        // Nothing to look in yet: the file has not been sent.
-        if (!existing.length) { rows.append(subnetMapRow()); rows.append(subnetMapRow()); }
-        rows.querySelector(".subnet-cidr")?.focus();
-        return;
-    }
-    if (!existing.length) {
-        $("subnet-map-msg").textContent = "Looking for subnets in the capture\u2026";
-        const nets = await suggestSubnets(captureId);
-        if (subnetMapCaptureId !== captureId) return;
-        for (const net of nets) rows.append(subnetMapRow(net, ""));
-        if (!nets.length) rows.append(subnetMapRow());
-        $("subnet-map-msg").textContent = nets.length
-            ? `Found ${nets.length} subnet${nets.length === 1 ? "" : "s"} in the capture -- name the ones you captured on.`
-            : "";
-    }
-    rows.querySelector(".subnet-name")?.focus();
-}
-
-async function saveSubnetMapDialog() {
-    const msg = $("subnet-map-msg");
-    const mappings = [];
-    for (const tr of $("subnet-map-rows").children) {
-        const cidr = tr.querySelector(".subnet-cidr").value.trim();
-        const name = tr.querySelector(".subnet-name").value.trim();
-        if (!cidr && !name) continue;
-        if (!name) continue;  // offered but not named: skipped, as the hint says
-        if (!cidr) {
-            msg.textContent = `"${name}" needs a subnet, like 192.168.1.0/24.`;
-            return;
-        }
-        mappings.push({ cidr, name });
-    }
-    const captureId = subnetMapCaptureId;
-    if (!captureId) {
-        pendingUploadSubnets = mappings;
-        $("subnet-map-dialog").close();
-        renderUploadSubnets();
-        return;
-    }
-    try {
-        await api(`/api/captures/${encodeURIComponent(captureId)}/subnet-map`, {
-            method: "PUT", body: JSON.stringify({ mappings }),
-        });
-    } catch (e) {
-        msg.textContent = `Not saved: ${e.message}`;
-        return;
-    }
-    $("subnet-map-dialog").close();
-    await loadCaptures();
-    if (viewingCaptureId === captureId) loadPackets(captureId, $("display-filter").value);
-}
-
-let subnetMapDialogReady = false;
-
-function renderUploadSubnets() {
-    const box = $("upload-multi-iface");
-    if (box && !pendingUploadSubnets.length) box.checked = false;
-    const summary = $("upload-subnet-summary");
-    if (!summary) return;
-    summary.hidden = !pendingUploadSubnets.length;
-    $("upload-subnet-list").textContent = pendingUploadSubnets.map((m) => `${m.name} ${m.cidr}`).join(" \u00b7 ");
-}
-
-function initSubnetMapDialog() {
-    const dialog = $("subnet-map-dialog");
-    if (!dialog || subnetMapDialogReady) return;
-    subnetMapDialogReady = true;
-    dialog.addEventListener("click", (e) => { if (e.target.closest("[data-close-dialog]")) dialog.close(); });
-    $("btn-subnet-map-add").addEventListener("click", () => {
-        const tr = subnetMapRow();
-        $("subnet-map-rows").append(tr);
-        tr.querySelector(".subnet-cidr").focus();
-    });
-    $("btn-subnet-map-save").addEventListener("click", saveSubnetMapDialog);
-    // Closed without "Use for this upload" (Skip, Esc): an upload with no
-    // mapping un-ticks the box, so what it says matches what will be sent.
-    dialog.addEventListener("close", () => { if (!subnetMapCaptureId) renderUploadSubnets(); });
-    $("upload-multi-iface")?.addEventListener("change", (ev) => {
-        if (ev.target.checked) openSubnetMapDialog(null);
-        else { pendingUploadSubnets = []; renderUploadSubnets(); }
-    });
-    $("btn-upload-subnets-edit")?.addEventListener("click", () => openSubnetMapDialog(null));
-}
-
 async function onUploadCaptureClick() {
     const input = $("upload-file");
     const file = input && input.files && input.files[0];
@@ -3223,9 +3091,6 @@ async function onUploadCaptureClick() {
     msg.textContent = `Uploading ${file.name} (${formatBytes(file.size)})\u2026`;
     try {
         const params = new URLSearchParams({ filename: file.name });
-        if ($("upload-multi-iface")?.checked && pendingUploadSubnets.length) {
-            params.set("subnet_map", JSON.stringify({ mappings: pendingUploadSubnets }));
-        }
         const info = await api(
             `/api/captures/upload?${params}`,
             {
@@ -3237,13 +3102,13 @@ async function onUploadCaptureClick() {
         );
         input.value = "";
         msg.textContent = `Uploaded ${Number(info.packet_count).toLocaleString()} packets.`;
-        if ((info.subnet_map || []).length) {
-            msg.textContent += ` Interfaces: ${info.subnet_map.map((m) => m.name).join(", ")}.`;
-        }
-        // The mapping was for that file; the next upload starts clean.
-        pendingUploadSubnets = [];
-        renderUploadSubnets();
         await loadCaptures();
+        // The upload is the one interaction that finishes the fly-out's job,
+        // so it is the one that closes it. The result is not lost: the new row
+        // is in the list behind it, which is what the operator came for. A
+        // FAILED upload deliberately leaves it open -- the reason is in the
+        // message, and the file is still chosen to retry.
+        setUploadFlyout(false);
     } catch (e) {
         msg.textContent = `Upload failed: ${e.message}`;
         msg.classList.add("upload-msg-error");
@@ -3301,13 +3166,6 @@ function captureActions(c, id) {
                    ${dl}`;
     }
     actions += ` <button class="btn btn-sm btn-secondary" data-action="rename-capture" data-id="${id}">Rename</button>`;
-    // A capture whose packets carry no interface (an upload, or one named
-    // interface) can be told which subnet is behind which.
-    if (c.interface !== ANY_INTERFACE && c.status === "completed") {
-        const n = (c.subnet_map || []).length;
-        actions += ` <button class="btn btn-sm btn-secondary" data-action="map-subnets" data-id="${id}"
-            title="Say which subnet is behind which interface: packets then show an interface and in/out">Interfaces${n ? ` (${n})` : ""}</button>`;
-    }
     actions += ` <button class="btn btn-sm btn-danger btn-quiet" data-action="delete-capture" data-id="${id}">Delete</button>`;
     return actions;
 }
@@ -4816,8 +4674,13 @@ function effectiveColumns(flags) {
     // interface does not have. The column is hidden there rather than left to
     // print nothing on every row.
     const capture = captures.find((c) => c.id === viewingCaptureId);
-    // ...or one whose subnets were mapped to interfaces (an upload).
-    const isAny = Boolean(capture && (capture.interface === ANY_INTERFACE || (capture.subnet_map || []).length));
+    // ...or an upload whose own file names its interfaces, which is the only
+    // way an upload gets this column: nothing else in a capture says which
+    // link a packet crossed (docs/viewer.md).
+    const isAny = Boolean(capture && (
+        capture.interface === ANY_INTERFACE
+        || (capture.recorded_interfaces || []).length
+    ));
     return layout.map((c) => ({
         id: c.id,
         title: c.title || BUILTIN_COLUMNS[c.id]?.title || c.field || c.id,
@@ -5340,7 +5203,7 @@ function interfaceCellHtml(p) {
         parts.push(p.interface.startsWith("#")
             ? `interface index ${p.ifindex} (its name was not recorded)`
             : p.ifindex ? `${p.interface} (index ${p.ifindex})`
-                : `${p.interface} (from the capture's subnet mapping, or the pcapng's own record)`);
+                : `${p.interface} (recorded by the capture file itself)`);
     }
     if (long) parts.push(long);
     if (p.ifindex) parts.push(`filter: sll.ifindex == ${p.ifindex}`);
@@ -6037,6 +5900,33 @@ function addressField(value) {
     return "";
 }
 
+// The filter behind an Interface cell. Every capture that shows the column
+// gets one, because a column you cannot right-click is a column that behaves
+// differently from all its neighbours -- but WHICH filter depends on where
+// the interface came from, and only one of the two is sll.ifindex:
+//
+//   * a cooked capture ("any", captured here or uploaded) records the kernel's
+//     index per packet, so the index is exact and the name may not even exist.
+//   * a pcapng records a name of its own. Windows puts the friendly name in
+//     if_description and a GUID in if_name, Linux puts the name in if_name, and
+//     the cell shows whichever was usable -- so match either field rather than
+//     storing which one it came from on every packet.
+// An interface that came from neither offers nothing, because there is no
+// field behind it to filter on.
+function interfaceFilterFor(cell) {
+    const ifindex = cell.dataset.ifindex;
+    if (ifindex) return buildFieldFilter("sll.ifindex", ifindex);
+    const name = cell.dataset.ifaceName;
+    if (!name) return "";
+    const capture = captures.find((c) => c.id === viewingCaptureId);
+    if ((capture?.recorded_interfaces || []).includes(name)) {
+        const byName = buildFieldFilter("frame.interface_name", name);
+        const byDesc = buildFieldFilter("frame.interface_description", name);
+        return `${byName} || ${byDesc}`;
+    }
+    return "";
+}
+
 function onPacketRowContextMenu(ev) {
     const row = ev.target.closest("tr[data-frame]");
     if (!row) return;
@@ -6053,14 +5943,10 @@ function onPacketRowContextMenu(ev) {
     } else if (cell.classList.contains("col-no") && text) {
         items.push(...filterMenuItems(buildFieldFilter("frame.number", text), text));
     } else if (cell.classList.contains("col-iface")) {
-        // Only meaningful on an "any" capture, where the column itself is
-        // shown -- see packetColumns(). ifindex, not the name: the name can be
-        // missing (recorded as "#N") but sll.ifindex is always there to filter
-        // on, which is exactly what the cell's own tooltip already promises.
-        const ifindex = cell.dataset.ifindex;
-        if (ifindex) {
-            const label = cell.dataset.ifaceName || `interface index ${ifindex}`;
-            items.push(...filterMenuItems(buildFieldFilter("sll.ifindex", ifindex), label));
+        const expr = interfaceFilterFor(cell);
+        if (expr) {
+            const label = cell.dataset.ifaceName || `interface index ${cell.dataset.ifindex}`;
+            items.push(...filterMenuItems(expr, label));
         }
     } else if (cell.dataset.field && text) {
         // A column the operator added, or one of the MAC columns: the cell
@@ -7343,7 +7229,6 @@ function initEventDelegation() {
         "download-capture": (id) => downloadCaptureById(id),
         "sanitize-capture": (id) => openSanitizeDialog(id),
         "rename-capture": (id) => renameCapture(id),
-        "map-subnets": (id) => openSubnetMapDialog(id),
         "delete-capture": (id) => deleteCapture(id),
     });
     delegate("admin-user-list", {

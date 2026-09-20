@@ -311,38 +311,6 @@ class CapturePreset(BaseModel):
     created_at: str = ""
 
 
-# --- subnet -> interface mapping, for uploaded captures ---------------------
-
-SUBNET_MAP_MAX = 32
-_IFACE_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._@:+-]{0,31}\Z")
-
-
-class SubnetMapping(BaseModel):
-    cidr: str
-    name: str
-
-    @field_validator("cidr")
-    @classmethod
-    def validate_cidr(cls, v: str) -> str:
-        import ipaddress
-        try:
-            return str(ipaddress.ip_network(v.strip(), strict=False))
-        except ValueError:
-            raise ValueError(f"not a subnet: {v!r} (write it like 10.42.0.0/16)") from None
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v: str) -> str:
-        v = v.strip()
-        if not _IFACE_NAME_RE.match(v):
-            raise ValueError("an interface name is 1-32 letters, digits and . _ @ : + -")
-        return v
-
-
-class SubnetMapRequest(BaseModel):
-    mappings: list[SubnetMapping] = Field(default_factory=list, max_length=SUBNET_MAP_MAX)
-
-
 class CaptureView(BaseModel):
     id: str
     capture_id: str
@@ -949,12 +917,13 @@ class CaptureInfo(BaseModel):
     # interface, a capture that predates the column, or a host that could not
     # be asked -- the viewer then shows the bare index.
     interface_names: dict[int, str] = Field(default_factory=dict)
-    # For a capture with no interface on each packet -- an upload, or one of a
-    # single named interface: which subnet sits behind which interface, as the
-    # operator described it (SubnetMapRequest). The viewer and diagrams read
-    # each packet's interface and in/out direction from it
-    # (packet_parser.SubnetMap). Empty for anything not mapped.
-    subnet_map: list[dict] = Field(default_factory=list)
+    # The interface names the capture's OWN file carries, read once when it is
+    # stored (packet_parser.get_interfaces). Distinct from interface_names
+    # above, which maps the kernel's numbers on an "any" capture: these are
+    # names a pcapng recorded for itself, and they need no operator input --
+    # which is the whole point of them. An upload that records none shows no
+    # interface at all; see docs/viewer.md on that gap.
+    recorded_interfaces: list[str] = Field(default_factory=list)
     status: CaptureStatus
     # Whether this server recorded the pcap or someone uploaded it. Defaults to
     # CAPTURE, which is what every record written before uploads existed is --

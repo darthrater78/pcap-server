@@ -8,26 +8,6 @@ Built for the case where the machine you need to capture on is not the machine
 you want to analyse from: a firewall, a hypervisor, a container host, a box you
 only reach over SSH.
 
-<!-- BETA ANNOUNCEMENT -- process note, not just this one release: every beta
-     gets a block like this, naming the exact image tag (no leading "v" --
-     see docs/operating.md#choosing-a-version). Delete the whole block,
-     comment included, the moment the next non-beta release ships. It exists
-     to announce a beta while one is current, not to become a permanent
-     fixture nobody remembers to remove.
-
-     UPDATE THE TAG ONLY AFTER THE IMAGE IS CONFIRMED LIVE ON GHCR -- not as
-     part of the version-bump commit. A version bump lands on the PR branch
-     before the tag is pushed and CI publishes; bumping this line at the same
-     time advertises a pull that 404s until Gate 6 (SHIP) actually finishes.
-     (This exact mistake happened twice: dev.40's handoff and again at
-     1.1.0-beta.4's PR, both caught before the tag was pushed.) Bump this
-     line in its own small commit, straight to the default branch, once
-     `docker pull` of the new tag actually works. -->
-> [!IMPORTANT]
-> 🧪 **Beta available:** `ghcr.io/darthrater78/pcap-server:1.1.0-beta.9` — see
-> [the changelog](CHANGELOG.md) for what's in it. This is not what `:latest`
-> or the Quick Start below installs; pin this exact tag if you want to try it.
-
 **Contents** — [Quick start](#quick-start) · [HTTPS](#https) ·
 [Your first capture](#your-first-capture) · [What it does](#what-it-does) ·
 [Requirements](#requirements) · [Using it](#using-it) ·
@@ -40,7 +20,7 @@ only reach over SSH.
 **There is nothing to clone and nothing to build.**
 
 1. Go to
-   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v1.0.0/docker-compose.yml)
+   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v1.1.0/docker-compose.yml)
    and follow the setup steps at the top of it. They have you paste its
    service block into a file named `compose.yaml` on your Docker host.
 2. **Back up the master key** it generates somewhere other than this machine.

@@ -1101,9 +1101,10 @@ async def test_an_uploaded_pcap_lands_in_the_list_marked_as_an_upload(app_page, 
     await item.wait_for()
     assert await item.locator(".badge-upload").count() == 1
     # Cleared after success, so the button is back to waiting for a file --
-    # and the fly-out stays open so the result above can be read.
+    # and the fly-out closes, the upload being the one interaction that
+    # finishes its job. The result is the new row, which is right there.
     assert await app_page.is_disabled("#btn-upload-capture")
-    assert await app_page.is_visible("#upload-flyout")
+    assert not await app_page.is_visible("#upload-flyout")
 
 
 async def test_a_file_that_is_not_a_pcap_is_refused_with_the_servers_reason(app_page, no_captures):
@@ -1115,8 +1116,10 @@ async def test_a_file_that_is_not_a_pcap_is_refused_with_the_servers_reason(app_
     await app_page.wait_for_selector("#upload-msg.upload-msg-error")
     msg = await app_page.inner_text("#upload-msg")
     assert "Upload failed" in msg and "not a pcap or pcapng" in msg
-    # The file stays chosen so it can be retried, which leaves the button live.
+    # The file stays chosen so it can be retried, which leaves the button live
+    # -- and the fly-out stays open, because the reason is in it.
     assert await app_page.is_enabled("#btn-upload-capture")
+    assert await app_page.is_visible("#upload-flyout")
     assert await app_page.locator(".capture-item").count() == 0
 
 

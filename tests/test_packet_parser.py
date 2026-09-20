@@ -1161,51 +1161,97 @@ async def test_packet_list_carries_the_tcp_stream_index_per_row():
     assert all(p.udp_stream is None for p in packets[:7])
 
 
-# --- subnet -> interface mapping (uploads) ---------------------------------
+# --- what a capture records about its own interfaces -----------------------
+#
+# Two sources and no guessing: the Linux cooked header ("any"), and the names
+# a pcapng records for itself. Inferring an interface from a packet's
+# addresses was removed in 1.1.0 -- addresses cannot say which link a packet
+# crossed, and the guess read like a fact.
+
+WIN_GUID = r"\\Device\\NPF_{A0412FA8-7A7F-4FE1-98F3-B0FC91480BE0}"  # as tshark prints it
 
 
-def test_subnet_map_places_packets_like_a_capture_on_the_box():
-    smap = packet_parser.SubnetMap([
-        {"cidr": "10.42.0.0/16", "name": "cni0"},
-        {"cidr": "192.168.1.0/24", "name": "eth0"},
-        {"cidr": "10.42.7.0/24", "name": "veth7"},
-    ])
-    # Leaving toward a mapped subnet: out on its interface.
-    assert smap.place("8.8.8.8", "192.168.1.5", "") == ("eth0", "out")
-    # Arriving from one, bound for somewhere unmapped: in on its interface.
-    assert smap.place("192.168.1.5", "8.8.8.8", "") == ("eth0", "in")
-    # Routed between two mapped subnets: where it leaves, out.
-    assert smap.place("192.168.1.5", "10.42.0.9", "") == ("cni0", "out")
-    # Most specific subnet wins.
-    assert smap.place("192.168.1.5", "10.42.7.3", "") == ("veth7", "out")
-    # A direction the pcapng recorded wins; the subnets only name the interface.
-    assert smap.place("192.168.1.5", "10.42.0.9", "in") == ("eth0", "in")
-    # Nothing mapped: no interface, the recorded direction kept.
-    assert smap.place("8.8.8.8", "1.1.1.1", "out") == ("", "out")
-    assert smap.place("", "", "") == ("", "")
+def test_a_recorded_direction_is_read_as_tshark_prints_it():
+    # tshark prints frame.packet_flags_direction in hex; only the low two bits count.
+    d = packet_parser._recorded_direction
+    assert (d("0x00000001"), d("0x00000002"), d("0x00000000"), d("")) == ("in", "out", "", "")
+    assert (d("1"), d("2"), d("0x0000000a"), d("junk")) == ("in", "out", "out", "")
+    # Read base 16 whatever the spelling, so a leading zero is not a dropped
+    # direction. Bits 0-1 == 3 is undefined in the pcapng spec, so: nothing.
+    assert (d("00000001"), d("00000002"), d("0x3")) == ("in", "out", "")
 
 
-def test_the_cooked_header_beats_the_subnet_map():
-    smap = packet_parser.SubnetMap([{"cidr": "10.0.0.0/8", "name": "cni0"}])
-    assert packet_parser._place_packet(2, "4", {2: "ens18"}, "", "", "10.0.0.1", "10.0.0.2", smap) == ("ens18", "out")
-    assert packet_parser._place_packet(0, "", {}, "1", "", "10.0.0.1", "10.0.0.2", smap) == ("cni0", "in")
-    # No map: the pcapng's own interface name and direction.
-    assert packet_parser._place_packet(0, "", {}, "2", "eth1", "1.1.1.1", "2.2.2.2", None) == ("eth1", "out")
+def test_only_an_interface_a_person_could_use_is_recorded():
+    r = packet_parser._recorded_interface
+    assert r("eth0", "") == "eth0"
+    # Windows: the GUID is the name, the friendly name is the description.
+    assert r(WIN_GUID, "Ethernet") == "Ethernet"
+    assert r(WIN_GUID, "") == ""
+    assert r("{A0412FA8-7A7F-4FE1-98F3-B0FC91480BE0}", "") == ""
+    # dumpcap on Linux "any" names the interface "any", which is no interface.
+    assert r("any", "") == ""
+    assert r("eth0", WIN_GUID) == "eth0"
 
 
-def test_a_bad_mapping_row_is_skipped_not_fatal():
-    smap = packet_parser.SubnetMap([{"cidr": "nonsense", "name": "x"}, {"name": "y"}])
-    assert not smap
+def test_the_cooked_header_wins_and_a_pcapng_name_is_used_as_it_stands():
+    place = packet_parser._place_packet
+    # "any": the kernel's index and its own direction, whatever else is there.
+    assert place(2, "4", {2: "ens18"}, "", "eth9") == ("ens18", "out")
+    assert place(0, "", {}, "1", "") == ("", "in")
+    # A pcapng's own name, and the description where the name is a GUID.
+    assert place(0, "", {}, "", "eth1") == ("eth1", "")
+    assert place(0, "", {}, "", WIN_GUID, "IOT") == ("IOT", "")
+    # A name that identifies nothing is no interface at all -- not a fallback.
+    assert place(0, "", {}, "", WIN_GUID) == ("", "")
+    assert place(0, "", {}, "", "any") == ("", "")
+    # A recorded direction is read from tshark's hex.
+    assert place(0, "", {}, "0x00000002", "eth1") == ("eth1", "out")
 
 
 @needs_tshark
-async def test_an_uploaded_capture_gets_interfaces_from_its_subnet_map():
-    data = _build_minimal_pcap(num_packets=2)  # 10.0.0.1 -> 10.0.0.2
-    mapping = [{"cidr": "10.0.0.2/32", "name": "eth1"}]
-    packets = await packet_parser.get_packet_list(BytesSource(data), subnet_map=mapping)
-    assert packets[0].interface == "eth1" and packets[0].direction == "out"
-    diagram, _total, _names = await packet_parser.get_diagram_packets(BytesSource(data), 10, subnet_map=mapping)
-    assert diagram[0]["interface"] == "eth1" and diagram[0]["direction"] == "out"
+async def test_an_uploaded_windows_pcapng_shows_its_friendly_interface_names():
+    from tests.packet_builders import ethernet, ip4, ipv4, mac, pcapng, udp
+    frame = ethernet(mac("02:00:00:00:00:02"), mac("02:00:00:00:00:01"), 0x0800,
+                     ipv4(ip4("10.0.0.1"), ip4("10.0.0.2"), 17, udp(ip4("10.0.0.1"), ip4("10.0.0.2"), 1000, 2000, b"x")))
+    raw = ipv4(ip4("100.64.0.1"), ip4("10.0.0.2"), 17, udp(ip4("100.64.0.1"), ip4("10.0.0.2"), 1000, 2000, b"x"))
+    data = pcapng(
+        [{"name": WIN_GUID.replace("\\\\", "\\"), "description": "IOT"},
+         {"name": r"\\Device\\NPF_{D4A359A5-C5B7-4BC3-B04E-79DD565480E9}", "description": "VPN",
+          "linktype": 101}],  # LINKTYPE_RAW: a VPN adapter, no Ethernet header
+        [(0, frame, 1), (0, frame, 2), (1, raw, None)],
+    )
+    # The friendly names, never the GUIDs; the third packet is a Raw IP
+    # interface with no Ethernet header and no recorded direction.
+    packets = await packet_parser.get_packet_list(BytesSource(data))
+    assert [(p.interface, p.direction) for p in packets] == [
+        ("IOT", "in"), ("IOT", "out"), ("VPN", ""),
+    ]
+    diagram, _, _ = await packet_parser.get_diagram_packets(BytesSource(data), 10)
+    assert [(p["interface"], p["direction"]) for p in diagram] == [
+        ("IOT", "in"), ("IOT", "out"), ("VPN", ""),
+    ]
+
+
+@needs_tshark
+async def test_an_upload_that_records_nothing_shows_no_interface():
+    """A plain Ethernet capture says nothing about which link it was taken on,
+    and nothing here invents one for it."""
+    data = _build_minimal_pcap(num_packets=2)
+    packets = await packet_parser.get_packet_list(BytesSource(data))
+    assert packets and all(p.interface == "" and p.direction == "" for p in packets)
+
+
+@needs_tshark
+async def test_get_interfaces_reports_what_a_file_carries():
+    from tests.packet_builders import ethernet, ip4, ipv4, mac, pcapng, udp
+    frame = ethernet(mac("02:00:00:00:00:02"), mac("02:00:00:00:00:01"), 0x0800,
+                     ipv4(ip4("10.0.0.1"), ip4("10.0.0.2"), 17, udp(ip4("10.0.0.1"), ip4("10.0.0.2"), 1000, 2000, b"x")))
+    data = pcapng([{"name": WIN_GUID.replace("\\\\", "\\"), "description": "IOT"}, {"name": "eth0"}],
+                  [(0, frame, None), (0, frame, None), (1, frame, None)])
+    found = await packet_parser.get_interfaces(BytesSource(data))
+    assert [(i["name"], i["packets"]) for i in found] == [("IOT", 2), ("eth0", 1)]
+    # A capture that records nothing reports nothing.
+    assert await packet_parser.get_interfaces(BytesSource(_build_minimal_pcap())) == []
 
 
 @needs_tshark

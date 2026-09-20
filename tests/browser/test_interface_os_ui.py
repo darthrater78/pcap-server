@@ -163,3 +163,57 @@ async def test_an_unrecorded_name_says_so_on_hover(app_page):
     got = await _row(app_page, CAPTURE, {**PACKET, "interface": "#7", "ifindex": 7, "direction": "in"})
     assert got["text"].split() == ["#7", "in"]
     assert "not recorded" in got["title"]
+
+
+# --- the same right-click on an upload -------------------------------------
+#
+# The Interface column appears on uploads too, from the names the file itself
+# records. A column that cannot be right-clicked behaves differently from
+# every neighbour it sits beside, so that source carries its own filter --
+# a recorded name, not sll.ifindex.
+
+UPLOAD = {**CAPTURE, "id": "cap-up", "interface": "", "origin": "upload"}
+
+
+async def _iface_menu_labels(page, capture, packet):
+    await _row(page, capture, packet)
+    await _show_viewer(page)
+    await page.click("#packet-tbody td.col-iface", button="right")
+    await page.wait_for_selector("#filter-menu")
+    return await page.eval_on_selector_all(
+        "#filter-menu .filter-menu-item", "els => els.map(e => e.textContent)"
+    )
+
+
+async def test_an_upload_that_names_its_interfaces_filters_on_the_recorded_name(app_page):
+    """Windows keeps the friendly name in if_description and a GUID in
+    if_name; Linux keeps the name in if_name. The cell shows whichever was
+    usable, so the filter asks both rather than recording which on every
+    packet."""
+    capture = {**UPLOAD, "recorded_interfaces": ["IOT", "Guest"]}
+    labels = await _iface_menu_labels(
+        app_page, capture, {**PACKET, "interface": "IOT", "ifindex": 0},
+    )
+    # The menu label is elided at 46 chars, so the expression itself is
+    # checked by applying it rather than by reading the label.
+    assert any("frame.interface_name" in label for label in labels)
+    await app_page.click("#filter-menu .filter-menu-item >> nth=0")
+    assert await app_page.input_value("#display-filter") == (
+        'frame.interface_name == "IOT" || frame.interface_description == "IOT"'
+    )
+
+
+async def test_the_column_shows_for_a_capture_whose_file_names_its_interfaces(app_page):
+    """Neither "any" nor mapped, but every packet still has an interface --
+    the file recorded it. The column was hidden on exactly the captures the
+    recorded names were read for, so the names had nowhere to appear."""
+    capture = {**UPLOAD, "recorded_interfaces": ["IOT"]}
+    got = await _row(app_page, capture, {**PACKET, "interface": "IOT", "ifindex": 0})
+    assert not got["thHidden"] and not got["tdHidden"]
+    assert got["text"].split()[0] == "IOT"
+
+
+async def test_the_column_stays_hidden_when_nothing_gives_an_interface(app_page):
+    """A plain single-interface upload, unmapped: every row would be blank."""
+    got = await _row(app_page, UPLOAD, {**PACKET, "interface": "", "ifindex": 0})
+    assert got["thHidden"] and got["tdHidden"]

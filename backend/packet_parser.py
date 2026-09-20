@@ -215,7 +215,7 @@ MAX_EXTRA_COLUMNS = 12
 
 # Fields the built-in columns need, up to and including _ws.col.Info. The MAC
 # fields follow when -e is set, and the operator's own columns after those.
-_BASE_FIELD_COUNT = 20
+_BASE_FIELD_COUNT = 21
 
 # The network-layer address fields, IPv4 then IPv6. These never resolve,
 # whatever -N says (the resolved value lives in the separate *_host fields), so
@@ -228,8 +228,49 @@ _ADDRESS_FIELDS = ["-e", "ip.src", "-e", "ip.dst", "-e", "ipv6.src", "-e", "ipv6
 # A pcapng file (what Wireshark saves) can say, per packet, which interface it
 # was captured on and which way it went. Read beside the Linux cooked header's
 # own fields: an upload has those instead of sll.ifindex/sll.pkttype.
-_PCAPNG_FIELDS = ["-e", "frame.packet_flags_direction", "-e", "frame.interface_name"]
-_PCAPNG_DIRECTION = {"1": "in", "2": "out"}
+_PCAPNG_FIELDS = [
+    "-e", "frame.packet_flags_direction",
+    "-e", "frame.interface_name",
+    "-e", "frame.interface_description",
+]
+_PCAPNG_DIRECTION = {1: "in", 2: "out"}
+
+# What a pcapng's interface name is when it does not name an interface a person
+# would know: Wireshark on Windows records \Device\NPF_{GUID} (tshark doubles
+# the backslashes), and dumpcap's Linux "any" records the pseudo-name "any".
+_UNINFORMATIVE_IFACE = re.compile(r"^(?:any|\\+Device\\+NPF_.*|\{?[0-9a-f]{8}-[0-9a-f-]{27}\}?)$", re.I)
+
+
+def _recorded_direction(flag: str) -> str:
+    """"in", "out" or "" from frame.packet_flags_direction.
+
+    tshark prints the field in hex ("0x00000002"), and only the low two bits
+    are the direction (the rest is other flag data). Read base 16 whatever the
+    spelling: the field is a hex bitfield, and every form one can arrive in --
+    "0x00000002", "00000002", "2" -- means the same two bits. Base 0 would
+    reject the middle one outright, over a leading zero.
+    """
+    try:
+        bits = int(flag, 16) & 3
+    except ValueError:
+        return ""
+    return _PCAPNG_DIRECTION.get(bits, "")
+
+
+def _recorded_interface(name: str, description: str) -> str:
+    """The interface a pcapng records for a packet, if a person could use it.
+
+    The description wins where there is one: on Windows it is the friendly name
+    ("Ethernet") while the name is a GUID. A name that identifies nothing gives
+    "", and the operator's subnet map is the only evidence left.
+    """
+    description = description.strip()
+    if description and not _UNINFORMATIVE_IFACE.match(description):
+        return description[:64]
+    name = name.strip()
+    if name and not _UNINFORMATIVE_IFACE.match(name):
+        return name[:64]
+    return ""
 
 # Whether a packet is an IP fragment, from the header itself. Info cannot say:
 # on the fragment that completes a datagram, tshark prints the reassembled
@@ -241,80 +282,24 @@ def _is_fragment(mf: str, offset: str, v6_fraghdr: str) -> bool:
     return mf in ("1", "True") or offset not in ("", "0") or bool(v6_fraghdr)
 
 
-class SubnetMap:
-    """The operator's subnet -> interface table for a capture (models.SubnetMapping).
-
-    For a packet with no interface of its own, the interface is the one whose
-    subnet the packet's addresses sit in, most specific subnet first, and its
-    direction is what a capture on the box itself would have said: leaving
-    toward a mapped subnet is "out" on that subnet's interface, arriving from
-    one is "in". A packet routed between two mapped subnets is shown where it
-    leaves -- out on the destination's. A direction the pcapng recorded wins
-    over that guess; the subnets then only say which interface.
-    """
-
-    def __init__(self, mappings: list[dict] | None):
-        nets = []
-        for m in mappings or []:
-            try:
-                nets.append((ipaddress.ip_network(m["cidr"], strict=False), str(m["name"])))
-            except (KeyError, TypeError, ValueError):
-                continue
-        self._nets = sorted(nets, key=lambda n: n[0].prefixlen, reverse=True)
-        self._cache: dict[str, str] = {}
-
-    def __bool__(self) -> bool:
-        return bool(self._nets)
-
-    def name_for(self, address: str) -> str:
-        if not address:
-            return ""
-        if address in self._cache:
-            return self._cache[address]
-        name = ""
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            ip = None
-        if ip is not None:
-            for net, iface in self._nets:
-                if ip.version == net.version and ip in net:
-                    name = iface
-                    break
-        if len(self._cache) < 50000:
-            self._cache[address] = name
-        return name
-
-    def place(self, src: str, dst: str, recorded: str) -> tuple[str, str]:
-        """(interface, direction) for one packet, or ("", recorded) unmapped."""
-        s, d = self.name_for(src), self.name_for(dst)
-        if recorded == "out" and (d or s):
-            return d or s, "out"
-        if recorded == "in" and (s or d):
-            return s or d, "in"
-        if d:
-            return d, "out"
-        if s:
-            return s, "in"
-        return "", recorded
-
-
 def _place_packet(
     ifindex: int, pkttype: str, names: dict[int, str], flag: str, pcapng_iface: str,
-    src_addr: str, dst_addr: str, smap: SubnetMap | None,
+    pcapng_desc: str = "",
 ) -> tuple[str, str]:
-    """A packet's interface and direction, from the best evidence it carries:
-    the Linux cooked header ("any" captures), then the subnet map, then what a
-    pcapng recorded."""
+    """A packet's interface and direction, from what the capture itself carries.
+
+    Two sources and no guessing: the Linux cooked header ("any" captures),
+    which has both, and the interface a pcapng records for itself, which has
+    only the name. A capture carrying neither shows neither -- the addresses
+    in a packet cannot say which link it crossed, and inferring it from them
+    was a guess that read like a fact (docs/viewer.md, "what an upload can
+    tell you").
+    """
     if ifindex:
         return _interface(ifindex, names), _SLL_DIRECTION.get(pkttype, "")
     # Cooked v1 records a direction but no interface; pcapng may record one.
-    recorded = _SLL_DIRECTION.get(pkttype, "") or _PCAPNG_DIRECTION.get(flag, "")
-    if smap:
-        iface, direction = smap.place(src_addr, dst_addr, recorded)
-        if iface:
-            return iface, direction
-    return pcapng_iface[:64], recorded
+    recorded = _SLL_DIRECTION.get(pkttype, "") or _recorded_direction(flag)
+    return _recorded_interface(pcapng_iface, pcapng_desc), recorded
 
 
 def _address_pair(v4src: str, v4dst: str, v6src: str, v6dst: str) -> tuple[str, str]:
@@ -472,7 +457,6 @@ async def get_packet_list(
     resolve_names: bool = False,
     interface_names: dict[int, str] | None = None,
     extra_fields: list[str] | None = None,
-    subnet_map: list[dict] | None = None,
     copies: InterfaceCopies | None = None,
 ) -> list[PacketSummary]:
     flags = set(view_flags or [])
@@ -547,7 +531,6 @@ async def get_packet_list(
             raise DisplayFilterError(_filter_rejection(stderr))
 
     expected = _BASE_FIELD_COUNT + (3 if show_mac else 0) + len(extra)
-    smap = SubnetMap(subnet_map)
     packets = []
     for line in stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
@@ -574,11 +557,11 @@ async def get_packet_list(
         ifindex = int(parts[6]) if parts[6].isascii() and parts[6].isdigit() else 0
         src_addr, dst_addr = _address_pair(*parts[10:14])
         iface, direction = _place_packet(
-            ifindex, parts[7], interface_names or {}, parts[14], parts[15], src_addr, dst_addr, smap,
+            ifindex, parts[7], interface_names or {}, parts[14], parts[15], parts[16],
         )
         # An unchanged copy reads as its own link would show it, not as the
         # retransmission tshark's whole-file analysis took it for.
-        link_info = copies.info_on_link(num, parts[19]) if copies else None
+        link_info = copies.info_on_link(num, parts[20]) if copies else None
         packets.append(PacketSummary(
             number=num,
             timestamp=parts[1] if show_time else "",
@@ -586,10 +569,10 @@ async def get_packet_list(
             destination=parts[3] or "N/A",
             protocol=protocol.upper(),
             length=int(parts[5]) if parts[5] else 0,
-            info=parts[19] if link_info is None else link_info,
-            fragment=_is_fragment(*parts[16:19]),
-            src_mac=_mac(parts, 20, 22) if show_mac else "",
-            dst_mac=_mac(parts, 21) if show_mac else "",
+            info=parts[20] if link_info is None else link_info,
+            fragment=_is_fragment(*parts[17:20]),
+            src_mac=_mac(parts, 21, 23) if show_mac else "",
+            dst_mac=_mac(parts, 22) if show_mac else "",
             source_addr=src_addr,
             destination_addr=dst_addr,
             interface=iface,
@@ -866,7 +849,6 @@ async def get_diagram_packets(
     display_filter: str = "",
     resolve_names: bool = False,
     interface_names: dict[int, str] | None = None,
-    subnet_map: list[dict] | None = None,
     copies: InterfaceCopies | None = None,
 ) -> tuple[list[dict], int, dict[str, str]]:
     """Up to `cap` packets matching the filter, how many matched in all, and names.
@@ -912,7 +894,6 @@ async def get_diagram_packets(
         cmd += ["-Y", display_filter]
 
     ifnames = interface_names or {}
-    smap = SubnetMap(subnet_map)
     packets: list[dict] = []
     names: dict[str, str] = {}
     matched = 0
@@ -924,8 +905,8 @@ async def get_diagram_packets(
     stderr_task = asyncio.create_task(proc.stderr.read())
     try:
         while line := await proc.stdout.readline():
-            parts = line.decode(errors="replace").rstrip("\n").split("\t", 16)
-            if len(parts) < 17 or not parts[0].isdigit():
+            parts = line.decode(errors="replace").rstrip("\n").split("\t", 17)
+            if len(parts) < 18 or not parts[0].isdigit():
                 continue
             matched += 1
             if matched > cap:
@@ -935,13 +916,13 @@ async def get_diagram_packets(
             src, dst = parts[1] or "N/A", parts[2] or "N/A"
             src_addr, dst_addr = _address_pair(*parts[7:11])
             iface, direction = _place_packet(
-                ifindex, parts[6], ifnames, parts[11], parts[12], src_addr, dst_addr, smap,
+                ifindex, parts[6], ifnames, parts[11], parts[12], parts[13],
             )
             if resolve_names:
                 _note_name(names, src_addr, src)
                 _note_name(names, dst_addr, dst)
             number = int(parts[0])
-            link_info = copies.info_on_link(number, parts[16]) if copies else None
+            link_info = copies.info_on_link(number, parts[17]) if copies else None
             packets.append({
                 "number": number,
                 "source": src_addr or src,
@@ -950,11 +931,11 @@ async def get_diagram_packets(
                 "length": int(parts[4]) if parts[4].isdigit() else 0,
                 "interface": iface,
                 "direction": direction,
-                "fragment": _is_fragment(*parts[13:16]),
+                "fragment": _is_fragment(*parts[14:17]),
                 "copy_of": copies.original(number) if copies else 0,
                 "copy_nat": copies.translated(number) if copies else False,
                 "copy_link_view": link_info is not None,
-                "info": (parts[16] if link_info is None else link_info)[:DIAGRAM_INFO_MAX],
+                "info": (parts[17] if link_info is None else link_info)[:DIAGRAM_INFO_MAX],
             })
         stderr = await stderr_task
         await proc.wait()
@@ -995,6 +976,57 @@ def _interface(ifindex: int, names: dict[int, str]) -> str:
     if not ifindex:
         return ""
     return names.get(ifindex) or f"#{ifindex}"
+
+
+# How many distinct interfaces one capture is reported as having. A file can
+# name more than a host ever had -- a merge of many captures, or a corrupt
+# interface block -- and the answer is read into a dialog, so it is bounded.
+INTERFACES_MAX = 64
+
+
+async def get_interfaces(source: PcapSource) -> list[dict]:
+    """What a capture says about its own interfaces, one entry each.
+
+    Three kinds of answer, because three kinds of file (docs/viewer.md):
+    a pcapng that records interfaces has a readable `name` and nothing for the
+    operator to do; a Linux cooked v2 capture ("tcpdump -i any") has an
+    `ifindex` and no name, which is what the caller offers to name; a plain
+    single-interface capture has neither and comes back empty.
+
+    Counted per packet in one pass rather than read from the interface blocks,
+    so an interface a file declares but never uses is not offered, and an
+    ifindex is reported whether or not any block mentions it.
+    """
+    cmd = [
+        "tshark", "-r", "-", "-n", "-T", "fields",
+        "-e", "sll.ifindex",
+        "-e", "frame.interface_name",
+        "-e", "frame.interface_description",
+        "-E", "separator=\t", "-E", "quote=n", "-E", "occurrence=f",
+    ]
+    counts: dict[tuple[int, str], int] = {}
+    proc, feeder = await spawn_tool(cmd, source)
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+        while line := await proc.stdout.readline():
+            parts = line.decode(errors="replace").rstrip("\n").split("\t")
+            if len(parts) < 3:
+                continue
+            ifindex = int(parts[0]) if parts[0].isascii() and parts[0].isdigit() else 0
+            key = (ifindex, _recorded_interface(parts[1], parts[2]))
+            if key == (0, "") or (key not in counts and len(counts) >= INTERFACES_MAX):
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        await stderr_task
+        await proc.wait()
+    finally:
+        await reap_tool(proc, feeder)
+        if not stderr_task.done():
+            stderr_task.cancel()
+    return [
+        {"ifindex": ifindex, "name": name, "packets": packets}
+        for (ifindex, name), packets in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
 
 
 def _mac(parts: list[str], *indexes: int) -> str:

@@ -20,7 +20,7 @@ from backend.models import (
     CaptureStatus,
     ServerInfo,
 )
-from backend.packet_parser import get_packet_count
+from backend.packet_parser import get_interfaces, get_packet_count
 from backend.ssh_manager import MAX_INTERFACE_INDEXES, SSHManager, libpcap_supports_multi_interface
 
 logger = logging.getLogger(__name__)
@@ -568,8 +568,19 @@ class CaptureManager:
             target.unlink(missing_ok=True)
             raise
 
+        # What the file says about its own interfaces, read once now rather
+        # than on every look at the capture list. A failure here is not a
+        # reason to refuse a file that capinfos already accepted: the names are
+        # a convenience, and an empty list reads as "nothing recorded", which
+        # is what every capture before this column had.
+        try:
+            recorded = [i["name"] for i in await get_interfaces(self._pcap_source(target)) if i["name"]]
+        except Exception:
+            logger.warning("could not read interfaces of upload %s", capture_id, exc_info=True)
+            recorded = []
+
         info = self._upload_record(
-            capture_id, user_id, filename, target, started, packet_count,
+            capture_id, user_id, filename, target, started, packet_count, recorded,
         )
         self._captures[capture_id] = info
         self._persist(info)
@@ -587,6 +598,7 @@ class CaptureManager:
         target: Path,
         started: datetime,
         packet_count: int,
+        recorded_interfaces: list[str],
     ) -> CaptureInfo:
         """The record for a stored upload, and what it deliberately leaves empty."""
         return CaptureInfo(
@@ -617,6 +629,9 @@ class CaptureManager:
             local_path=str(target),
             file_size=target.stat().st_size,
             packet_count=packet_count,
+            # Unlike everything blanked above, this IS known about the file --
+            # it was read out of it a moment ago.
+            recorded_interfaces=recorded_interfaces,
         )
 
     async def _write_sealed_upload(self, partial: Path, chunks, max_bytes: int) -> int:
@@ -721,14 +736,6 @@ class CaptureManager:
         if process:
             await self._ssh.stop_tcpdump(process)
 
-        return info
-
-    def set_subnet_map(self, capture_id: str, mappings: list[dict]) -> CaptureInfo:
-        info = self._captures.get(capture_id)
-        if not info:
-            raise KeyError(f"capture {capture_id} not found")
-        info.subnet_map = mappings
-        self._persist(info)
         return info
 
     def rename(self, capture_id: str, name: str) -> CaptureInfo:

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.0 — 2026-09-20
+
+First stable release since 1.0.0, and what `:latest` now points at. It
+gathers everything from the 1.1.0 betas plus the changes below.
+
+### Removed
+
+- **Mapping subnets to interfaces on an uploaded capture is gone**, along with
+  the **Captured on more than one interface** tick box, the **Interfaces**
+  dialog and button, and the stored mapping itself. It let you say which
+  subnet sat behind which interface and derived an interface and a direction
+  for every packet from its addresses. That could not be made correct: a
+  subnet is not an interface, one merely routed through or talked to is not
+  one either, and a packet with both ends inside mapped subnets has no single
+  right answer. The result looked like recorded fact and was a guess. An
+  upload now shows only what its own file records, and `docs/viewer.md`
+  states plainly where that leaves an upload short of a capture taken here.
+  Any mapping stored on an existing capture is dropped on upgrade.
+
+### Added
+
+- **An uploaded capture now shows the interface names its own file records.**
+  A Wireshark or `dumpcap` capture taken on several interfaces names one on
+  every packet, and those names are now used as they stand — the Interface
+  column appears on such an upload, the Traffic Diagram reads it, and
+  right-clicking the column filters on it like every other column. On Windows
+  the file stores a device GUID as the name and the friendly name beside it,
+  and it is the friendly name you see (`Ethernet`, not `\Device\NPF_{…}`).
+
+### Fixed
+
+- **A direction recorded in a capture is no longer silently dropped.** tshark
+  prints the pcapng direction flag in hex and it was being compared against
+  decimal, so the "a recorded direction wins" path had never once run.
+- **The Interface column no longer hides on a capture that has interfaces.**
+  It appeared only on an `any` capture, so an upload whose file named its own
+  interfaces showed no column at all.
+
 ## 1.1.0-beta.9 — 2026-09-19
 
 ### Changed
