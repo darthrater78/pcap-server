@@ -2,10 +2,10 @@
 # fetched by pinned version and checksum in a stage of its own so nothing but
 # the binary reaches the final image. Moving LEGO_VERSION means regenerating
 # backend/tls/lego_providers.json (scripts/gen_lego_providers.py) as well.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS lego
-ARG LEGO_VERSION=5.4.1
-ARG LEGO_SHA256_AMD64=ebb33f1bead5a7c99dd46f1c5734b44cf1eab5b5c12faf397cd14d50a5916419
-ARG LEGO_SHA256_ARM64=8494c06bde449ac4d65c726b7ea50d67ac61f422e698c9b78b47778445b098f2
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS lego
+ARG LEGO_VERSION=5.5.2
+ARG LEGO_SHA256_AMD64=2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef
+ARG LEGO_SHA256_ARM64=15b14ec2ab14fde69cc8396eb0204c5ce4327e31a486953225a6059b26db3e8c
 ARG TARGETARCH
 COPY backend/tls/fetch_lego.py /tmp/fetch_lego.py
 RUN case "${TARGETARCH:-amd64}" in \
@@ -21,7 +21,7 @@ RUN case "${TARGETARCH:-amd64}" in \
 # Debian and CPython patch, so the tag alone builds a different image each week.
 # The digest is the multi-arch index (amd64 and arm64). .github/dependabot.yml
 # proposes the new digest when the tag moves, so the pin does not go stale.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tshark \

@@ -29,16 +29,18 @@ jobs:
   # the commit the tag points at.
   #
   # That key is the right one because of how this repo releases: the tag is
-  # pushed at the branch head, so the tag's commit and the branch push's commit
-  # are the same SHA. check.yml deliberately does not run on tag pushes
-  # (branches: ['**'], added in dev.34), which is why there is a run to look up
-  # rather than one about to start alongside this job.
+  # pushed at main's head -- the release PR's merge commit -- and check.yml
+  # runs on every push to main, so the merge commit has a push run of its own.
+  # check.yml deliberately does not run on tag pushes (its push trigger names
+  # branches: [main]), which is why there is a run to look up rather than one
+  # about to start alongside this job.
   #
-  # A passing Check is not enough on its own, because check.yml runs on every
-  # branch -- Dependabot's included. A tag on a commit that only ever existed on
-  # a side branch would find a green run and publish, and could move :dev to
-  # something that was never merged. So the gate first requires the tagged
-  # commit to be on the default branch.
+  # A passing Check is not enough on its own, because check.yml also runs for
+  # every pull request -- Dependabot's included -- keyed on the PR head's SHA.
+  # A tag on a commit that only ever existed on a side branch would find that
+  # green run and publish, and could move :dev to something that was never
+  # merged. So the gate first requires the tagged commit to be on the default
+  # branch.
   gate:
     runs-on: ubuntu-latest
     # The Check wait below gives up at 30 minutes; this is that plus room for

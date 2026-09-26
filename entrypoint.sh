@@ -43,6 +43,9 @@ done
 probe_dir() {
     _dir="$1"
     _probe="$_dir/.pcap-server-write-probe"
+    # Single quotes on purpose: "$1" is expanded by the inner sh, which gets the
+    # probe path as its first argument, never spliced into the script text.
+    # shellcheck disable=SC2016
     if err=$(gosu appuser sh -c 'printf ok > "$1" && rm -f "$1"' _ "$_probe" 2>&1); then
         return 0
     fi

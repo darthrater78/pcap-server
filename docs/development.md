@@ -10,8 +10,10 @@ cd pcap-server
 
 `scripts/check.sh` is the whole test story. It builds a virtualenv, installs
 `backend/requirements-dev.txt` into it, reports which of tshark, tcpdump,
-capinfos and a chromium binary it found, and runs pytest with `-r s` so a
-skipped test is printed with its reason rather than quietly dropped.
+capinfos and a chromium binary it found, runs shellcheck over every tracked
+`*.sh` file (a notice locally when shellcheck is missing, a failure in CI), and
+runs pytest with `-r s` so a skipped test is printed with its reason rather than
+quietly dropped.
 `.github/workflows/check.yml` runs that same script rather than reimplementing
 the checks, so CI and a developer's machine cannot pass and fail independently
 of each other.

@@ -199,7 +199,7 @@ with an action to forget them all.
 | Sessions | 48 random bytes; the database stores **only the SHA-256 digest**, so a leaked database hands over no live sessions |
 | Cookie | `HttpOnly`, `SameSite=Strict`, `Secure` by default |
 | Expiry | absolute and idle, both adjustable; an idle session is deleted, not merely rejected |
-| Second factor | TOTP, enforced by the API and not only by the UI |
+| Second factor | TOTP, enforced by the API and not only by the UI; each code is accepted once, so one seen over a shoulder or replayed from a captured request is refused |
 | Trusted devices | separate token, also stored as a digest, with its own expiry |
 | Login throttling | per client IP, adjustable, default five attempts then fifteen minutes |
 

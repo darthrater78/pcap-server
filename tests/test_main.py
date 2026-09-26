@@ -299,6 +299,88 @@ def test_confirming_totp_opens_the_rest_of_the_api(client, half_enrolled):
     assert client.get("/api/servers").status_code == 200
 
 
+def test_an_enrolment_code_cannot_be_used_twice(client, half_enrolled):
+    secret = client.get("/api/auth/totp/setup").json()["secret"]
+    code = pyotp.TOTP(secret).now()
+    assert client.post("/api/auth/totp/confirm", json={"code": code}).status_code == 200
+    # Put the account back to unconfirmed with the same secret and step record,
+    # so the only thing that can refuse the second confirm is the replay check.
+    main.db._conn().execute("UPDATE users SET totp_confirmed = 0 WHERE id = ?", (half_enrolled,))
+    main.db._conn().commit()
+    assert client.post("/api/auth/totp/confirm", json={"code": code}).status_code == 400
+
+
+# --- a TOTP code signs in once (RFC 6238 section 5.2) -------------------------
+
+_REPLAY_PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture()
+def totp_account(monkeypatch):
+    """A real password and a real secret, so /api/auth/login runs end to end."""
+    from backend.auth import RateLimiter, hash_password
+
+    # A fresh limiter, so failures recorded here cannot lock out other tests.
+    monkeypatch.setattr(main, "rate_limiter", RateLimiter())
+    user_id = str(uuid.uuid4())
+    username = f"replay-{user_id[:8]}"
+    secret = pyotp.random_base32()
+    main.db.create_user(user_id, username, hash_password(_REPLAY_PASSWORD))
+    main.db.set_totp_secret(user_id, secret)
+    main.db.confirm_totp(user_id)
+    try:
+        yield SimpleNamespace(id=user_id, username=username, secret=secret)
+    finally:
+        main.db.delete_user(user_id)
+
+
+def _login(c: TestClient, account, code: str):
+    return c.post("/api/auth/login", json={
+        "username": account.username, "password": _REPLAY_PASSWORD, "totp_code": code,
+    })
+
+
+def test_a_totp_code_signs_in_once(secure_client, totp_account):
+    code = pyotp.TOTP(totp_account.secret).now()
+    assert _login(secure_client, totp_account, code).status_code == 200
+    secure_client.cookies.clear()
+    replay = _login(secure_client, totp_account, code)
+    assert replay.status_code == 401
+    assert "session" not in replay.cookies
+
+
+def test_a_code_older_than_one_already_used_is_refused(secure_client, totp_account):
+    """Steps only move forward: once the current code is used, the previous
+    step's code -- still inside the drift window -- is a replay too."""
+    totp = pyotp.TOTP(totp_account.secret)
+    now_step = totp.timecode(datetime.now(timezone.utc))
+    assert _login(secure_client, totp_account, totp.generate_otp(now_step)).status_code == 200
+    secure_client.cookies.clear()
+    assert _login(secure_client, totp_account, totp.generate_otp(now_step - 1)).status_code == 401
+
+
+def test_the_next_step_still_signs_in_after_the_current_one(secure_client, totp_account):
+    """Refusing replays must not refuse the next legitimate code."""
+    totp = pyotp.TOTP(totp_account.secret)
+    now_step = totp.timecode(datetime.now(timezone.utc))
+    assert _login(secure_client, totp_account, totp.generate_otp(now_step)).status_code == 200
+    secure_client.cookies.clear()
+    assert _login(secure_client, totp_account, totp.generate_otp(now_step + 1)).status_code == 200
+
+
+def test_resetting_totp_clears_the_used_step(totp_account):
+    main.db.consume_totp_step(totp_account.id, 10**9)
+    main.db.reset_totp(totp_account.id)
+    assert main.db.get_user(totp_account.id)["totp_last_step"] is None
+
+
+def test_consume_totp_step_accepts_each_step_once(totp_account):
+    assert main.db.consume_totp_step(totp_account.id, 100) is True
+    assert main.db.consume_totp_step(totp_account.id, 100) is False
+    assert main.db.consume_totp_step(totp_account.id, 99) is False
+    assert main.db.consume_totp_step(totp_account.id, 101) is True
+
+
 def test_no_session_is_still_a_401_not_a_403(client):
     """The two refusals mean different things: 401 is "sign in", 403 here is
     "you are signed in but only halfway"."""

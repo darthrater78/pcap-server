@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.1.1 — 2026-09-26
+
+A security patch. Nothing changes in how the app behaves apart from the TOTP fix below.
+
+### Security
+
+- **A TOTP code now signs in once.** Codes were accepted anywhere in their
+  ±30-second drift window and nothing recorded that one had been used, so the
+  same six digits worked again for up to about ninety seconds -- for anyone who
+  saw them typed, phished them, or replayed the request. Each account now
+  remembers the last time step it signed in with and refuses that step and any
+  earlier one, at login and at enrolment (RFC 6238 §5.2). A replayed code is
+  refused exactly like a wrong one and counts against the login rate limit the
+  same way. Resetting an account's TOTP clears the record along with the secret.
+- **Rebuilt on a current base image.** The 1.1.0 image carried Debian packages
+  with published fixes. The one reachable from the app was **pcre2**
+  (CVE-2026-86145, CVE-2026-89157, CVE-2026-89161): tshark compiles the regex in
+  a display filter's `matches` operator with it, so any signed-in user could
+  hand it a pattern. The rest (perl, gzip, sqlite's FTS5) are in the image but
+  not on any path the app runs; the rebuild clears them anyway.
+- **starlette 1.7.0 and uvicorn 0.54.0**, from 1.6.0 and 0.53.0.
+- **lego 5.5.2**, from 5.4.1, for built-in HTTPS. The DNS provider list is
+  regenerated to match.
+
+### Development
+
+- `scripts/check.sh` now shellchecks every tracked `*.sh` file, the image's
+  `entrypoint.sh` included. Missing shellcheck is a notice on a developer's
+  machine and a failure in CI, where the runner always has it.
+- The browser suites' sign-in helper hands out a code for a TOTP step the
+  server has not used yet, since the same code no longer works twice.
+- `httpx2` joins the dev requirements: starlette 1.7.0's test client prefers
+  it and warned on every run without it.
+- Old session handoff notes under `.claude/` are removed, and the dev-skills
+  gate file is no longer tracked.
+
+### Upgrading
+
+Pull `1.1.1` and recreate the container. The database gains one column on
+first start; there is nothing to do by hand. Anyone signed in is signed out by
+the restart, as on every start.
+
 ## 1.1.0 — 2026-09-20
 
 First stable release since 1.0.0, and what `:latest` now points at. It

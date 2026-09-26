@@ -301,9 +301,24 @@ def get_totp_uri(secret: str, username: str, issuer: str = "pcap-server") -> str
     return pyotp.totp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
 
 
-def verify_totp(secret: str, code: str) -> bool:
+def verify_totp(secret: str, code: str) -> int | None:
+    """The time step `code` belongs to, or None when it matches none.
+
+    One step either side of now is accepted, for clock drift, as before. What
+    changed is the return: a bare True said the code was right but not WHICH
+    code it was, so the same six digits worked again for as long as they stayed
+    in that window -- about ninety seconds for anyone who saw them typed,
+    phished them, or replayed a captured request. RFC 6238 section 5.2 says a
+    verifier must not accept the second attempt of an OTP it already accepted.
+    The step is what the caller hands to Database.consume_totp_step, which
+    accepts each step once per account.
+    """
     totp = pyotp.totp.TOTP(secret)
-    return totp.verify(code, valid_window=1)
+    now_step = totp.timecode(datetime.now(timezone.utc))
+    for step in (now_step - 1, now_step, now_step + 1):
+        if hmac.compare_digest(totp.generate_otp(step), str(code)):
+            return step
+    return None
 
 
 def create_device_trust(db: Database, user_id: str, device_name: str = "Browser") -> str:

@@ -16,6 +16,10 @@ pytest-asyncio==1.4.0
 # browser suites do not share state. -n 0 turns it off when debugging.
 pytest-xdist==3.8.0
 httpx==0.28.1
+# starlette's TestClient prefers httpx2 (pydantic's successor to httpx) since
+# starlette 1.7.0, and warns on every run when only httpx is present. httpx
+# stays: the browser suites drive the live server with httpx.Client directly.
+httpx2==2.13.1
 
 # The browser suites (tests/browser) drive the real UI in a real chromium: the
 # API suites cannot see a form with no way to submit it, or an inline script
