@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate backend/tls/lego_providers.json from a lego source checkout.
 
-    gh api repos/go-acme/lego/tarball/v5.4.1 > lego.tgz
+    gh api repos/go-acme/lego/tarball/v5.5.2 > lego.tgz
     mkdir lego-src && tar xzf lego.tgz -C lego-src --strip-components=1
-    python scripts/gen_lego_providers.py lego-src 5.4.1
+    python scripts/gen_lego_providers.py lego-src 5.5.2
 
 Run it whenever LEGO_VERSION in the Dockerfile moves, and review the diff: it
 is the allowlist of every environment variable an admin can hand to lego.

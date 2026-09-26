@@ -311,6 +311,11 @@ class Database:
         session_columns = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
         if "last_seen" not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN last_seen TEXT")
+        user_columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "totp_last_step" not in user_columns:
+            # The last TOTP time step this account signed in with; see
+            # consume_totp_step. NULL until the first code is accepted.
+            conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER")
         # Usernames used to be derived from active_servers, so deleting the last
         # server that used one silently discarded it. They are stored in their
         # own right now; carry across whatever the derived view was showing.
@@ -465,6 +470,26 @@ class Database:
         self._conn().execute("UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user_id))
         self._conn().commit()
 
+    def consume_totp_step(self, user_id: str, step: int) -> bool:
+        """Accept a TOTP time step for this account at most once.
+
+        True when `step` is later than any step the account has used, and
+        records it; False for a step already used or older than one that was --
+        a replayed code. Steps only move forward, so recording the latest is
+        enough to refuse every earlier code too.
+
+        One conditional UPDATE, not a read and then a write: two requests
+        racing with the same code would both pass a separate read, and the
+        rowcount says which one actually won.
+        """
+        cur = self._conn().execute(
+            "UPDATE users SET totp_last_step = ? "
+            "WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)",
+            (step, user_id, step),
+        )
+        self._conn().commit()
+        return cur.rowcount > 0
+
     def confirm_totp(self, user_id: str) -> None:
         self._conn().execute("UPDATE users SET totp_confirmed = 1 WHERE id = ?", (user_id,))
         self._conn().commit()
@@ -482,7 +507,8 @@ class Database:
         rather than reporting success for a user that does not exist.
         """
         cur = self._conn().execute(
-            "UPDATE users SET totp_secret = NULL, totp_confirmed = 0 WHERE id = ?",
+            "UPDATE users SET totp_secret = NULL, totp_confirmed = 0, totp_last_step = NULL "
+            "WHERE id = ?",
             (user_id,),
         )
         self._conn().commit()

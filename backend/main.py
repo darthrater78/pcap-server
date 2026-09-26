@@ -124,7 +124,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -747,7 +747,12 @@ async def login(req: LoginRequest, request: Request, response: Response):
         if not device_trusted:
             if not req.totp_code:
                 return {"needs_totp": True}
-            if not verify_totp(user["totp_secret"], req.totp_code):
+            step = verify_totp(user["totp_secret"], req.totp_code)
+            if step is None or not db.consume_totp_step(user["id"], step):
+                # A replayed code is refused exactly like a wrong one, and
+                # counts against the limiter the same way: telling the two
+                # apart would confirm to whoever replayed it that the code had
+                # been right.
                 rate_limiter.record_failure(client_ip)
                 raise HTTPException(401, "invalid TOTP code")
             if req.trust_device:
@@ -803,7 +808,8 @@ async def totp_confirm(req: TOTPSetupRequest, user: dict = Depends(get_session_u
     secret = user.get("totp_secret")
     if not secret:
         raise HTTPException(400, "run TOTP setup first")
-    if not verify_totp(secret, req.code):
+    step = verify_totp(secret, req.code)
+    if step is None or not db.consume_totp_step(user["id"], step):
         raise HTTPException(400, "invalid code -- scan the QR and enter the current code")
     db.confirm_totp(user["id"])
     return {"ok": True}

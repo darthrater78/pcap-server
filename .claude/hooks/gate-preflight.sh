@@ -6,7 +6,7 @@
 # Claude to check the gates, this makes the check unskippable for anything
 # Claude executes itself.
 #
-# Source of truth is .claude/dev-skills-gates.md (SKILL.md Section 2). A gate
+# Source of truth is .dev-skills-gates.md in the repo root (SKILL.md Section 2). A gate
 # counts as satisfied when its line carries ✅ (passed) or ➖ (N/A).
 #
 # Install: see hooks/README.md
@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-STATE_REL=".claude/dev-skills-gates.md"
+STATE_REL=".dev-skills-gates.md"
 
 # --- output helpers -----------------------------------------------------------
 
@@ -128,7 +128,11 @@ esac
 # --- locate the gate state file -----------------------------------------------
 
 CWD="$(json_get '.cwd')"
-[ -n "$CWD" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
+# A cwd that cannot be entered falls through to the lookup below, which uses
+# CLAUDE_PROJECT_DIR -- said explicitly rather than left to a failed cd.
+if [ -n "$CWD" ] && [ -d "$CWD" ]; then
+  cd "$CWD" 2>/dev/null || true
+fi
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$ROOT" ]; then

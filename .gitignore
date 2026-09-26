@@ -14,3 +14,9 @@ node_modules/
 # Master encryption key. Never commit this.
 secrets/
 *.key
+
+# dev-skills session state. Local only: the gate file is rewritten every
+# session and the handoff lives on refs/dev-skills/handoff, never a branch.
+.dev-skills-gates.md
+.dev-skills-handoff.md
+.claude/dev-skills-gates.md

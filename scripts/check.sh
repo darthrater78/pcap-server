@@ -119,6 +119,24 @@ echo "== Browser for the UI suites =="
 "$PYTHON" tests/browser/browser_binary.py
 echo
 
+# Every tracked shell script, including the entrypoint that ships in the image.
+# The workflows' own run: blocks are shellchecked by actionlint
+# (lint-workflows.yml); this covers the files they call. Missing locally is a
+# notice, the same as tshark above. Missing in CI is a failure: the runner
+# image ships shellcheck, so its absence there means this check silently
+# stopped running.
+echo "== shellcheck =="
+if command -v shellcheck >/dev/null 2>&1; then
+    git ls-files -z '*.sh' | xargs -0 shellcheck
+    echo "  clean: $(git ls-files '*.sh' | wc -l) scripts"
+elif [ -n "${CI:-}" ]; then
+    echo "  shellcheck: not found, and this is CI -- refusing to skip it" >&2
+    exit 1
+else
+    echo "  shellcheck: not found -- shell scripts NOT checked (install shellcheck)"
+fi
+echo
+
 # -r s: always show which tests were skipped and why. A suite that prints
 # "all passed" while quietly dropping the tshark-dependent tests is how a
 # real regression (see the dev.7 -n/-nn mixup) ships unnoticed.

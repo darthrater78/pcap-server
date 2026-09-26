@@ -53,6 +53,7 @@ import pytest
 import pytest_asyncio
 
 from tests.browser.browser_binary import launch_kwargs
+from tests.browser.totp_codes import totp_now  # noqa: F401 -- re-exported for the suites
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -233,7 +234,6 @@ def _seed_admin(url: str) -> str:
     done already. Returns the TOTP secret so tests can produce valid codes.
     """
     import httpx
-    import pyotp
 
     with httpx.Client(base_url=url, timeout=30) as client:
         client.post(
@@ -242,7 +242,7 @@ def _seed_admin(url: str) -> str:
         ).raise_for_status()
         secret = client.get("/api/auth/totp/setup").raise_for_status().json()["secret"]
         client.post(
-            "/api/auth/totp/confirm", json={"code": pyotp.TOTP(secret).now()}
+            "/api/auth/totp/confirm", json={"code": totp_now(secret)}
         ).raise_for_status()
     return secret
 
@@ -382,10 +382,6 @@ async def fresh_page(browser, fresh_server):
         await context.close()
 
 
-def totp_now(secret: str) -> str:
-    import pyotp
-
-    return pyotp.TOTP(secret).now()
 
 
 async def sign_in(page, live_server) -> None:

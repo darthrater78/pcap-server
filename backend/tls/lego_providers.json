@@ -1,5 +1,5 @@
 {
- "lego_version": "5.4.1",
+ "lego_version": "5.5.2",
  "excluded": {
   "exec": "runs an arbitrary program with the challenge -- code execution by configuration",
   "manual": "waits for someone at a terminal to create the record by hand",
@@ -2622,6 +2622,41 @@
    ]
   },
   {
+   "code": "dnsmint",
+   "name": "DNSMint",
+   "url": "https://dnsmint.com/",
+   "docs": "https://go-acme.github.io/lego/dns/dnsmint/",
+   "credentials": [
+    {
+     "name": "DNSMINT_API_KEY",
+     "description": "API key with the dns01:write scope",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "DNSMINT_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 2)",
+     "kind": "text"
+    },
+    {
+     "name": "DNSMINT_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 60)",
+     "kind": "text"
+    },
+    {
+     "name": "DNSMINT_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "DNSMINT_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
    "code": "dode",
    "name": "Domain Offensive (do.de)",
    "url": "https://www.do.de/",
@@ -3302,6 +3337,41 @@
    ]
   },
   {
+   "code": "feno",
+   "name": "FENO",
+   "url": "https://feno.no/",
+   "docs": "https://go-acme.github.io/lego/dns/feno/",
+   "credentials": [
+    {
+     "name": "FENO_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "FENO_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 2)",
+     "kind": "text"
+    },
+    {
+     "name": "FENO_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 60)",
+     "kind": "text"
+    },
+    {
+     "name": "FENO_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "FENO_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
    "code": "fornex",
    "name": "Fornex",
    "url": "https://fornex.com/",
@@ -3783,6 +3853,11 @@
      "name": "GCE_IMPERSONATE_SERVICE_ACCOUNT",
      "description": "Service account email to impersonate",
      "kind": "text"
+    },
+    {
+     "name": "GCE_ACCESS_TOKEN",
+     "description": "The OAuth2 access token used by the client to authenticate against the Google Cloud API.",
+     "kind": "secret"
     },
     {
      "name": "GCE_POLLING_INTERVAL",
@@ -5486,6 +5561,41 @@
     {
      "name": "MYDNSJP_HTTP_TIMEOUT",
      "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "myra",
+   "name": "Myra",
+   "url": "https://www.myrasecurity.com/en/",
+   "docs": "https://go-acme.github.io/lego/dns/myra/",
+   "credentials": [
+    {
+     "name": "MYRA_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    },
+    {
+     "name": "MYRA_API_SECRET",
+     "description": "API secret",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "MYRA_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 20)",
+     "kind": "text"
+    },
+    {
+     "name": "MYRA_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 600)",
+     "kind": "text"
+    },
+    {
+     "name": "MYRA_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
      "kind": "text"
     }
    ]
@@ -8555,6 +8665,46 @@
     },
     {
      "name": "WANNAFIND_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "webglobe",
+   "name": "Webglobe",
+   "url": "https://www.webglobe.com/",
+   "docs": "https://go-acme.github.io/lego/dns/webglobe/",
+   "credentials": [
+    {
+     "name": "WEBGLOBE_LOGIN",
+     "description": "Username",
+     "kind": "text"
+    },
+    {
+     "name": "WEBGLOBE_API_KEY",
+     "description": "API token",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "WEBGLOBE_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 2)",
+     "kind": "text"
+    },
+    {
+     "name": "WEBGLOBE_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 60)",
+     "kind": "text"
+    },
+    {
+     "name": "WEBGLOBE_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "WEBGLOBE_HTTP_TIMEOUT",
      "description": "API request timeout in seconds (Default: 30)",
      "kind": "text"
     }

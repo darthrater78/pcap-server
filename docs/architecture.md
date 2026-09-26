@@ -376,7 +376,7 @@ required on the target: there is no password to give it.
 | Sessions | 48 bytes from `secrets.token_urlsafe`. **The database stores only the SHA-256 digest**, so a leaked database does not hand over live sessions |
 | Cookie | `HttpOnly`, `SameSite=Strict`, `Secure` by default (`COOKIE_SECURE=false` for plain-HTTP deployments) |
 | Expiry | Absolute expiry enforced in SQL, idle expiry enforced on read. An idle session is *deleted*, not merely rejected, so a later request inside the window cannot revive it |
-| Second factor | TOTP with `pyotp`, one-step validation window either side of the current code |
+| Second factor | TOTP with `pyotp`, one-step validation window either side of the current code. **Each code signs in once** (RFC 6238 §5.2): the account records the last time step it accepted (`users.totp_last_step`) and refuses that step and any earlier one, in one conditional `UPDATE` so two racing requests cannot both win. A replay is refused and rate-limited exactly like a wrong code |
 | Second-factor reset | An admin may reset **another** account (`POST /api/admin/users/{id}/totp/reset`), which NULLs the secret, deletes every session that account holds and forgets its trusted devices. Self-reset is refused: reaching a route means already being past the second factor, so it cannot help a locked-out admin, and it would let a stolen session strip MFA and enrol the thief's own authenticator. The locked-out sole admin is answered out of band by `python -m backend.resetmfa`, at the bar of host access |
 | Trusted devices | Separate 48-byte token, also stored as a digest, with its own expiry |
 | Login throttling | Per-client-IP, five attempts then a fifteen-minute lockout, both adjustable at runtime |
@@ -953,7 +953,8 @@ Adjustable from the Admin panel, applied without a restart:
 
 `scripts/check.sh` is the single entry point, used by CI and locally so the two
 cannot drift. It reports which of `tshark`, `tcpdump`, `capinfos` and `docker`
-are present, then runs pytest with `-r s` so skipped tests appear in the report.
+are present, shellchecks every tracked shell script, then runs pytest with
+`-r s` so skipped tests appear in the report.
 A suite that prints "all passed" while quietly dropping the tshark-dependent
 tests is how a real regression ships unnoticed.
 
