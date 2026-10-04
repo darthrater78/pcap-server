@@ -62,12 +62,23 @@ image tag, spelled the way `docker pull` / `docker-compose.yml` needs it.
 |---|---|
 | `1.0.0` | A specific release, and what the compose file at tag `v1.0.0` pins its image to. Reproducible: the same tag is the same bytes next month |
 | `:latest` | A floating tag moved to each new stable release. `docker compose pull` will change the running version underneath you without the compose file changing at all |
-| `:dev` | A floating tag moved to each new `-dev` build only. It does not follow stable releases: it stays on the last dev build (0.1.0-dev.40) until another dev build is published |
+| `:dev` | A floating tag moved to each new `-dev` build only. It does not follow stable releases: it stays on the last dev build (0.1.0-dev.40) until another dev build is published. A dev build can come from a release branch that has not been merged to `main` yet, so `:dev` can be ahead of anything in a stable release — never run it in production |
 | `1.1.0-beta.1` (or any `-beta`/`-rc` version) | A prerelease with no floating tag at all — it is not what `:latest` or `:dev` point to, and pulling either will not get it. Pin the exact version (no `v`) if you want to try one |
 
 Pin a release unless you specifically want to track. The
 [releases page](https://github.com/darthrater78/pcap-server/releases) lists what
 is available; the `docker-compose.yml` at a given tag names the matching image.
+
+Every published image is scanned before it gets any of these tags: a release
+whose image has a HIGH or CRITICAL vulnerability with a fix available is
+refused rather than published (`trivy.yaml` says what counts). From the first
+release after 1.1.1, each image also carries a signed build-provenance record,
+which says it was built by this repository's release workflow from the tagged
+commit. Check one with the GitHub CLI:
+
+```bash
+gh attestation verify oci://ghcr.io/darthrater78/pcap-server:<version> --owner darthrater78
+```
 
 ### Upgrading
 
