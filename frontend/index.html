@@ -40,25 +40,56 @@
 
 <!-- auth: login/register -->
 <div id="auth-screen" class="auth-container" hidden>
+    <div class="auth-sheet">
+    <div class="auth-mast">
+        <h1 class="auth-wordmark">pcap-server</h1>
+        <p class="auth-tagline">Start tcpdump on your hosts over SSH and read the captures here.</p>
+        <!-- Decoration: a TCP and TLS handshake as a hairline ladder. Not data, so it
+             is hidden from assistive technology, and under 720px with the tagline. -->
+        <svg class="auth-ladder" viewBox="0 0 460 236" aria-hidden="true" focusable="false">
+            <text x="0" y="12">192.168.1.10</text>
+            <text x="460" y="12" text-anchor="end">203.0.113.80</text>
+            <line class="ladder-life" x1="0.5" y1="22" x2="0.5" y2="236"/>
+            <line class="ladder-life" x1="459.5" y1="22" x2="459.5" y2="236"/>
+            <line class="ladder-arrow" x1="1" y1="48" x2="459" y2="48"/>
+            <path class="ladder-head" d="M459 48 l-8 -4 v8 z"/>
+            <text x="230" y="41" text-anchor="middle">SYN</text>
+            <line class="ladder-arrow" x1="459" y1="82" x2="1" y2="82"/>
+            <path class="ladder-head" d="M1 82 l8 -4 v8 z"/>
+            <text x="230" y="75" text-anchor="middle">SYN, ACK</text>
+            <line class="ladder-arrow" x1="1" y1="116" x2="459" y2="116"/>
+            <path class="ladder-head" d="M459 116 l-8 -4 v8 z"/>
+            <text x="230" y="109" text-anchor="middle">ACK</text>
+            <line class="ladder-arrow" x1="1" y1="150" x2="459" y2="150"/>
+            <path class="ladder-head" d="M459 150 l-8 -4 v8 z"/>
+            <text x="230" y="143" text-anchor="middle">Client Hello</text>
+            <line class="ladder-arrow" x1="459" y1="184" x2="1" y2="184"/>
+            <path class="ladder-head" d="M1 184 l8 -4 v8 z"/>
+            <text x="230" y="177" text-anchor="middle">Server Hello</text>
+            <line class="ladder-arrow" x1="1" y1="218" x2="459" y2="218"/>
+            <path class="ladder-head" d="M459 218 l-8 -4 v8 z"/>
+            <text x="230" y="211" text-anchor="middle">Application Data</text>
+        </svg>
+    </div>
     <div class="auth-card">
-        <h1>pcap-server</h1>
-        <p id="auth-subtitle">Remote packet capture &amp; analysis</p>
+        <p id="auth-step" class="auth-step" hidden>Step 1 of 2</p>
+        <h2 id="auth-subtitle" class="auth-title">Sign in</h2>
 
         <div id="config-banner" hidden></div>
 
         <div id="register-form" hidden>
-            <div style="background:var(--bg-surface);border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.8125rem;color:var(--text-secondary)">
-                Welcome to pcap-server. Create your admin account to get started.
-                This will be the only account with user management privileges.
-                You'll set up two-factor authentication next.
+            <div class="callout">
+                This is the only account that can manage users.
+                You set up two-factor sign-in next.
             </div>
             <div class="form-group">
-                <label>Username</label>
-                <input type="text" id="reg-username" autocomplete="username" placeholder="Choose a username">
+                <label for="reg-username">Username</label>
+                <input type="text" id="reg-username" autocomplete="username">
             </div>
             <div class="form-group">
-                <label>Password (min 8 characters)</label>
-                <input type="password" id="reg-password" autocomplete="new-password" placeholder="Choose a strong password">
+                <label for="reg-password">Password</label>
+                <input type="password" id="reg-password" autocomplete="new-password" aria-describedby="reg-password-hint">
+                <div id="reg-password-hint" class="field-hint">At least 8 characters.</div>
             </div>
             <button id="btn-register" class="btn btn-primary">Create admin account</button>
             <div id="reg-error" class="error-msg"></div>
@@ -66,17 +97,17 @@
 
         <div id="login-form" hidden>
             <div class="form-group">
-                <label>Username</label>
+                <label for="login-username">Username</label>
                 <input type="text" id="login-username" autocomplete="username">
             </div>
             <div class="form-group">
-                <label>Password</label>
+                <label for="login-password">Password</label>
                 <input type="password" id="login-password" autocomplete="current-password">
             </div>
             <div id="totp-group" class="form-group" hidden>
-                <label>TOTP Code</label>
+                <label for="login-totp">6-digit code</label>
                 <input type="text" id="login-totp" autocomplete="one-time-code" inputmode="numeric" maxlength="6">
-                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer">
+                <label class="check-row">
                     <input type="checkbox" id="login-trust-device" checked>
                     <span>Trust this device for 30 days</span>
                 </label>
@@ -92,13 +123,15 @@
             <span id="auth-version"></span>
         </div>
     </div>
+    </div>
 </div>
 
 <!-- auth: TOTP setup -->
 <div id="totp-setup-screen" class="auth-container" hidden>
     <div class="auth-card">
-        <h1>Set up two-factor auth</h1>
-        <p>Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+        <p id="totp-step" class="auth-step" hidden>Step 2 of 2</p>
+        <h1>Set up two-factor sign-in</h1>
+        <p>Scan this code with your authenticator app, or type the key below into it.</p>
         <div class="qr-container">
             <img id="totp-qr" alt="TOTP QR code">
         </div>
@@ -106,10 +139,10 @@
             <span id="totp-secret-text"></span>
         </div>
         <div class="form-group">
-            <label>Enter code from app to confirm</label>
-            <input type="text" id="totp-confirm-code" inputmode="numeric" maxlength="6">
+            <label for="totp-confirm-code">6-digit code from the app</label>
+            <input type="text" id="totp-confirm-code" autocomplete="one-time-code" inputmode="numeric" maxlength="6">
         </div>
-        <button id="btn-confirm-totp" class="btn btn-primary">Confirm &amp; enable MFA</button>
+        <button id="btn-confirm-totp" class="btn btn-primary">Confirm and turn on</button>
         <div id="totp-error" class="error-msg"></div>
     </div>
 </div>

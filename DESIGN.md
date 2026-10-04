@@ -243,6 +243,7 @@ Square everything: `rounded.none` on buttons, inputs, panes, dialogs and checkbo
 - **Status lines:** shape + word in the status colour, e.g. "■ ready", "▲ check sudo", "✕ no tcpdump".
 - **Callout:** `surface-sunken` block with no border, body-sm text. Used for hints such as where the tcpdump flags went.
 - **Empty states:** one sentence on what will appear, and the one button that makes it appear.
+- **Decoration:** empty space may hold one quiet drawing made of the product's own material, never a picture. Sign-in: a handshake ladder under the tagline (1px `muted` arrows, `rule` lifelines, Plex Mono 12px labels). Servers welcome and Admin overview: one packet as a hex dump, Plex Mono 12px at 42% `muted`. On a pane wider than its content plus the dump (Servers with a server chosen, any Admin section), the dump moves to the pane's top right margin. No colour, no motion, hidden below 720-820px, and never where it could sit over content.
 - **Delete:** the Delete button opens an inline confirm that names what will be removed, with a `button-danger` to confirm and a secondary Cancel.
 
 ## Do's and Don'ts

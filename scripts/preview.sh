@@ -29,22 +29,19 @@
 # PREVIEW_PORT (default 8099) picks the host port. It listens on every
 # interface so it can be opened from another device on the LAN.
 #
-# It expects a TLS-terminating reverse proxy in front of it, because that is
-# how the user reaches this preview. So it runs with TRUST_PROXY_HEADERS=true
-# and COOKIE_SECURE=true, the pair docs/reverse-proxy.md describes: the first
-# makes the app believe the proxy's X-Forwarded-Proto: https, which is what
-# lifts the read-only-over-plain-HTTP rule so the UI can be used rather than
-# only looked at; the second marks the session cookie Secure, which the
-# browser will keep because its own hop to the proxy is HTTPS.
+# It is opened straight at http://host:8099, with no proxy, so it has to work
+# over plain HTTP -- which the app refuses on purpose: its session cookie is
+# Secure and it is read-only without TLS. The app is not loosened for this.
+# Instead the container starts scripts/preview_serve.py (mounted in; it is not
+# in the image), which presents every request to the app as one a TLS proxy
+# forwarded, and runs with TRUST_PROXY_HEADERS=true so the app believes it and
+# COOKIE_SECURE=false so the browser keeps the cookie on a plain-HTTP origin.
+# Sign-in then sticks, "Trust this device" is remembered, and nothing is
+# read-only. The sign-in screen still shows its "Not encrypted" banner: the
+# page works that out from its own address, and it is true.
 #
-# Reached directly over plain HTTP instead (http://host:8099), sign-in will
-# not stick -- the browser discards a Secure cookie on a plain-HTTP origin.
-# Use the proxy's URL, or set COOKIE_SECURE=false here for a direct look.
-# Trusting the header means anyone who can reach this port directly can claim
-# HTTPS by sending it; that is acceptable only because this container holds
-# nothing but the fake capture, and it is another reason not to point it at
-# real data. The capture is still loaded from inside the container over
-# loopback, which needs no proxy.
+# That is acceptable only because this container holds nothing but made-up
+# data, and it is another reason never to point it at real captures.
 #
 # The login is fixed and printed below, and sessions never time out (no idle
 # timeout, a year-long session). That is only acceptable because the
@@ -87,6 +84,39 @@ with sqlite3.connect('/app/data/pcap-server.db') as conn:
     ])"
 }
 
+# Made-up servers, so the Servers tab and the capture form have something to
+# show: two whose host key is trusted and one that is not, which is a state the
+# list has to draw. Written straight into the preview's database, like the
+# settings above -- adding a server through the app connects to it, and these
+# hosts do not exist (192.0.2.0/24 is reserved for documentation). Fixed ids,
+# so a re-run changes nothing.
+seed_servers() {
+    docker exec -u appuser "$NAME" python -c "
+import sqlite3
+from datetime import datetime, timezone
+import asyncssh
+now = datetime.now(timezone.utc).isoformat()
+servers = [
+    ('preview-server-1', 'edge-router', '192.0.2.1', 22, 'netops', 1, 'Debian GNU/Linux 13 (trixie)', '1.10.5', True),
+    ('preview-server-2', 'file-server', '192.0.2.20', 22, 'capture', 1, 'Ubuntu 24.04.3 LTS', '1.10.4', True),
+    ('preview-server-3', 'lab-pi', '192.0.2.77', 2222, 'pi', 0, '', '', False),
+]
+with sqlite3.connect('/app/data/pcap-server.db') as conn:
+    user = conn.execute('SELECT id FROM users ORDER BY rowid LIMIT 1').fetchone()[0]
+    for sid, name, host, port, login, sudo, os_name, libpcap, trusted in servers:
+        conn.execute('''INSERT OR IGNORE INTO active_servers
+            (id, user_id, name, hostname, port, username, ssh_key_name, use_sudo, os_name,
+             libpcap_version, added_at, kernel_verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'preview_ed25519', ?, ?, ?, ?, ?)''',
+            (sid, user, name, host, port, login, sudo, os_name, libpcap, now, now if trusted else ''))
+        known = conn.execute('SELECT 1 FROM known_hosts WHERE hostname = ? AND port = ?', (host, port)).fetchone()
+        if trusted and not known:
+            kind, key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode().split()[:2]
+            conn.execute('''INSERT INTO known_hosts (hostname, port, key_type, host_key, added_at, added_by)
+                VALUES (?, ?, ?, ?, ?, ?)''', (host, port, kind, key, now, user))
+"
+}
+
 case "${1:-up}" in
     code) code; exit 0 ;;
     down)
@@ -103,7 +133,7 @@ esac
 # `docker run` argument here -- COOKIE_SECURE, TRUST_PROXY_HEADERS, a mount --
 # left the old container running under the OLD setting and reported "unchanged",
 # which reads exactly like success.
-SRC_HASH=$(cd "$ROOT" && find backend Dockerfile entrypoint.sh scripts/preview.sh \
+SRC_HASH=$(cd "$ROOT" && find backend Dockerfile entrypoint.sh scripts/preview.sh scripts/preview_serve.py \
     -type f -not -path '*/__pycache__/*' -print0 \
     | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
 # The sample capture's own fingerprint: when its generator changes, the
@@ -127,14 +157,15 @@ else
     fi
     docker run -d --name "$NAME" -p "$PORT:8080" --label "preview.src=$SRC_HASH" \
         -e PCAP_MASTER_KEY="$(cat "$KEY_FILE")" \
-        -e COOKIE_SECURE=true \
+        -e COOKIE_SECURE=false \
         -e TRUST_PROXY_HEADERS=true \
         -v "$NAME-data:/app/data" -v "$NAME-captures:/app/captures" \
         -v "$ROOT/frontend:/app/frontend:ro" \
+        -v "$ROOT/scripts/preview_serve.py:/app/preview_serve.py:ro" \
         --tmpfs /app/ssh-keys --tmpfs /tmp \
         --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
         --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true \
-        --read-only "$IMAGE" >/dev/null
+        --read-only "$IMAGE" python /app/preview_serve.py >/dev/null
 fi
 
 # Seed through the public API from inside the container, over loopback. A new
@@ -148,12 +179,12 @@ import http.cookiejar, json, os, sqlite3, sys, time, urllib.request
 import pyotp
 
 base = "http://127.0.0.1:8080"
-# COOKIE_SECURE=true (see the header) marks the session cookie Secure, and a
-# cookiejar will not SEND a Secure cookie over http -- so seeding over loopback
-# would log in with a 200 and then get 401 on every call after it. Browsers
-# make an exception for localhost; urllib does not. Loopback never leaves the
-# machine, which is the same reason the app itself treats it as secure, so the
-# policy is told to allow it here rather than weakening the cookie.
+# Kept for a preview run with COOKIE_SECURE=true: a cookiejar will not SEND a
+# Secure cookie over http, so seeding over loopback would log in with a 200 and
+# then get 401 on every call after it. Browsers make an exception for
+# localhost; urllib does not. Loopback never leaves the machine, so the policy
+# is told to allow it. With COOKIE_SECURE=false (the default here) it changes
+# nothing.
 _policy = http.cookiejar.DefaultCookiePolicy(secure_protocols=("https", "http"))
 opener = urllib.request.build_opener(
     urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar(_policy))
@@ -223,6 +254,7 @@ if [ "$SEEDED" = "restart" ]; then
 fi
 wait_up
 apply_settings
+seed_servers
 SECRET=$(docker exec -u appuser "$NAME" cat /app/data/preview-totp)
 
 if [ -n "$KEPT" ] && [ "$SEEDED" = "unchanged" ]; then
@@ -240,7 +272,7 @@ fi
 HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 cat <<EOF
 
-pcap-server preview is up, with a sample capture loaded${NOTE:-}.
+pcap-server preview is up, with a sample capture and three made-up servers loaded${NOTE:-}.
 
   URL        http://${HOST_IP:-localhost}:$PORT   (or http://localhost:$PORT on this machine)
   Username   $USERNAME

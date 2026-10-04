@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import mimetypes
 import os
 import re
 import time
@@ -124,7 +125,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "2.0.0"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -2917,6 +2918,10 @@ class RevalidatedStatic(StaticFiles):
         response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
+
+# The slim base image has no /etc/mime.types, so Python does not know woff2 and
+# StaticFiles would send the UI's fonts as application/octet-stream.
+mimetypes.add_type("font/woff2", ".woff2")
 
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 if frontend_dir.is_dir():

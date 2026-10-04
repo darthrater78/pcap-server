@@ -1,5 +1,77 @@
 # Changelog
 
+## 2.0.0 — 2026-10-04
+
+A new look, and a rebuilt image. Captures are taken, stored and read exactly as
+before, and nothing in the API, the database or the compose file changes: the
+major version marks the interface, not a break.
+
+### Changed
+
+- **A new look, described in `DESIGN.md`.** Ink on grey-green paper, and a
+  green-black ground in the dark theme instead of true black. There is no
+  accent colour any more: buttons, links and the selected tab are ink, and the
+  only colour on a screen is data (a protocol or a status).
+- **The sign-in, first-run and two-factor setup screens are redrawn.** The name
+  of the app on the left, the form on the right, and on a phone the form under
+  the name. First-run setup says which of its two steps you are on.
+- **The selected packet is marked with a yellow highlighter** and a rule above
+  and below it, rather than an inverted row.
+- **Text is set in IBM Plex**, served by the app itself (SIL Open Font
+  License). Anything a machine produced (addresses, ports, filters, packet
+  rows) is in Plex Mono. No font is fetched from another site.
+- **Empty space holds a quiet drawing.** A handshake ladder beside the sign-in
+  form, and one packet as a faint hex dump on the Servers and Admin screens
+  where there is room. No colour, no motion, and hidden on a phone.
+- **Square corners everywhere**, and form fields are an underline rather than
+  a box.
+
+### Not redrawn yet
+
+Every screen has the new colours and type, but only the sign-in screens and the
+selected packet row are redrawn to the design. The top bar, the capture form,
+the capture list, Admin and the diagrams keep their 1.1 layout, and some 1.1
+details with it (a coloured stripe on the side of a card, a shadow under a
+dialog). Those follow in later 2.x releases.
+
+### Security
+
+- **Rebuilt on a current base image.** The 1.1.1 image carried Debian packages
+  with published fixes: **pcre2** (CVE-2026-103111) and **OpenSSL**
+  (CVE-2026-75804, CVE-2026-84782). The pcre2 one is reachable from the app:
+  tshark compiles the regex in a display filter's `matches` operator with it,
+  so any signed-in user could hand it a pattern. The OpenSSL two are in QUIC and
+  DTLS, which nothing in the app uses; the rebuild clears them anyway.
+- **The image now takes Debian's security updates as it is built**, rather than
+  only what the pinned base image held. The pcre2 fix was already in Debian but
+  not yet in any `python:3.12-slim`, and waiting for that rebuild would have
+  left it open.
+- **Every image is scanned before it is published.** A release whose image has
+  a HIGH or CRITICAL vulnerability with a fix available is now refused instead
+  of tagged. The findings above are what the first scan turned up.
+- **Each image carries a signed build-provenance record**, saying it was built
+  by this repository's release workflow from the tagged commit. Check one with
+  `gh attestation verify oci://ghcr.io/darthrater78/pcap-server:2.0.0 --owner darthrater78`.
+
+### Development
+
+- Pre-release tags (`-dev.N`, `-alpha.N`, `-beta.N`, `-rc.N`) can be built from
+  a release branch that is not merged to `main`. Stable tags are still refused
+  anywhere else, so `:latest` only ever comes from `main`. `:dev` can now point
+  at unmerged code.
+- The README shows a banner for the current dev build whenever a pre-release is
+  ahead of the latest stable release, and nothing otherwise.
+- Pull requests are checked for dependencies with a known HIGH or CRITICAL
+  advisory before they merge.
+- `scripts/preview.sh` can be opened straight over plain HTTP and seeds three
+  made-up servers beside its sample capture.
+
+### Upgrading
+
+Pull `2.0.0` and recreate the container. There is nothing to do by hand. Anyone
+signed in is signed out by the restart, as on every start. A browser that
+cached the old stylesheet picks up the new one on its next load.
+
 ## 1.1.1 — 2026-09-26
 
 A security patch. Nothing changes in how the app behaves apart from the TOTP fix below.
