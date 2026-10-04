@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -780,6 +782,19 @@ def test_revalidation_is_still_cheap(client, path):
     """no-cache means revalidate, not re-download. The ETag has to survive, or
     every page load pays for the whole file again."""
     assert client.get(path).headers.get("etag")
+
+
+def test_every_font_the_stylesheet_names_is_served_as_a_font(client):
+    """The fonts are self-hosted because the CSP is font-src 'self'. A file the
+    stylesheet names and the image does not carry fails silently: the page
+    falls back to a system face and nothing reports it."""
+    css = (Path(__file__).parent.parent / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
+    fonts = re.findall(r"url\((/fonts/[^)]+\.woff2)\)", css)
+    assert fonts, "the stylesheet no longer names any self-hosted font"
+    for path in fonts:
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert resp.headers["content-type"] == "font/woff2", path
 
 
 

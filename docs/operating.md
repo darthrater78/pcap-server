@@ -71,8 +71,8 @@ is available; the `docker-compose.yml` at a given tag names the matching image.
 
 Every published image is scanned before it gets any of these tags: a release
 whose image has a HIGH or CRITICAL vulnerability with a fix available is
-refused rather than published (`trivy.yaml` says what counts). From the first
-release after 1.1.1, each image also carries a signed build-provenance record,
+refused rather than published (`trivy.yaml` says what counts). From 2.0.0,
+each image also carries a signed build-provenance record,
 which says it was built by this repository's release workflow from the tagged
 commit. Check one with the GitHub CLI:
 

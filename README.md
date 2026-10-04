@@ -11,6 +11,9 @@ Built for the case where the machine you need to capture on is not the machine
 you want to analyse from: a firewall, a hypervisor, a container host, a box you
 only reach over SSH.
 
+**Current release: 2.0.0** — [release notes](https://github.com/darthrater78/pcap-server/releases/tag/v2.0.0) ·
+[source on GitHub](https://github.com/darthrater78/pcap-server)
+
 **Contents** — [Quick start](#quick-start) · [HTTPS](#https) ·
 [Your first capture](#your-first-capture) · [What it does](#what-it-does) ·
 [Requirements](#requirements) · [Using it](#using-it) ·
@@ -23,7 +26,7 @@ only reach over SSH.
 **There is nothing to clone and nothing to build.**
 
 1. Go to
-   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v1.1.1/docker-compose.yml)
+   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v2.0.0/docker-compose.yml)
    and follow the setup steps at the top of it. They have you paste its
    service block into a file named `compose.yaml` on your Docker host.
 2. **Back up the master key** it generates somewhere other than this machine.
@@ -115,31 +118,34 @@ required, and a target host's SSH keys must be trusted before anything connects.
 SSH keys uploaded through the UI and sealed under the master key, and a
 read-only prerequisite probe that never installs anything.
 
-There is a true-black dark theme, a light one named Flashbang for reasons that
+There is a dark theme on a green-black ground, a light one named Flashbang for reasons that
 become clear at 2am, and a layout that works down to phone width.
 
-<img width="2550" height="853" alt="Test connection and prerequisite check" src="https://github.com/user-attachments/assets/2f33e3e5-d2bb-4fa0-9d36-8f72687861fb" />
+<img alt="Sign in" src="docs/screenshots/sign-in.png" />
+Sign in, with two-factor codes and a 30-day trusted device.
+
+<img alt="Test connection and prerequisite check" src="docs/screenshots/prerequisite-check.png" />
 Validate SSH key with Test Connection and perform a prerequisite check
 
-<img width="1333" height="388" alt="Capture page" src="https://github.com/user-attachments/assets/a24074a5-d314-4461-849d-7cbcda455cc5" />
+<img alt="Capture page" src="docs/screenshots/capture-page.png" />
 Full capture page allows for viewing, pcap sanitization, and/or download.
 
-<img width="2555" height="804" alt="Interface selection" src="https://github.com/user-attachments/assets/c2e58875-4cf1-413e-86e2-04c40b09e49a" />
+<img alt="Interface selection" src="docs/screenshots/interface-selection.png" />
 Easily target any interface on the remote
 
-<img width="2528" height="693" alt="BPF filter library" src="https://github.com/user-attachments/assets/c94b24f2-673a-4b6b-a27d-6b8060907e2c" />
+<img alt="BPF filter library" src="docs/screenshots/filter-library.png" />
 Interactive BPF filter library on the capture screen.
 
-<img width="2527" height="1254" alt="Packet viewer" src="https://github.com/user-attachments/assets/50f6039e-6c9d-4441-a9d5-8a367a3a37c4" />
+<img alt="Packet viewer" src="docs/screenshots/packet-viewer.png" />
 Wireshark like actions in the browser for quick analysis.
 
-<img width="1293" height="388" alt="Encryption" src="https://github.com/user-attachments/assets/c78d0b10-a470-46b5-92d4-06d0205e1cdb" />
+<img alt="Encryption" src="docs/screenshots/encryption.png" />
 Robust encryption and security for data moving and at rest
 
-<img width="1293" height="459" alt="ACME integration" src="https://github.com/user-attachments/assets/dfb547f3-adcc-4f40-8567-63c1e2e15c71" />
+<img alt="ACME integration" src="docs/screenshots/https.png" />
 ACME/Certbot Integration
 
-<img width="2550" height="853" alt="Flashbang theme" src="https://github.com/user-attachments/assets/dbb3a01e-81ad-4f7c-9f96-b4f2779481f5" />
+<img alt="Flashbang theme" src="docs/screenshots/flashbang-theme.png" />
 For those who hate eyes, a "Flashbang" theme.
 
 ## Requirements

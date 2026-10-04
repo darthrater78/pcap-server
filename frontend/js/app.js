@@ -379,14 +379,16 @@ async function checkAuth() {
         show("auth-screen");
         show("register-form");
         hide("login-form");
-        $("auth-subtitle").textContent = "Create the first admin account to get started";
+        show("auth-step");
+        $("auth-subtitle").textContent = "Create the first admin account";
         return;
     }
     if (!status.authenticated) {
         show("auth-screen");
         hide("register-form");
         show("login-form");
-        $("auth-subtitle").textContent = "Sign in to continue";
+        hide("auth-step");
+        $("auth-subtitle").textContent = "Sign in";
         return;
     }
     currentUser = status.user;
@@ -409,6 +411,9 @@ async function doRegister() {
         });
         if (result.needs_totp_setup) {
             hide("auth-screen");
+            // Straight from creating the first account: this is step 2 of the
+            // same setup. A later user enrolling at first sign-in has no step 1.
+            show("totp-step");
             await showTotpSetup();
         } else {
             location.reload();
