@@ -1,0 +1,14 @@
+# What fails release.yml's image scan. Read by the trivy step there, and by a
+# local scan of a test build with the same flags.
+severity:
+  - HIGH
+  - CRITICAL
+scan:
+  scanners:
+    - vuln
+pkg:
+  types:
+    - os          # the base image's Debian packages, tshark and tcpdump included
+    - library     # Python packages in the image, including pip's own, which requirements.txt never names
+vulnerability:
+  ignore-unfixed: true   # nothing to bump to yet

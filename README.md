@@ -1,5 +1,8 @@
 # pcap-server
 
+<!-- Dev-build banner: drawn by .github/workflows/dev-banner.yml after every release, empty when no pre-release is ahead of the latest release. -->
+<a href="https://github.com/darthrater78/pcap-server/releases"><img alt="Dev build status" src="https://raw.githubusercontent.com/darthrater78/pcap-server/readme-banner/banner.svg" /></a>
+
 Run tcpdump on your servers over SSH and read the results in a Wireshark-style
 web interface. Captures come back encrypted, are never written to disk in the
 clear, and are browsable packet by packet in the browser.
