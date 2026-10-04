@@ -41,6 +41,16 @@ jobs:
   # green run and publish, and could move :dev to something that was never
   # merged. So the gate first requires the tagged commit to be on the default
   # branch.
+  #
+  # Pre-release tags (-dev.N, -alpha.N, -beta.N, -rc.N) are the one exception,
+  # and a deliberate one: 2.0 is built on redesign/2.0 and its dev builds are
+  # tagged there, so that no -dev version ever has to be merged to main just
+  # to be tried. For those the branch requirement is skipped and the other two
+  # stand: APP_VERSION in the tagged commit must equal the tag, and Check must
+  # have passed for it (check.yml runs on pushes to redesign/** for exactly
+  # this). A dev tag still moves :dev, now possibly to an unmerged build.
+  # :latest is out of reach -- only a stable tag moves it, and a stable tag is
+  # still refused anywhere but the default branch.
   gate:
     runs-on: ubuntu-latest
     # The Check wait below gives up at 30 minutes; this is that plus room for
@@ -55,9 +65,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+
+          # The whole tag has to be a pre-release version, not merely contain
+          # "-dev": v2.0.0-dev, v2.0.0-dev.1-final and v2.0.0-devel.1 all fall
+          # through to the branch check below.
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(dev|alpha|beta|rc)\.[0-9]+$ ]]; then
+            echo "${TAG} is a pre-release tag -- not required to be on ${DEFAULT_BRANCH}."
+            exit 0
+          fi
 
           # compare/<tag commit>...<default branch> reports how the branch
           # stands relative to the commit. "identical" (the commit is the head)
@@ -70,7 +89,7 @@ jobs:
               echo "${SHA} is on ${DEFAULT_BRANCH} (${status})."
               ;;
             *)
-              echo "::error::${SHA} is not on ${DEFAULT_BRANCH} (compare status: ${status}). Refusing to publish a commit that was never merged."
+              echo "::error::${SHA} is not on ${DEFAULT_BRANCH} (compare status: ${status}). Refusing to publish a commit that was never merged. A build from a feature branch needs a pre-release tag (e.g. v2.0.0-dev.1)."
               exit 1
               ;;
           esac
@@ -332,6 +351,11 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # The build-provenance attestation below: id-token is the job's OIDC
+      # identity, which is what signs it, and attestations is where GitHub
+      # records it. Neither can read or write code or packages.
+      id-token: write
+      attestations: write
 
     # Every action is pinned to a commit SHA rather than a moving major tag.
     # This job holds `contents: write` and `packages: write`: a tag an action's
@@ -432,6 +456,7 @@ jobs:
           echo "Building v${version}; pushing ${image}:${version}${moving:+ and ${image}${moving}}"
 
           {
+            echo "image=$image"
             echo "version=$version"
             echo "prerelease=$prerelease"
             echo "release_name=$release_name"
@@ -560,13 +585,66 @@ jobs:
       # Cache-hit rebuild of the exact tree just smoke-tested, so this is
       # seconds rather than a second full build. cache-to lives on the build
       # above; repeating it here would just race that export.
-      - name: Build and push image
+      #
+      # Pushed by digest only. This step used to push straight to the version
+      # tag and :dev or :latest, so an image nothing had scanned was what
+      # `docker pull` returned from that moment on. Now no tag points at it
+      # until the scan below passes; a digest that fails is left untagged,
+      # which nobody pulls by accident.
+      - name: Build and push by digest
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
+
+      # The gate: a HIGH or CRITICAL vulnerability that has a fix available
+      # stops the release here, before any tag exists. trivy.yaml says what
+      # counts, .trivyignore.yaml holds each accepted finding with its reason
+      # and expiry. Both the action and the trivy binary are pinned, so a scan
+      # result changes because the image or the advisory database did, never
+      # because the scanner moved.
+      #
+      # When this fails it is nearly always the base image: bump the digest in
+      # the Dockerfile's FROM line (Dependabot proposes it weekly), or the pin
+      # in backend/requirements.txt the finding names, and tag a new version.
+      - name: Scan the pushed image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}
+          version: v0.75.0
+          trivy-config: trivy.yaml
+          trivyignores: .trivyignore.yaml
+          format: table
+          exit-code: '1'
+
+      - name: Tag the scanned image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done <<< "$TAGS"
+          # Never with no tags at all: that would exit 0 having published
+          # nothing, and the release below would announce an image that is not
+          # there under any name.
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::No tags to apply to ${IMAGE}@${DIGEST}."; exit 1; }
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+
+      # A signed record that this digest was built by this workflow from this
+      # commit, stored in the registry beside the image. Check one with
+      #   gh attestation verify oci://ghcr.io/<owner>/pcap-server:<version> --owner <owner>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.meta.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
       # The pushed tags must resolve in the registry before a release is
       # announced for them; a push step that exits 0 without landing an image

@@ -1,7 +1,7 @@
 name: Check
 
 on:
-  # The default branch only, and no tags.
+  # The default branch and the redesign/** release branches, and no tags.
   #
   # Tags: a bare `push:` also matches a tag push, which is exactly what fires
   # release.yml -- so tagging a commit this same Check already passed on ran
@@ -15,12 +15,15 @@ on:
   # branch shows the pair: runs 134 (push) and 135 (pull_request), one SHA.
   # `pull_request:` below covers branch work, so this trigger now exists for
   # exactly one reason: release.yml's gate looks up a **push** run on the
-  # commit a tag points at, and tags only ever land here.
+  # commit a tag points at. Stable tags only ever land on main. Pre-release
+  # tags (v2.0.0-dev.N) land on redesign/**, which release.yml's gate allows
+  # for them alone, so those branches are named here too.
   #
-  # The cost is that a branch with no PR open gets no Check. Open a draft PR,
-  # or use the workflow_dispatch below.
+  # The cost is that any other branch with no PR open gets no Check. Open a
+  # draft PR, or use the workflow_dispatch below. And once a redesign/** branch
+  # does have a PR open, each push to it runs the suite twice again, as above.
   push:
-    branches: [main]
+    branches: [main, 'redesign/**']
     # Nothing in this suite reads README.md, docs/**, or CHANGELOG.md --
     # checked, not assumed -- and .claude/ is session scratch, so a push
     # touching only those already gets no coverage whether or not this runs.
@@ -74,6 +77,11 @@ on:
 # passing one: cancelling here would strand a merge commit as untaggable until
 # someone re-ran it by hand. Merges to main are rare enough that the saving is
 # not worth that.
+#
+# redesign/** is not excepted. A dev tag on a commit whose run a later push
+# cancelled is refused by the gate; re-run that Check run, or tag the newer
+# head instead. Pushes there are frequent enough that running every one to
+# completion would cost more than that does.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

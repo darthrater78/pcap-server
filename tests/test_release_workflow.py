@@ -117,6 +117,161 @@ def test_the_real_main_py_matches_the_shape_the_step_reads():
     assert re.search(r'^APP_VERSION = "[^"]+"$', main_py, re.MULTILINE)
 
 
+# --- the default-branch step ----------------------------------------------
+#
+# A stable tag publishes :latest, so it has to be on the default branch. A
+# pre-release tag is allowed anywhere: 2.0's dev builds are tagged on
+# redesign/2.0 so that no -dev version has to be merged to main to be tried.
+# The exception is keyed on the whole tag being a pre-release version.
+
+BRANCH_STEP_NAME = "Require the tagged commit to be on the default branch"
+
+
+def _run_branch_step(tmp_path, *, tag: str, status: str | None):
+    """Run the step with compare answering `status`, or failing when None."""
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    calls = tmp_path / "gh.calls"
+    reply = 'echo "gh: Not Found (HTTP 404)" >&2\nexit 1' if status is None else f'echo "{status}"'
+    (stub / "gh").write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n{reply}\n')
+    (stub / "gh").chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{stub}{os.pathsep}{os.environ['PATH']}",
+        "GH_TOKEN": "unused",
+        "REPO": "owner/repo",
+        "SHA": "abc123",
+        "TAG": tag,
+        "DEFAULT_BRANCH": "main",
+    }
+    result = subprocess.run(
+        ["bash", "-c", _step_script(BRANCH_STEP_NAME)], env=env, capture_output=True, text=True, timeout=30
+    )
+    result.calls = calls.read_text() if calls.exists() else ""  # type: ignore[attr-defined]
+    return result
+
+
+def test_branch_step_is_the_first_thing_the_gate_does():
+    text = RELEASE_YML.read_text(encoding="utf-8")
+    step = text.index(f"- name: {BRANCH_STEP_NAME}")
+    assert text.index("  gate:") < step < text.index(f"- name: {STEP_NAME}")
+
+
+@pytest.mark.parametrize("status", ["identical", "ahead"])
+def test_a_stable_tag_on_the_default_branch_passes(tmp_path, status):
+    result = _run_branch_step(tmp_path, tag="v2.0.0", status=status)
+    assert result.returncode == 0, result.stderr
+    assert "compare/abc123...main" in result.calls
+
+
+@pytest.mark.parametrize("status", ["behind", "diverged"])
+def test_a_stable_tag_off_the_default_branch_is_refused(tmp_path, status):
+    result = _run_branch_step(tmp_path, tag="v2.0.0", status=status)
+    assert result.returncode == 1
+    assert "is not on main" in result.stdout
+
+
+@pytest.mark.parametrize("tag", ["v2.0.0-dev.1", "v2.0.0-alpha.2", "v2.0.0-beta.10", "v2.0.0-rc.1"])
+def test_a_pre_release_tag_is_allowed_off_the_default_branch(tmp_path, tag):
+    result = _run_branch_step(tmp_path, tag=tag, status="diverged")
+    assert result.returncode == 0, result.stderr
+    assert "pre-release tag" in result.stdout
+    # Decided from the tag alone: the branch is never asked about.
+    assert result.calls == ""
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "v2.0.0-dev",  # no build number
+        "v2.0.0-dev.1-final",  # trailing text
+        "v2.0.0-devel.1",  # not one of the four kinds
+        "v2.0.0-dev.x",
+        "2.0.0-dev.1",  # no v
+        "v2.0-dev.1",
+        "release-dev.1",
+        "v2.0.0-dev.1\nv2.0.0",  # a tag name cannot hold a newline; the pattern must not care
+    ],
+)
+def test_a_tag_that_only_resembles_a_pre_release_still_needs_the_branch(tmp_path, tag):
+    result = _run_branch_step(tmp_path, tag=tag, status="diverged")
+    assert result.returncode == 1
+    assert "is not on main" in result.stdout
+
+
+def test_a_compare_that_fails_refuses_a_stable_tag(tmp_path):
+    result = _run_branch_step(tmp_path, tag="v2.0.0", status=None)
+    assert result.returncode != 0
+
+
+def test_no_tag_reaches_the_registry_before_the_image_is_scanned():
+    """The image is pushed by digest, scanned, and only then tagged. A build
+    step that pushes with `tags:` again would put :latest on an unscanned
+    image and this is the only thing that would notice."""
+    text = RELEASE_YML.read_text(encoding="utf-8")
+    release_job = text[text.index("\n  release:\n"):]
+    order = [
+        "- name: Prove the image runs before publishing it",
+        "- name: Build and push by digest",
+        "- name: Scan the pushed image",
+        "- name: Tag the scanned image",
+        "- name: Attest build provenance",
+        "- name: Verify the pushed image resolves",
+        "- name: Create GitHub Release",
+    ]
+    positions = [release_job.index(name) for name in order]
+    assert positions == sorted(positions)
+
+    assert "push-by-digest=true" in release_job
+    assert "push: true" not in release_job
+    # The only build step given tags is the local smoke build, which is never pushed.
+    assert re.findall(r"^          tags: (.*)$", release_job, re.MULTILINE) == [
+        "pcap-server-smoke:${{ steps.meta.outputs.version }}"
+    ]
+    scan = release_job[positions[2]:positions[3]]
+    assert "exit-code: '1'" in scan and "@${{ steps.push.outputs.digest }}" in scan
+    assert re.search(r"^          version: v\d+\.\d+\.\d+$", scan, re.MULTILINE), "the trivy binary is not pinned"
+
+
+def test_the_scan_config_the_release_names_exists():
+    for name in ("trivy.yaml", ".trivyignore.yaml"):
+        assert (REPO_ROOT / name).is_file(), name
+    config = (REPO_ROOT / "trivy.yaml").read_text(encoding="utf-8")
+    assert "HIGH" in config and "CRITICAL" in config
+
+
+def test_tagging_with_no_tags_is_refused(tmp_path):
+    """imagetools create with no -t exits 0 having published nothing."""
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "docker").write_text(f'#!/bin/sh\necho "$*" > "{tmp_path}/docker.args"\n')
+    (stub / "docker").chmod(0o755)
+    env = {**os.environ, "PATH": f"{stub}{os.pathsep}{os.environ['PATH']}", "IMAGE": "ghcr.io/o/r", "DIGEST": "sha256:abc"}
+    script = _step_script("Tag the scanned image")
+
+    empty = subprocess.run(["bash", "-c", script], env={**env, "TAGS": "\n"}, capture_output=True, text=True, timeout=30)
+    assert empty.returncode == 1 and not (tmp_path / "docker.args").exists()
+
+    tagged = subprocess.run(
+        ["bash", "-c", script], env={**env, "TAGS": "ghcr.io/o/r:2.0.0-dev.1\nghcr.io/o/r:dev"},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert tagged.returncode == 0, tagged.stderr
+    assert (tmp_path / "docker.args").read_text().strip() == (
+        "buildx imagetools create -t ghcr.io/o/r:2.0.0-dev.1 -t ghcr.io/o/r:dev ghcr.io/o/r@sha256:abc"
+    )
+
+
+def test_the_release_job_calls_the_same_tags_pre_releases():
+    """The gate's exception and the release job's `prerelease` flag are written
+    separately. Every tag the gate lets off the default branch must be one the
+    release job publishes as a pre-release and never as :latest."""
+    text = RELEASE_YML.read_text(encoding="utf-8")
+    assert '[[ "$version" == *-dev* ]]' in text
+    assert 'elif [[ "$version" == *-* ]]' in text
+
+
 # --- the Check-run step ---------------------------------------------------
 #
 # v1.1.0-beta.2 was tagged on the merge of its own handoff notes. check.yml
@@ -378,6 +533,13 @@ def test_check_yml_push_trigger_still_covers_the_default_branch():
     push = re.search(r"^  push:\n(?:.*\n)*?    branches: \[([^\]]+)\]", REAL_CHECK_YML, re.MULTILINE)
     assert push, "check.yml's push trigger has no branches filter in the expected shape"
     assert "main" in push.group(1), push.group(1)
+
+
+def test_check_yml_also_runs_on_pushes_to_the_redesign_branches():
+    """A dev tag on redesign/2.0 needs a push run of Check on that commit, the
+    same as a stable tag needs one on main."""
+    push = re.search(r"^  push:\n(?:.*\n)*?    branches: \[([^\]]+)\]", REAL_CHECK_YML, re.MULTILINE)
+    assert push and "'redesign/**'" in push.group(1), push
 
 
 def test_check_yml_never_cancels_a_run_on_the_default_branch():
