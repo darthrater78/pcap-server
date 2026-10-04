@@ -25,8 +25,6 @@ colors:
   on-surface-dark: "#e3e8e1"
   muted-dark: "#9ba69d"
   rule-dark: "#2d332d"
-  highlight-dark: "#e6cf4f"
-  on-highlight-dark: "#121512"
   highlight-row-dark: "#4a4416"
   ok-dark: "#6fcf8e"
   warn-dark: "#e0b04a"
@@ -124,8 +122,11 @@ components:
     backgroundColor: "{colors.surface-sunken}"
     textColor: "{colors.muted}"
   tab-active:
-    backgroundColor: "{colors.highlight}"
-    textColor: "{colors.on-highlight}"
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.on-surface}"
+  list-item-selected:
+    backgroundColor: "{colors.surface-sunken}"
+    textColor: "{colors.on-surface}"
   row-selected:
     backgroundColor: "{colors.highlight}"
     textColor: "{colors.on-highlight}"
@@ -169,8 +170,11 @@ components:
     backgroundColor: "{colors.rule-dark}"
     textColor: "{colors.on-surface-dark}"
   tab-active-dark:
-    backgroundColor: "{colors.highlight-dark}"
-    textColor: "{colors.on-highlight-dark}"
+    backgroundColor: "{colors.surface-dark}"
+    textColor: "{colors.on-surface-dark}"
+  list-item-selected-dark:
+    backgroundColor: "{colors.surface-sunken-dark}"
+    textColor: "{colors.on-surface-dark}"
   row-selected-dark:
     backgroundColor: "{colors.highlight-row-dark}"
     textColor: "{colors.on-surface-dark}"
@@ -192,13 +196,13 @@ components:
 
 ## Overview
 
-pcap-server is used by one admin or a small ops team, on a desktop browser at work or at home, to start tcpdump on hosts over SSH and read the captures. The interface reads like a printed field manual that someone has marked up: ink on grey-green survey paper, hairline rules between sections, and a yellow highlighter on whatever you are looking at right now. Colour belongs to the data. Protocol hues (`--pkt-*`, `--diagram-cat-*`) and status are the only colour on a screen; the chrome is ink.
+pcap-server is used by one admin or a small ops team, on a desktop browser at work or at home, to start tcpdump on hosts over SSH and read the captures. The interface reads like a printed field manual that someone has marked up: ink on grey-green survey paper, hairline rules between sections, and a yellow highlighter on the packet you are reading. Colour belongs to the data. Protocol hues (`--pkt-*`, `--diagram-cat-*`) and status are the only colour on a screen; the chrome is ink.
 
 ## Colors
 
 - **Survey paper (`surface` #e8ece6):** page ground. Dark: `surface-dark` #121512, a green-black, not true black.
 - **Ink (`primary` / `on-surface` #172019):** text, rules under inputs, primary buttons, the wordmark. There is no brand hue: the accent is ink.
-- **Highlighter (`highlight` #f2dc5d):** a fill, never a text colour. Only on the active tab, the selected packet row, and search matches. Text on it is always ink. Dark: `highlight-dark` for the tab, the dimmer `highlight-row-dark` for a selected row.
+- **Highlighter (`highlight` #f2dc5d):** a fill, never a text colour, and only for the selected packet row (in the packet list and its sequence-diagram row) and search matches inside packet data. Never on tabs, menus, nav or list selection. Text on it is always ink. Dark: `highlight-row-dark`.
 - **Sunken (`surface-sunken`):** the packet detail and hex panes, disabled inputs.
 - **Status:** `ok`, `warn`, `danger` (and `-dark`). Never reused for anything decorative. `warn` is amber, not orange, so it never reads as the diagrams' DNS orange.
 - **Data colours:** `--pkt-*` and `--diagram-cat-*` in `frontend/css/style.css` keep their validated hues in both themes. Do not retune them to match the chrome.
@@ -233,7 +237,8 @@ Square everything: `rounded.none` on buttons, inputs, panes, dialogs and checkbo
 - **Links:** ink, underlined, used for navigation only. Actions are buttons.
 - **Inputs:** underline at rest; on focus the underline becomes 2px ink plus the focus outline below; on error the underline and message turn `danger` and the message says what to change.
 - **Focus:** every focusable element gets a 2px ink outline (light ink in dark) at 2px offset. The highlighter is never the only focus cue: yellow on grey-green is under 3:1.
-- **Tabs:** active tab has a highlighter fill behind its label and a 3px ink underline.
+- **Tabs and menus:** the active tab, view or nav item is semibold ink with a 3px ink underline (2px for links in the top bar), no fill.
+- **Selected list item** (server list, Admin side nav): `surface-sunken` fill and semibold name.
 - **Packet rows:** protocol tint by default; selected row gets the highlighter fill and a 2px ink rule above and below; retransmissions and errors keep `--pkt-bad`.
 - **Status lines:** shape + word in the status colour, e.g. "■ ready", "▲ check sudo", "✕ no tcpdump".
 - **Callout:** `surface-sunken` block with no border, body-sm text. Used for hints such as where the tcpdump flags went.
@@ -251,6 +256,6 @@ Square everything: `rounded.none` on buttons, inputs, panes, dialogs and checkbo
 - Don't put a coloured stripe on the side of any block.
 - Don't number tabs or sections, or add FIG. labels as decoration.
 - Don't set field labels in all-caps mono; caps mono is for table column headers only.
-- Don't use the highlighter as text colour or as the only focus cue.
+- Don't use the highlighter as text colour, on navigation, or as the only focus cue.
 - Don't use em-dash asides in UI copy; write two short sentences.
 - Don't retune `--pkt-*` or `--diagram-cat-*` to match the chrome.
