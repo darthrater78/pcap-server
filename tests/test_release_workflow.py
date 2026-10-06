@@ -234,6 +234,26 @@ def test_no_tag_reaches_the_registry_before_the_image_is_scanned():
     assert re.search(r"^          version: v\d+\.\d+\.\d+$", scan, re.MULTILINE), "the trivy binary is not pinned"
 
 
+def test_every_release_build_refreshes_the_apt_layer():
+    """Docker caches the Dockerfile's apt layer on its text, so a release built
+    from the cache shipped the tshark of whichever day the layer was first
+    built -- 4.4.18, after Debian had fixed two HIGH CVEs in 4.4.19. Both
+    builds pass a value that differs per run, and the Dockerfile's apt RUN
+    reads it, which is what makes the layer build again."""
+    text = RELEASE_YML.read_text(encoding="utf-8")
+    release_job = text[text.index("\n  release:\n"):]
+    builds = release_job.count("uses: docker/build-push-action@")
+    assert builds == 2
+    assert release_job.count("APT_REFRESH=${{ github.run_id }}") == builds
+
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    final_stage = dockerfile[dockerfile.rindex("\nFROM "):]
+    arg = final_stage.index("ARG APT_REFRESH")
+    run = final_stage.index("apt-get update && apt-get upgrade -y")
+    assert arg < run, "the argument has to be declared before the layer it refreshes"
+    assert "${APT_REFRESH}" in final_stage[arg:run], "a RUN that never reads the argument is not rebuilt by it"
+
+
 def test_the_scan_config_the_release_names_exists():
     for name in ("trivy.yaml", ".trivyignore.yaml"):
         assert (REPO_ROOT / name).is_file(), name
