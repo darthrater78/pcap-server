@@ -83,6 +83,7 @@ from backend.packet_parser import (
     MAX_EXTRA_COLUMNS,
     check_display_filter,
     complete_field_names,
+    display_filter_hint,
     find_interface_copies,
     get_conversations,
     get_diagram_packets,
@@ -128,7 +129,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -2098,11 +2099,17 @@ async def check_display_filter_route(
     try:
         await check_display_filter(display_filter)
     except DisplayFilterError as exc:
-        return {"ok": False, "reason": str(exc)}
+        return {"ok": False, "reason": str(exc), "hint": ""}
     except Exception:
         logger.exception("display filter check failed")
         raise HTTPException(500, "could not check that filter")
-    return {"ok": True, "reason": ""}
+    try:
+        hint = await display_filter_hint(display_filter)
+    except Exception:
+        # The verdict stands without it: a hint is advice, not an answer.
+        logger.exception("display filter hint failed")
+        hint = ""
+    return {"ok": True, "reason": "", "hint": hint}
 
 
 @app.get("/api/display-filter/fields")

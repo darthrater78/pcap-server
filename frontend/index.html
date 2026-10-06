@@ -601,6 +601,9 @@
                     <div id="packet-legend" class="packet-legend"></div>
                 </div>
                 <div id="display-filter-error" class="filter-error" hidden></div>
+                <!-- A filter tshark accepts that probably means something
+                     else: a negated bare flag, so far. -->
+                <div id="display-filter-hint" class="filter-hint" role="status" aria-live="polite" hidden></div>
 
                 <div id="drawer-view-options" class="viewer-drawer" hidden>
                     <div class="flag-groups">
@@ -683,7 +686,10 @@
                                 well as the word forms. The box completes protocol and field
                                 names from tshark's own list as you type, and marks what you
                                 have typed <strong>ok</strong> or <strong>invalid</strong>
-                                before you apply it (hover the mark for tshark's reason). The count above the list is how many
+                                before you apply it (hover the mark for tshark's reason). <strong>check</strong>
+                                means it is valid but negates a bare flag: <code>!dns.flags.response</code>
+                                matches no DNS packet, and <code>dns.flags.response == 0</code> is
+                                the queries. The count above the list is how many
                                 packets matched; when that is more than are shown, the last
                                 row loads the next thousand. A filter this tool cannot run is reported
                                 back with tshark's own message and the position it objected to,

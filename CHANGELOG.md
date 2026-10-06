@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 — 2026-10-06
 
 The Viewer's display filter, brought closer to Wireshark's. The filter was
 already tshark's own; what was missing was around it.
@@ -14,9 +14,15 @@ already tshark's own; what was missing was around it.
 - **The filter box says whether what you typed is a filter** before you apply
   it: **■ ok** or **✕ invalid**, from tshark's own compiler, with its reason on
   hover.
+- **A negated bare flag gets a warning.** `!dns.flags.response` compiles, in
+  Wireshark too, and matches no DNS packet: a field with nothing compared to
+  it tests whether the field is there. The box is marked **▲ check** and a
+  line under it gives the form that was meant, `dns.flags.response == 0`.
 - **Field and protocol names are completed from tshark's whole registry**, not
   only the built-in list of about 130. Built-in matches still appear at once;
-  registry names are added under them.
+  registry names are added under them. A protocol typed in full (`dns`,
+  `icmp`, `kerberos`) now stays at the top of the list; it used to be dropped,
+  leaving only its fields.
 - **`${field}` in a filter stands for that field in the selected packet**, as
   in Wireshark: `ip.addr == ${ip.src}`. It is filled in when you apply.
 - **The right-click menu has Wireshark's six choices**: **…and not selected**
@@ -31,6 +37,9 @@ already tshark's own; what was missing was around it.
   are filter syntax: the filter is handed to tshark as a single argument and no
   shell reads it. Only line breaks, tabs and other control characters are
   refused now.
+- **On a phone the display filter box takes the full width.** It was a few
+  characters wide, and its suggestion list, the same width, cut every name
+  short.
 - **Right-clicking a value with a backslash or a quote in it builds a filter on
   that value**, escaped, instead of falling back to "this field is present".
 

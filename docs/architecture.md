@@ -459,7 +459,10 @@ anything but "nothing matched".
 
 Two routes serve the filter box and read no capture.
 `/api/display-filter/check` (`check_display_filter`) compiles a filter with
-tshark against an empty pcap on stdin and returns `{ok, reason}`.
+tshark against an empty pcap on stdin and returns `{ok, reason, hint}`. The
+hint (`display_filter_hint`) is set for a filter that compiles but negates a
+bare flag, `!dns.flags.response`: the names of tshark's boolean fields are read
+once from `tshark -G fields` and kept for the life of the process.
 `/api/display-filter/fields` (`complete_field_names`) runs
 `tshark -G fields,<prefix>` for a prefix matching `FIELD_PREFIX_RE` and returns
 up to 40 names, cached per prefix for the life of the process. Both sit behind

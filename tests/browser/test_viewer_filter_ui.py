@@ -138,17 +138,44 @@ async def test_completing_a_token_mid_expression_leaves_the_rest_alone(app_page)
     assert await app_page.input_value("#display-filter") == "ip.addr == 10.0.0.1 && kerberos"
 
 
-async def test_a_fully_typed_token_is_not_offered_back(app_page):
+@pytest.mark.parametrize("protocol", ["dns", "icmp", "kerberos", "ntlmssp"])
+async def test_a_protocol_typed_in_full_stays_at_the_top_of_the_list(app_page, protocol):
+    """The one-word filter is a filter. A list of dns.* fields with no `dns`
+    above them reads as though it were not."""
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", protocol)
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
+    tokens = await app_page.eval_on_selector_all(
+        "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
+    )
+    assert tokens[0] == protocol
+
+
+async def test_a_fully_typed_field_is_not_offered_back(app_page):
     """Accepting it would change nothing, and it costs a row that a real
     completion could use."""
     await _viewer(app_page)
     await app_page.click("#display-filter")
-    await app_page.type("#display-filter", "kerberos")
+    await app_page.type("#display-filter", "tcp.flags")
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
     tokens = await app_page.eval_on_selector_all(
         "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
     )
-    assert "kerberos" not in tokens
-    assert "kerberos.CNameString" in tokens
+    assert "tcp.flags" not in tokens
+    assert "tcp.flags.syn" in tokens
+
+
+async def test_enter_on_a_protocol_typed_in_full_closes_the_list_and_keeps_the_box(app_page):
+    """Nothing to take, so Enter is left to apply the filter."""
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "dns")
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
+    await app_page.keyboard.press("Enter")
+
+    assert await app_page.input_value("#display-filter") == "dns"
+    assert await app_page.is_hidden("#display-filter-ac")
 
 
 async def test_the_list_closes_when_nothing_is_left_to_offer(app_page):
@@ -482,6 +509,23 @@ async def test_the_box_says_whether_what_is_typed_is_a_filter(app_page):
     await app_page.type("#display-filter", " 443")
     await app_page.wait_for_selector("#display-filter-state[data-state='ok']")
     assert await app_page.get_attribute("#display-filter", "aria-invalid") is None
+
+
+@needs_tshark
+async def test_a_negated_bare_flag_is_marked_and_explained(app_page):
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "dns && !dns.flags.response")
+    await app_page.keyboard.press("Escape")
+    await app_page.wait_for_selector("#display-filter-state[data-state='hint']")
+    assert "check" in await app_page.text_content("#display-filter-state")
+    assert "dns.flags.response == 0" in await app_page.text_content("#display-filter-hint")
+    assert await app_page.get_attribute("#display-filter", "aria-invalid") is None
+
+    # The hint was about that text; it goes when the text does.
+    await app_page.type("#display-filter", " == 0")
+    await app_page.wait_for_selector("#display-filter-state[data-state='ok']")
+    assert await app_page.is_hidden("#display-filter-hint")
 
 
 async def test_an_emptied_box_has_no_verdict(app_page):

@@ -457,6 +457,64 @@ async def check_display_filter(display_filter: str) -> None:
         raise DisplayFilterError(_filter_rejection(stderr))
 
 
+# `!name` or `not name` with nothing compared after it. The lookahead is what
+# tells `!dns.flags.response` (a presence test) from `!dns.flags.response == 1`
+# (a comparison, negated).
+_NEGATED_BARE_NAME = re.compile(
+    r"(?:!|\bnot\b)\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*(?=$|\)|&&|\|\||\b(?:and|or|xor)\b)",
+    re.IGNORECASE,
+)
+_QUOTED_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+
+# Every FT_BOOLEAN field tshark knows, about thirty thousand names. Read once,
+# on the first filter that negates a bare name: the registry only changes with
+# the image.
+_BOOLEAN_FIELDS: frozenset[str] | None = None
+
+
+async def _boolean_fields() -> frozenset[str]:
+    global _BOOLEAN_FIELDS
+    if _BOOLEAN_FIELDS is None:
+        proc = await asyncio.create_subprocess_exec(
+            "tshark", "-G", "fields",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        names = set()
+        for line in stdout.decode("utf-8", "replace").splitlines():
+            cols = line.split("\t")
+            if len(cols) > 3 and cols[0] == "F" and cols[3] == "FT_BOOLEAN":
+                names.add(cols[2])
+        _BOOLEAN_FIELDS = frozenset(names)
+    return _BOOLEAN_FIELDS
+
+
+async def display_filter_hint(display_filter: str) -> str:
+    """A note for a filter that compiles but probably does not mean what it says.
+
+    One case so far, the one Wireshark leaves people to find out for
+    themselves: a field named with no comparison tests whether the field is
+    *present*, so `!dns.flags.response` is not "queries", it is "packets with
+    no DNS response flag at all" -- which no DNS packet is. Only flags are
+    reported; `!tcp.analysis.retransmission` and `!dns` mean what they say.
+    """
+    bare = _QUOTED_STRING.sub('""', display_filter)
+    names = list(dict.fromkeys(m.group(1) for m in _NEGATED_BARE_NAME.finditer(bare) if "." in m.group(1)))
+    if not names:
+        return ""
+    booleans = await _boolean_fields()
+    flags = [n for n in names if n in booleans]
+    if not flags:
+        return ""
+    name = flags[0]
+    return (
+        f"!{name} matches packets that do not have the field at all, not packets "
+        f"where the flag is clear. For a cleared flag write {name} == 0."
+    )
+
+
 # The start of a protocol or field name, as typed. Narrower than
 # PACKET_FIELD_RE because a prefix may end on the dot ("tcp.").
 FIELD_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")

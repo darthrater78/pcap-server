@@ -4346,7 +4346,7 @@ function addRegistryMatches(tokenText, fields) {
     if (!token || token.text !== tokenText) return;
     const have = new Set(filterAc.items.map((e) => e.token));
     const extra = registryEntries(fields)
-        .filter((e) => e.token !== tokenText && !have.has(e.token))
+        .filter((e) => (e.token !== tokenText || e.rank === 0) && !have.has(e.token))
         .slice(0, REGISTRY_MAX_ITEMS);
     if (!extra.length) return;
     const wasOpen = filterAc.items.length > 0;
@@ -4435,12 +4435,13 @@ function updateFilterAutocomplete() {
         closeFilterAutocomplete();
         return;
     }
-    // Whatever is already typed in full is dropped from the list: accepting it
-    // would change nothing, and it pushes a genuinely useful completion off
-    // the bottom. Typing "tcp" therefore offers tcp.port and the rest, not
-    // "tcp" again.
+    // A field or keyword already typed in full is dropped from the list:
+    // accepting it would change nothing, and it pushes a genuinely useful
+    // completion off the bottom. A protocol typed in full stays, at the top --
+    // "dns" is a whole filter, and a list of dns.* fields with no "dns" above
+    // them reads as though the one-word filter does not exist.
     const items = displayFilterMatches(token.text)
-        .filter((entry) => entry.token !== token.text);
+        .filter((entry) => entry.token !== token.text || entry.rank === 0);
     if (!items.length) {
         closeFilterAutocomplete();
         // Nothing built in starts like this, which is exactly when the
@@ -4501,6 +4502,13 @@ function initDisplayFilterAutocomplete() {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             moveFilterAutocomplete(e.key === "ArrowDown" ? 1 : -1);
             e.preventDefault();
+            return;
+        }
+        if (e.key === "Enter" && filterAc.items[filterAc.active]?.token === filterAc.token?.text) {
+            // The highlighted row is what is already typed (a protocol in
+            // full), so there is nothing to take: Enter applies the filter,
+            // through the document-level handler.
+            closeFilterAutocomplete();
             return;
         }
         if (e.key === "Enter" || e.key === "Tab") {
@@ -4582,18 +4590,31 @@ const FILTER_CHECK_DELAY_MS = 450;
 let filterCheckTimer = null;
 let filterCheckSeq = 0;
 
-function setFilterState(state, reason) {
+function setFilterState(state, reason, hint) {
     const input = $("display-filter");
     const mark = $("display-filter-state");
     if (!input || !mark) return;
+    showDisplayFilterHint(state === "ok" ? hint : "");
+    if (state === "ok" && hint) state = "hint";
     input.classList.toggle("filter-valid", state === "ok");
+    input.classList.toggle("filter-hinted", state === "hint");
     input.classList.toggle("filter-invalid", state === "bad");
     if (state === "bad") input.setAttribute("aria-invalid", "true");
     else input.removeAttribute("aria-invalid");
     mark.hidden = !state;
     mark.dataset.state = state || "";
-    mark.textContent = state === "ok" ? "\u25a0 ok" : state === "bad" ? "\u2715 invalid" : "";
-    mark.title = state === "bad" ? (reason || "").split("\n")[0] : "";
+    mark.textContent = { ok: "\u25a0 ok", bad: "\u2715 invalid", hint: "\u25b2 check" }[state] || "";
+    mark.title = state === "bad" ? (reason || "").split("\n")[0] : state === "hint" ? hint : "";
+}
+
+// A filter that compiles and probably does not mean what was meant. Unlike
+// tshark's complaint this is shown while typing: it only ever follows a filter
+// that is already valid, and it is one sentence.
+function showDisplayFilterHint(message) {
+    const el = $("display-filter-hint");
+    if (!el) return;
+    el.textContent = message || "";
+    el.hidden = !message;
 }
 
 function scheduleFilterCheck() {
@@ -4619,7 +4640,7 @@ function scheduleFilterCheck() {
             return;
         }
         if (seq !== filterCheckSeq || input.value !== text) return;
-        setFilterState(verdict.ok ? "ok" : "bad", verdict.reason);
+        setFilterState(verdict.ok ? "ok" : "bad", verdict.reason, verdict.hint);
     }, FILTER_CHECK_DELAY_MS);
 }
 
@@ -5662,6 +5683,9 @@ function applyDisplayFilter() {
     }
     // The box shows what ran: the value, not the reference it came from.
     if (resolved.text !== box.value) box.value = resolved.text;
+    // A filter that arrived without a keystroke (a saved view, the right-click
+    // menu, a paste run at once) has had no verdict yet, and so no hint.
+    scheduleFilterCheck();
     loadPackets(viewingCaptureId, box.value);
     // A Traffic Diagram open on this capture drops a host highlight the
     // packet list no longer matches (diagrams.js).

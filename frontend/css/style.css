@@ -2318,6 +2318,10 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
     .packet-toolbar { flex-wrap: wrap; }
     .packet-toolbar input { flex: 1 1 100%; }
+    /* The box sits in a wrapper, and it is the wrapper that is the flex item:
+       without this the box stays a few characters wide on a phone and its
+       suggestion list, sized to it, cuts every name short. */
+    .packet-toolbar .filter-input-wrap { flex: 1 1 100%; }
 
     /* Scroll the table sideways rather than crushing seven columns. */
     .packet-table { min-width: 720px; }
@@ -2942,9 +2946,11 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 .filter-state[data-state="ok"] { color: var(--ok); }
 .filter-state[data-state="bad"] { color: var(--danger); cursor: help; }
+.filter-state[data-state="hint"] { color: var(--warn); cursor: help; }
 
 .packet-toolbar input.filter-valid { padding-right: 4em; }
 .packet-toolbar input.filter-invalid { padding-right: 6.5em; }
+.packet-toolbar input.filter-hinted { padding-right: 5.5em; border-bottom-color: var(--warn); }
 .packet-toolbar input.filter-valid { border-bottom-color: var(--ok); }
 .packet-toolbar input.filter-invalid { border-bottom-color: var(--danger); }
 
@@ -3052,6 +3058,15 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     border-left: 2px solid var(--danger);
     padding: 6px 10px;
     background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+/* Advice about a filter that compiles: prose, so it wraps like prose. */
+.filter-hint {
+    font-size: 0.75rem;
+    color: var(--warn);
+    border-left: 2px solid var(--warn);
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
 
 /* --- stored SSH usernames, on the Servers tab -------------------------- */
@@ -3186,7 +3201,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     row-gap: 2px;
 }
 
-.filter-error { margin: 6px 16px; }
+.filter-error, .filter-hint { margin: 6px 16px; }
 
 @media (max-width: 900px) {
     /* The legend is the first thing to go when the bar cannot hold it. */

@@ -53,10 +53,18 @@ up; save the filter under **Save filter** instead.
   answers at once and matches anywhere in a name (`syn` finds
   `tcp.flags.syn`); under it come names from tshark's own registry, every
   field it can dissect, that start with what you typed.
+  A protocol you have typed in full stays at the top of the list: `dns` is a
+  whole filter, and Enter applies it.
 - **Valid or not.** A moment after you stop typing, the box is marked
   **■ ok** or **✕ invalid**, by tshark's own compiler. Hover the mark for its
   reason. The full message, with the position it objected to, is printed
   under the box when you apply.
+- **Valid, but check it.** A flag named with nothing compared to it tests
+  whether the flag is *there*, not whether it is set. `!dns.flags.response`
+  therefore matches no DNS packet at all; "queries only" is
+  `dns.flags.response == 0`. Wireshark accepts the first form without comment.
+  Here the box is marked **▲ check** and a line under it gives the `== 0`
+  form.
 - **How much matched.** The line above the list reads, for example,
   `4,213 packets of 12,000 match · first 1,000 shown`. The list loads a
   thousand packets at a time; when more matched, the last row is

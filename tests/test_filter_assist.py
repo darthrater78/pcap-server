@@ -24,7 +24,33 @@ def test_both_routes_need_a_session(secure_client):
 @needs_tshark
 def test_a_filter_that_compiles_is_ok(secure_client, enrolled):
     body = secure_client.get("/api/display-filter/check", params={"display_filter": "tcp.port == 443"}).json()
-    assert body == {"ok": True, "reason": ""}
+    assert body == {"ok": True, "reason": "", "hint": ""}
+
+
+@needs_tshark
+@pytest.mark.parametrize("negated", [
+    "!dns.flags.response",
+    "not tcp.flags.syn and tcp",
+    "dns.qry.type == 6 && !dns.flags.response",
+])
+def test_a_negated_bare_flag_compiles_and_gets_a_hint(secure_client, enrolled, negated):
+    """It is a presence test, so it never means "the flag is clear"."""
+    body = secure_client.get("/api/display-filter/check", params={"display_filter": negated}).json()
+    assert body["ok"] is True
+    assert "== 0" in body["hint"]
+
+
+@needs_tshark
+@pytest.mark.parametrize("meant", [
+    "!dns",                                    # a protocol: absence is the point
+    "!tcp.analysis.retransmission",            # not a flag: present or not is all it has
+    "!dns.flags.response == 1",                # a comparison, negated
+    "dns.flags.response",                      # not negated
+    'frame contains "!dns.flags.response"',    # inside a string
+])
+def test_filters_that_mean_what_they_say_get_no_hint(secure_client, enrolled, meant):
+    body = secure_client.get("/api/display-filter/check", params={"display_filter": meant}).json()
+    assert body["ok"] is True and body["hint"] == ""
 
 
 @needs_tshark
