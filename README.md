@@ -11,7 +11,7 @@ Built for the case where the machine you need to capture on is not the machine
 you want to analyse from: a firewall, a hypervisor, a container host, a box you
 only reach over SSH.
 
-**Current release: 2.0.0** — [release notes](https://github.com/darthrater78/pcap-server/releases/tag/v2.0.0) ·
+**Current release: 2.1.0** — [release notes](https://github.com/darthrater78/pcap-server/releases/tag/v2.1.0) ·
 [source on GitHub](https://github.com/darthrater78/pcap-server)
 
 **Contents** — [Quick start](#quick-start) · [HTTPS](#https) ·
@@ -26,7 +26,7 @@ only reach over SSH.
 **There is nothing to clone and nothing to build.**
 
 1. Go to
-   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v2.0.0/docker-compose.yml)
+   [`docker-compose.yml`](https://github.com/darthrater78/pcap-server/blob/v2.1.0/docker-compose.yml)
    and follow the setup steps at the top of it. They have you paste its
    service block into a file named `compose.yaml` on your Docker host.
 2. **Back up the master key** it generates somewhere other than this machine.

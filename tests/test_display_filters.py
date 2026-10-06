@@ -8,10 +8,13 @@ BPF, and the two lists never mix.
 
 from __future__ import annotations
 
+import re
+import time
+
 import pytest
 from pydantic import ValidationError
 
-from backend import main
+from backend import main, models
 from backend.database import MAX_CUSTOM_FILTERS_PER_USER
 from backend.models import FILTER_MAX_LEN, DisplayFilterRequest
 from tests.test_custom_filters import _enrol, enrolled, secure_client  # noqa: F401  (fixtures)
@@ -39,10 +42,16 @@ def test_wireshark_operators_the_bpf_rule_would_refuse_are_allowed():
     assert req.expression.startswith("tcp.flags.syn")
 
 
-@pytest.mark.parametrize("expr", ["dns; rm -rf /", "$(id)", "`id`", "a\\b"])
+@pytest.mark.parametrize("expr", ["dns\nudp", "dns\x00", "ip.src == ${ip.dst}"])
 def test_the_display_filter_rule_is_applied(expr):
     with pytest.raises(ValidationError):
         DisplayFilterRequest(label="x", expression=expr)
+
+
+def test_a_regular_expression_can_be_saved():
+    """Backslash, `$` and `;` are filter syntax; no shell ever reads them."""
+    req = DisplayFilterRequest(label="x", expression=r'dns.qry.name matches r"\.(com|net)$"')
+    assert req.expression.endswith('$"')
 
 
 def test_an_over_long_expression_is_refused():
@@ -104,3 +113,48 @@ def test_deleting_the_account_deletes_its_display_filters(secure_client):
     main.db.add_custom_filter(user_id, "x", "dns", "display")
     main.db.delete_user(user_id)
     assert main.db.list_custom_filters(user_id, "display") == []
+
+
+# --- the two scans that used to be regular expressions ------------------------
+#
+# CodeQL reported both expressions as polynomial on a filter built for them.
+# These hold the scans to what the expressions matched, and to finishing.
+
+_OLD_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+_OLD_REFERENCE = re.compile(r"\$\{\s*[^}:;]*\}")
+
+
+@pytest.mark.parametrize("text", [
+    'tcp.port == 80',
+    'http.host == "a.example"',
+    'frame contains "a\\"b" && x == "c"',
+    'x == "never closed',
+    'x == "a\\" still open',
+    '"" "" "',
+    '"\\\\" ${ip.src} "${jndi:"',
+    'a == "\\"',
+])
+def test_blanking_strings_matches_the_expression_it_replaced(text):
+    assert models.blank_quoted_strings(text) == _OLD_STRING.sub('""', text)
+
+
+@pytest.mark.parametrize("text", [
+    "ip.src == ${ip.dst}",
+    "ip.src == ${ ip.dst }",
+    "${dns:arg} && ${ip.src}",
+    "${a;b} ${c}",
+    "${never closed",
+    "${a:${b}}",
+    "no reference here",
+    "${}",
+])
+def test_finding_a_reference_matches_the_expression_it_replaced(text):
+    old = _OLD_REFERENCE.search(text)
+    assert models._field_reference(text) == (old.group(0) if old else None)
+
+
+@pytest.mark.parametrize("hostile", ['"' + '\\"' * 500, "${" * 500, "${{" + " " * 1000])
+def test_a_filter_built_to_backtrack_is_answered_at_once(hostile):
+    started = time.perf_counter()
+    models.display_filter_problem(hostile[: models.FILTER_MAX_LEN])
+    assert time.perf_counter() - started < 0.05

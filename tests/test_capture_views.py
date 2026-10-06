@@ -218,10 +218,12 @@ def test_deleting_a_capture_takes_its_views_with_it(secure_client, enrolled):
 
 
 @pytest.mark.parametrize("hostile", [
-    "tcp.port == 80; rm -rf /",
-    "tcp.port == $(whoami)",
-    "tcp.port == `id`",
-    "tcp.port == 80\\x00",
+    "tcp.port == 80\nrm -rf /",
+    "tcp.port == 80\x00",
+    "tcp\tudp",
+    # Filled in by the viewer from the selected packet; saved unfilled it would
+    # match nothing, silently, on every later visit.
+    "ip.src == ${ip.dst}",
 ])
 def test_a_filter_refused_as_a_query_parameter_cannot_be_saved(secure_client, capture, hostile):
     resp = secure_client.post(

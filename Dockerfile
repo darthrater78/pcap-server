@@ -29,7 +29,17 @@ FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609
 # fixable HIGH or CRITICAL, and pcre2's CVE-2026-103111 was exactly that -- fixed
 # in Debian, not yet in any python:3.12-slim. The install below already takes
 # whatever tshark is current, so this adds no drift that was not there.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+#
+# APT_REFRESH is what makes "current" true on a rebuild. Docker caches this
+# layer on the text of the instruction, not on what Debian's mirror holds, so
+# an unchanged Dockerfile kept the packages of the day the layer was first
+# built: tshark 4.4.18 stayed in a rebuilt image after Debian shipped 4.4.19
+# for CVE-2026-95387 and CVE-2026-95389. A build passes a value that changes
+# (release.yml the run's id, scripts/preview.sh the date) and the layer is
+# built again. A plain `docker build` with no argument behaves as before.
+ARG APT_REFRESH=unset
+RUN : "apt packages as of: ${APT_REFRESH}" \
+    && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     tshark \
     tcpdump \
     openssh-client \

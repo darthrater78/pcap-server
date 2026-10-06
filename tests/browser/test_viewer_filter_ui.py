@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from tests.browser.conftest import BROWSER_LOOP, needs_browser
+from tests.test_packet_parser import needs_tshark
 
 pytestmark = [needs_browser, BROWSER_LOOP]
 
@@ -137,17 +138,44 @@ async def test_completing_a_token_mid_expression_leaves_the_rest_alone(app_page)
     assert await app_page.input_value("#display-filter") == "ip.addr == 10.0.0.1 && kerberos"
 
 
-async def test_a_fully_typed_token_is_not_offered_back(app_page):
+@pytest.mark.parametrize("protocol", ["dns", "icmp", "kerberos", "ntlmssp"])
+async def test_a_protocol_typed_in_full_stays_at_the_top_of_the_list(app_page, protocol):
+    """The one-word filter is a filter. A list of dns.* fields with no `dns`
+    above them reads as though it were not."""
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", protocol)
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
+    tokens = await app_page.eval_on_selector_all(
+        "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
+    )
+    assert tokens[0] == protocol
+
+
+async def test_a_fully_typed_field_is_not_offered_back(app_page):
     """Accepting it would change nothing, and it costs a row that a real
     completion could use."""
     await _viewer(app_page)
     await app_page.click("#display-filter")
-    await app_page.type("#display-filter", "kerberos")
+    await app_page.type("#display-filter", "tcp.flags")
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
     tokens = await app_page.eval_on_selector_all(
         "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
     )
-    assert "kerberos" not in tokens
-    assert "kerberos.CNameString" in tokens
+    assert "tcp.flags" not in tokens
+    assert "tcp.flags.syn" in tokens
+
+
+async def test_enter_on_a_protocol_typed_in_full_closes_the_list_and_keeps_the_box(app_page):
+    """Nothing to take, so Enter is left to apply the filter."""
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "dns")
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
+    await app_page.keyboard.press("Enter")
+
+    assert await app_page.input_value("#display-filter") == "dns"
+    assert await app_page.is_hidden("#display-filter-ac")
 
 
 async def test_the_list_closes_when_nothing_is_left_to_offer(app_page):
@@ -424,3 +452,187 @@ async def test_go_to_packet_selects_the_row_or_says_why_not(app_page):
     await app_page.press("#goto-packet", "Enter")
     assert await app_page.evaluate("() => window.__opened") == [2, 900]
     assert "past the 3 rows" in await app_page.inner_text("#goto-packet-msg")
+
+
+# --- the rest of tshark's names ----------------------------------------------
+#
+# The built-in list is a hundred and thirty names; the registry is a quarter of
+# a million, and it is asked through the server. These two need a real tshark
+# behind the app the browser is talking to.
+
+
+@needs_tshark
+async def test_a_name_the_builtin_list_lacks_comes_from_tsharks_registry(app_page):
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "tcp.analysis.byt")
+
+    await app_page.wait_for_selector("#display-filter-ac .filter-ac-item")
+    tokens = await app_page.eval_on_selector_all(
+        "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
+    )
+    assert tokens == ["tcp.analysis.bytes_in_flight"]
+
+
+@needs_tshark
+async def test_registry_names_are_added_under_the_builtin_ones_not_shuffled_in(app_page):
+    """A list that reorders under the arrow keys picks the wrong row."""
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "kerb")
+    # A function, not a string: the page's CSP has no unsafe-eval.
+    await app_page.wait_for_function(
+        "() => document.querySelectorAll('#display-filter-ac .filter-ac-item').length > 2"
+    )
+    tokens = await app_page.eval_on_selector_all(
+        "#display-filter-ac .filter-ac-token", "els => els.map(e => e.textContent)"
+    )
+    assert tokens[0] == "kerberos"
+    assert len(tokens) == len(set(tokens)), "a name was offered twice"
+
+
+# --- valid or not, before applying -------------------------------------------
+
+
+@needs_tshark
+async def test_the_box_says_whether_what_is_typed_is_a_filter(app_page):
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "tcp.port ==")
+    await app_page.keyboard.press("Escape")
+    await app_page.wait_for_selector("#display-filter-state[data-state='bad']")
+    assert "invalid" in await app_page.text_content("#display-filter-state")
+    assert await app_page.get_attribute("#display-filter", "aria-invalid") == "true"
+    # tshark's own words, as the mark's tooltip.
+    assert "end of filter" in (await app_page.get_attribute("#display-filter-state", "title"))
+
+    await app_page.type("#display-filter", " 443")
+    await app_page.wait_for_selector("#display-filter-state[data-state='ok']")
+    assert await app_page.get_attribute("#display-filter", "aria-invalid") is None
+
+
+@needs_tshark
+async def test_a_negated_bare_flag_is_marked_and_explained(app_page):
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "dns && !dns.flags.response")
+    await app_page.keyboard.press("Escape")
+    await app_page.wait_for_selector("#display-filter-state[data-state='hint']")
+    assert "check" in await app_page.text_content("#display-filter-state")
+    assert "dns.flags.response == 0" in await app_page.text_content("#display-filter-hint")
+    assert await app_page.get_attribute("#display-filter", "aria-invalid") is None
+
+    # The hint was about that text; it goes when the text does.
+    await app_page.type("#display-filter", " == 0")
+    await app_page.wait_for_selector("#display-filter-state[data-state='ok']")
+    assert await app_page.is_hidden("#display-filter-hint")
+
+
+async def test_an_emptied_box_has_no_verdict(app_page):
+    await _viewer(app_page)
+    await app_page.click("#display-filter")
+    await app_page.type("#display-filter", "t")
+    await app_page.evaluate("setFilterState('bad', 'x')")
+    assert await app_page.is_visible("#display-filter-state")
+    await app_page.keyboard.press("Backspace")
+    assert await app_page.is_hidden("#display-filter-state")
+
+
+# --- building a filter: quoting, combining, the selected packet's fields ------
+
+
+async def test_the_menu_combines_the_six_ways_wireshark_does(app_page):
+    await _viewer(app_page)
+    await app_page.fill("#display-filter", "tcp")
+    combined = await app_page.evaluate(
+        "['selected','not','and','or','andnot','ornot'].map(m => combineFilter('ip.addr == 10.0.0.1', m))"
+    )
+    assert combined == [
+        "ip.addr == 10.0.0.1",
+        "!(ip.addr == 10.0.0.1)",
+        "(tcp) && (ip.addr == 10.0.0.1)",
+        "(tcp) || (ip.addr == 10.0.0.1)",
+        "(tcp) && !(ip.addr == 10.0.0.1)",
+        "(tcp) || !(ip.addr == 10.0.0.1)",
+    ]
+    await app_page.fill("#display-filter", "")
+    alone = await app_page.evaluate("['and','andnot','ornot'].map(m => combineFilter('dns', m))")
+    assert alone == ["dns", "!(dns)", "!(dns)"]
+
+
+async def test_a_text_value_with_a_backslash_or_a_quote_is_escaped_not_dropped(app_page):
+    """These used to fall back to a bare presence test, because the server
+    refused a backslash anywhere in a filter."""
+    await _viewer(app_page)
+    built = await app_page.evaluate(
+        r"""[
+            buildFieldFilter('smb2.filename', 'share\\dir\\file.txt'),
+            buildFieldFilter('http.user_agent', 'say "hi"; $HOME'),
+            buildFieldFilter('ip.src', '10.0.0.1'),
+            buildFieldFilter('http.file_data', 'two\nlines'),
+        ]"""
+    )
+    assert built == [
+        r'smb2.filename == "share\\dir\\file.txt"',
+        r'http.user_agent == "say \"hi\"; $HOME"',
+        "ip.src == 10.0.0.1",
+        "http.file_data",
+    ]
+
+
+async def test_a_field_reference_is_filled_in_from_the_selected_packet(app_page):
+    await _viewer(app_page)
+    resolved = await app_page.evaluate(
+        """() => {
+            currentDetail = { layers: [
+                { name: 'ip', fields: [{ name: 'ip.src', value: '10.0.0.7' }] },
+                { name: 'http', fields: [{ name: 'http.request', children: [
+                    { name: 'http.host', value: 'example.com' }] }] },
+            ] };
+            return [
+                resolveFieldReferences('ip.addr == ${ip.src} && http.host == ${ http.host }'),
+                resolveFieldReferences('http.request.uri contains "${ip.src}"'),
+                resolveFieldReferences('tcp.port == ${tcp.srcport}'),
+            ];
+        }"""
+    )
+    assert resolved[0] == {"text": 'ip.addr == 10.0.0.7 && http.host == "example.com"'}
+    assert resolved[1] == {"text": 'http.request.uri contains "${ip.src}"'}, "a quoted string is text to search for"
+    assert "no tcp.srcport" in resolved[2]["error"]
+
+
+async def test_a_field_reference_with_no_packet_selected_says_to_select_one(app_page):
+    await _viewer(app_page)
+    resolved = await app_page.evaluate(
+        "() => { currentDetail = null; return resolveFieldReferences('ip.addr == ${ip.src}'); }"
+    )
+    assert "Click a packet" in resolved["error"]
+
+
+# --- how much of the answer is on screen --------------------------------------
+
+
+async def test_the_count_says_what_matched_and_how_much_of_it_is_shown(app_page):
+    await _viewer(app_page)
+    texts = await app_page.evaluate(
+        """() => {
+            const rows = (n) => Array.from({ length: n }, (_, i) => ({ number: i + 1 }));
+            const say = (shown, page) => { currentPackets = rows(shown); packetPage = { captureId: 'c', loading: false, ...page }; return [packetCountText(), packetMoreRowHtml(8) !== '']; };
+            return [
+                say(700, { filter: '', matched: 700, total: 700 }),
+                say(40, { filter: 'dns', matched: 40, total: 700 }),
+                say(1, { filter: 'frame.number == 1', matched: 1, total: 700 }),
+                say(1000, { filter: 'tcp', matched: 4213, total: 12000 }),
+                say(1000, { filter: '', matched: 12000, total: 12000 }),
+                say(3, { filter: 'udp', matched: 3, total: 0 }),
+            ];
+        }"""
+    )
+    assert texts == [
+        ["700 packets", False],
+        ["40 packets of 700 match", False],
+        ["1 packet of 700 matches", False],
+        ["4,213 packets of 12,000 match · first 1,000 shown", True],
+        ["12,000 packets · first 1,000 shown", True],
+        ["3 packets match", False],
+    ]

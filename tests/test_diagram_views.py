@@ -96,7 +96,8 @@ def test_a_view_id_from_another_capture_is_not_found(secure_client, enrolled, ca
 
 
 @pytest.mark.parametrize("bad", [
-    {"display_filter": "tcp.port == 80; rm -rf /"},
+    {"display_filter": "tcp.port == 80\nrm -rf /"},
+    {"display_filter": "ip.src == ${ip.dst}"},
     {"positions": {"10.0.0.1": {"x": 1e12, "y": 0}}},
     {"positions": {"has space": {"x": 0, "y": 0}}},
     {"positions": {f"10.0.{i // 256}.{i % 256}": {"x": 0, "y": 0} for i in range(501)}},

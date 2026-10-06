@@ -144,7 +144,10 @@ KEPT=""
 if [ "$RUNNING_HASH" = "$SRC_HASH" ] && [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = "true" ]; then
     KEPT=1
 else
-    docker build -q -t "$IMAGE" "$ROOT" >/dev/null
+    # The date, so the image's Debian packages are at most a day old: without
+    # it the apt layer comes from the cache and keeps whatever tshark it was
+    # first built with (see APT_REFRESH in the Dockerfile).
+    docker build -q --build-arg APT_REFRESH="$(date -u +%F)" -t "$IMAGE" "$ROOT" >/dev/null
     # One preview at a time: the old container always goes before the new one
     # starts. Its volumes and key stay, so the new one picks up where it left off.
     docker rm -f "$NAME" >/dev/null 2>&1 || true

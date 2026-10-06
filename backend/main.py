@@ -47,6 +47,7 @@ from backend.bpf import check_filter
 from backend.crypto import CryptoError
 from backend.database import Database
 from backend.models import (
+    FILTER_MAX_LEN,
     ANY_INTERFACE,
     BPF_FORBIDDEN_CHARS,
     CaptureInfo,
@@ -80,12 +81,15 @@ from backend.packet_parser import (
     DisplayFilterError,
     InterfaceCopies,
     MAX_EXTRA_COLUMNS,
+    display_filter_complaint,
+    complete_field_names,
+    display_filter_hint,
     find_interface_copies,
     get_conversations,
     get_diagram_packets,
     get_follow_stream,
     get_packet_detail,
-    get_packet_list,
+    get_packet_page,
     get_protocol_hierarchy,
     stream_filtered_pcap,
     unknown_packet_fields,
@@ -125,7 +129,7 @@ SSH_KEYS_DIR = Path(os.environ.get("SSH_KEYS_DIR", "/app/ssh-keys"))
 CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/app/captures"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 REPO_URL = "https://github.com/darthrater78/pcap-server"
 
 # Expired rows and aged-out limiter keys are rejected wherever they are read,
@@ -279,6 +283,17 @@ upload_rate_limiter = SlidingWindowLimiter(
 # to keep in step for no benefit.
 filter_check_rate_limiter = SlidingWindowLimiter(
     max_per_minute=db.get_setting_int("rate_limit_packets_per_min"),
+)
+
+# The filter box's own help: is what has been typed a valid display filter, and
+# what is the rest of that field name. Both are driven by typing, so the budget
+# that suits a button (one packet list, one capture start) would run out inside
+# a sentence. Several times that figure, tied to the same admin setting so the
+# two move together: each call is a tshark that starts and exits without ever
+# reading a capture, a tenth of a second, where a packet list reads all of one.
+FILTER_ASSIST_PER_PACKET_BUDGET = 6
+filter_assist_rate_limiter = SlidingWindowLimiter(
+    max_per_minute=FILTER_ASSIST_PER_PACKET_BUDGET * db.get_setting_int("rate_limit_packets_per_min"),
 )
 
 # Scanning a host for its keys spawns ssh-keyscan against an address the caller
@@ -2062,6 +2077,58 @@ async def delete_display_filter(
     return {"ok": True}
 
 
+# --- help while typing a display filter ---
+#
+# Neither route touches a capture: the check compiles the filter against an
+# empty file, and the completion reads tshark's registry. That is why they need
+# a session and nothing more.
+
+
+@app.get("/api/display-filter/check")
+async def check_display_filter_route(
+    display_filter: str = Query("", max_length=FILTER_MAX_LEN),
+    user: dict = Depends(get_current_user),
+):
+    """Whether tshark accepts this filter, and its complaint when it does not.
+
+    200 either way: a filter that does not compile yet is the normal state of
+    one being typed, not a failed request.
+    """
+    if not filter_assist_rate_limiter.allow(user["id"]):
+        raise HTTPException(429, "too many filter checks, slow down")
+    try:
+        reason = await display_filter_complaint(display_filter)
+    except Exception:
+        logger.exception("display filter check failed")
+        raise HTTPException(500, "could not check that filter")
+    if reason:
+        return {"ok": False, "reason": reason, "hint": ""}
+    try:
+        hint = await display_filter_hint(display_filter)
+    except Exception:
+        # The verdict stands without it: a hint is advice, not an answer.
+        logger.exception("display filter hint failed")
+        hint = ""
+    return {"ok": True, "reason": "", "hint": hint}
+
+
+@app.get("/api/display-filter/fields")
+async def complete_display_filter_fields(
+    prefix: str = Query(..., min_length=1, max_length=64),
+    user: dict = Depends(get_current_user),
+):
+    """Protocol and field names starting with what has been typed."""
+    if not filter_assist_rate_limiter.allow(user["id"]):
+        raise HTTPException(429, "too many field lookups, slow down")
+    try:
+        return {"fields": await complete_field_names(prefix)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception:
+        logger.exception("tshark field completion failed")
+        raise HTTPException(500, "could not read tshark's field names")
+
+
 # --- the packet list's column layout ---
 #
 # Per account and used on every capture, the way a Wireshark preference is --
@@ -2757,14 +2824,16 @@ async def list_packets(
         raise HTTPException(400, str(exc))
     info, path = _require_readable_capture(capture_id, user)
     try:
-        packets = await get_packet_list(
+        packets, matched = await get_packet_page(
             vault.source_for(path), offset=offset, limit=limit,
             display_filter=display_filter, view_flags=view_flags,
             resolve_names=resolve_names, interface_names=info.interface_names,
             extra_fields=extra_fields,
             copies=await _copies_for(info, path),
         )
-        return {"packets": packets, "total": info.packet_count}
+        # matched is every packet the filter selected, not the page: what the
+        # list shows "N of M" from, and how it knows there is more to load.
+        return {"packets": packets, "total": info.packet_count, "matched": matched}
     except ColumnFieldError as exc:
         # A column naming a field this tshark does not dissect. 400 rather than
         # the 500 below, and with tshark's own words: the layout is the thing to

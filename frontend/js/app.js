@@ -3473,6 +3473,7 @@ async function viewCapture(id) {
     setViewerLabel(id);
     $("display-filter").value = "";
     showDisplayFilterError("");
+    setFilterState("", "");
     $("packet-detail-tree").innerHTML = '<div class="empty-state" style="font-size:0.75rem">Click a packet above</div>';
     $("hex-dump").textContent = "";
 
@@ -4315,6 +4316,68 @@ function displayFilterToken(value, caret) {
 // Prefix matches first, then anything containing the text -- so typing "syn"
 // offers tcp.flags.syn, and typing "tcp.f" offers the flags before it offers
 // anything else that merely mentions them.
+// --- the rest of tshark's names ---
+//
+// The list above is about a hundred and thirty names picked by hand. tshark
+// knows over a quarter of a million, and the one you want at the moment you
+// want it (`tcp.analysis.bytes_in_flight`, `tls.handshake.ja3`) is usually not
+// among the hundred and thirty. So the built-in matches are shown at once, as
+// before, and the server is asked for names starting with what was typed;
+// they are added under the built-in ones when they arrive. Added, never
+// reordered: a list that reshuffles under the arrow keys picks the wrong row.
+const REGISTRY_MIN_CHARS = 2;
+const REGISTRY_DELAY_MS = 180;
+const REGISTRY_MAX_ITEMS = 10;
+const registryCache = new Map();
+let registryTimer = null;
+// Bumped whenever the list closes or the token changes, so an answer to an
+// older question is dropped instead of reopening the list with it.
+let registrySeq = 0;
+
+function registryEntries(fields) {
+    // A name with no dot is a protocol, complete as a filter by itself.
+    return fields.map((f) => ({ token: f.name, hint: f.label || "", rank: f.name.includes(".") ? 1 : 0 }));
+}
+
+function addRegistryMatches(tokenText, fields) {
+    const input = $("display-filter");
+    if (!input || document.activeElement !== input) return;
+    const token = displayFilterToken(input.value, input.selectionStart ?? input.value.length);
+    if (!token || token.text !== tokenText) return;
+    const have = new Set(filterAc.items.map((e) => e.token));
+    const extra = registryEntries(fields)
+        .filter((e) => (e.token !== tokenText || e.rank === 0) && !have.has(e.token))
+        .slice(0, REGISTRY_MAX_ITEMS);
+    if (!extra.length) return;
+    const wasOpen = filterAc.items.length > 0;
+    filterAc.items = filterAc.items.concat(extra);
+    filterAc.token = token;
+    if (!wasOpen) filterAc.active = 0;
+    renderFilterAutocomplete();
+}
+
+function requestRegistryMatches(tokenText) {
+    clearTimeout(registryTimer);
+    const seq = ++registrySeq;
+    if (tokenText.length < REGISTRY_MIN_CHARS) return;
+    if (registryCache.has(tokenText)) {
+        addRegistryMatches(tokenText, registryCache.get(tokenText));
+        return;
+    }
+    registryTimer = setTimeout(async () => {
+        let fields;
+        try {
+            fields = (await api(`/api/display-filter/fields?prefix=${encodeURIComponent(tokenText)}`)).fields || [];
+        } catch (e) {
+            // Rate limited, signed out, no tshark: the built-in list is still
+            // there, and a completion is not worth an error message.
+            return;
+        }
+        registryCache.set(tokenText, fields);
+        if (seq === registrySeq) addRegistryMatches(tokenText, fields);
+    }, REGISTRY_DELAY_MS);
+}
+
 function displayFilterMatches(text) {
     const q = text.toLowerCase();
     const scored = [];
@@ -4338,6 +4401,8 @@ function acBox() { return $("display-filter-ac"); }
 function closeFilterAutocomplete() {
     const box = acBox();
     if (!box) return;
+    clearTimeout(registryTimer);
+    registrySeq++;
     box.hidden = true;
     box.innerHTML = "";
     filterAc.items = [];
@@ -4370,20 +4435,25 @@ function updateFilterAutocomplete() {
         closeFilterAutocomplete();
         return;
     }
-    // Whatever is already typed in full is dropped from the list: accepting it
-    // would change nothing, and it pushes a genuinely useful completion off
-    // the bottom. Typing "tcp" therefore offers tcp.port and the rest, not
-    // "tcp" again.
+    // A field or keyword already typed in full is dropped from the list:
+    // accepting it would change nothing, and it pushes a genuinely useful
+    // completion off the bottom. A protocol typed in full stays, at the top --
+    // "dns" is a whole filter, and a list of dns.* fields with no "dns" above
+    // them reads as though the one-word filter does not exist.
     const items = displayFilterMatches(token.text)
-        .filter((entry) => entry.token !== token.text);
+        .filter((entry) => entry.token !== token.text || entry.rank === 0);
     if (!items.length) {
         closeFilterAutocomplete();
+        // Nothing built in starts like this, which is exactly when the
+        // registry is the only place the name can come from.
+        requestRegistryMatches(token.text);
         return;
     }
     filterAc.items = items;
     filterAc.token = token;
     filterAc.active = 0;
     renderFilterAutocomplete();
+    requestRegistryMatches(token.text);
 }
 
 function acceptFilterAutocomplete(index) {
@@ -4432,6 +4502,13 @@ function initDisplayFilterAutocomplete() {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             moveFilterAutocomplete(e.key === "ArrowDown" ? 1 : -1);
             e.preventDefault();
+            return;
+        }
+        if (e.key === "Enter" && filterAc.items[filterAc.active]?.token === filterAc.token?.text) {
+            // The highlighted row is what is already typed (a protocol in
+            // full), so there is nothing to take: Enter applies the filter,
+            // through the document-level handler.
+            closeFilterAutocomplete();
             return;
         }
         if (e.key === "Enter" || e.key === "Tab") {
@@ -4498,6 +4575,73 @@ function toggleDrawer(name) {
     else open.add(name);
     saveOpenDrawers(open);
     applyDrawerState();
+}
+
+// --- is what is in the box a filter ---
+//
+// Wireshark colours its filter box while you type. Here the verdict is a shape
+// beside the box as well as the colour of its underline (DESIGN.md: status is
+// a shape plus a word, never colour alone), from the same compiler: the server
+// hands the text to tshark with no capture behind it. tshark's complaint is
+// the mark's tooltip while typing, and is printed in full under the box only
+// when the filter is applied -- a half-typed filter is wrong most of the time,
+// and a red paragraph for every keystroke is not help.
+const FILTER_CHECK_DELAY_MS = 450;
+let filterCheckTimer = null;
+let filterCheckSeq = 0;
+
+function setFilterState(state, reason, hint) {
+    const input = $("display-filter");
+    const mark = $("display-filter-state");
+    if (!input || !mark) return;
+    showDisplayFilterHint(state === "ok" ? hint : "");
+    if (state === "ok" && hint) state = "hint";
+    input.classList.toggle("filter-valid", state === "ok");
+    input.classList.toggle("filter-hinted", state === "hint");
+    input.classList.toggle("filter-invalid", state === "bad");
+    if (state === "bad") input.setAttribute("aria-invalid", "true");
+    else input.removeAttribute("aria-invalid");
+    mark.hidden = !state;
+    mark.dataset.state = state || "";
+    mark.textContent = { ok: "\u25a0 ok", bad: "\u2715 invalid", hint: "\u25b2 check" }[state] || "";
+    mark.title = state === "bad" ? (reason || "").split("\n")[0] : state === "hint" ? hint : "";
+}
+
+// A filter that compiles and probably does not mean what was meant. Unlike
+// tshark's complaint this is shown while typing: it only ever follows a filter
+// that is already valid, and it is one sentence.
+function showDisplayFilterHint(message) {
+    const el = $("display-filter-hint");
+    if (!el) return;
+    el.textContent = message || "";
+    el.hidden = !message;
+}
+
+function scheduleFilterCheck() {
+    clearTimeout(filterCheckTimer);
+    const seq = ++filterCheckSeq;
+    const input = $("display-filter");
+    if (!input) return;
+    // Unknown again the moment it changes: the old verdict was about other text.
+    setFilterState("", "");
+    const text = input.value;
+    if (!text.trim()) return;
+    filterCheckTimer = setTimeout(async () => {
+        const resolved = resolveFieldReferences(text);
+        if (resolved.error) {
+            if (seq === filterCheckSeq) setFilterState("bad", resolved.error);
+            return;
+        }
+        let verdict;
+        try {
+            verdict = await api(`/api/display-filter/check?display_filter=${encodeURIComponent(resolved.text)}`);
+        } catch (e) {
+            // No verdict is not a bad filter. Apply still says so if it is.
+            return;
+        }
+        if (seq !== filterCheckSeq || input.value !== text) return;
+        setFilterState(verdict.ok ? "ok" : "bad", verdict.reason, verdict.hint);
+    }, FILTER_CHECK_DELAY_MS);
 }
 
 function showDisplayFilterError(message) {
@@ -5160,7 +5304,7 @@ function redrawPacketRows() {
     // has to leave the headings, and packetColumns() is what draws those.
     const cols = packetColumns();
     if (!currentPackets.length) return;
-    tbody.innerHTML = currentPackets.map((p) => packetRowHtml(p, cols)).join("");
+    tbody.innerHTML = currentPackets.map((p) => packetRowHtml(p, cols)).join("") + packetMoreRowHtml(cols.span);
 }
 
 // One renderer for the table's headings and its cells. Two of them is how a
@@ -5295,6 +5439,84 @@ function packetCellHtml(p, col, cols) {
     }
 }
 
+// --- how much of the answer is on screen ---
+//
+// The list is fetched a page at a time, and a page that is simply full looks
+// exactly like a filter that matched that many packets. So the server counts
+// every match, the bar above the list says "N of M", and the last row offers
+// the next page. Wireshark's status bar ("Displayed: 4213 (35.1%)") is the
+// same answer to the same question.
+const PACKET_PAGE_SIZE = 1000;
+// What the rows on screen were fetched with, so the next page asks for the
+// same thing even if the box has been edited since.
+let packetPage = { captureId: null, filter: "", matched: 0, total: 0, loading: false };
+
+function packetCountText() {
+    const shown = currentPackets.length;
+    const { matched, total, filter } = packetPage;
+    const n = (v) => v.toLocaleString();
+    const filtered = Boolean(filter.trim());
+    const all = matched === 1 ? "1 packet" : `${n(matched)} packets`;
+    // An upload or an old capture can have no stored total; the count of
+    // matches is still exact, so the "of the capture" half is just left off.
+    const ofCapture = filtered && total > 0 ? ` of ${n(total)}` : "";
+    const head = filtered ? `${all}${ofCapture} match` + (matched === 1 ? "es" : "") : all;
+    return shown < matched ? `${head} · first ${n(shown)} shown` : head;
+}
+
+function renderPacketCount() {
+    const el = $("packet-count");
+    if (!el) return;
+    el.textContent = packetPage.captureId ? packetCountText() : "";
+}
+
+function packetMoreRowHtml(span) {
+    const left = packetPage.matched - currentPackets.length;
+    if (left <= 0) return "";
+    const next = Math.min(left, PACKET_PAGE_SIZE);
+    return `<tr class="packet-more-row"><td colspan="${span}">
+        <button type="button" class="btn btn-sm btn-secondary" id="btn-more-packets">Load the next ${next.toLocaleString()}</button>
+        <span class="packet-more-note">${left.toLocaleString()} more match</span>
+        <span id="packet-more-msg" class="packet-more-note" role="status"></span>
+    </td></tr>`;
+}
+
+async function loadMorePackets() {
+    const { captureId, filter } = packetPage;
+    if (!captureId || packetPage.loading || !currentPackets.length) return;
+    const cols = packetColumns();
+    const btn = $("btn-more-packets");
+    packetPage.loading = true;
+    if (btn) btn.disabled = true;
+    try {
+        const query = new URLSearchParams({
+            limit: String(PACKET_PAGE_SIZE),
+            offset: String(currentPackets[currentPackets.length - 1].number),
+            display_filter: filter,
+            flags: cols.requestFlags.join(","),
+            resolve_names: resolveNamesEnabled() ? "true" : "false",
+            columns: cols.fields.join(","),
+        });
+        const data = await api(`/api/captures/${captureId}/packets?${query}`);
+        // A capture switched or a filter applied while this was in flight: the
+        // rows belong to a list that is no longer the one on screen.
+        if (packetPage.captureId !== captureId || packetPage.filter !== filter) return;
+        currentPackets = currentPackets.concat(data.packets);
+        packetPage.matched = data.matched ?? packetPage.matched;
+        const tbody = $("packet-tbody");
+        tbody.querySelector(".packet-more-row")?.remove();
+        tbody.insertAdjacentHTML("beforeend",
+            data.packets.map((p) => packetRowHtml(p, cols)).join("") + packetMoreRowHtml(cols.span));
+        renderPacketCount();
+    } catch (e) {
+        const msg = $("packet-more-msg");
+        if (msg) msg.textContent = e.message;
+        if (btn) btn.disabled = false;
+    } finally {
+        packetPage.loading = false;
+    }
+}
+
 async function loadPackets(captureId, filter = "") {
     // Every apply, view switch and capture change comes through here, which is
     // what keeps the Save button in step with a box changed by code.
@@ -5302,6 +5524,7 @@ async function loadPackets(captureId, filter = "") {
     const tbody = $("packet-tbody");
     const cols = packetColumns();
     const { requestFlags, span } = cols;
+    const previousPackets = currentPackets;
     currentPackets = [];
 
     // Kept so a rejected filter can put the packets back. The spinner replaces
@@ -5314,7 +5537,7 @@ async function loadPackets(captureId, filter = "") {
 
     try {
         const query = new URLSearchParams({
-            limit: "1000",
+            limit: String(PACKET_PAGE_SIZE),
             display_filter: filter,
             flags: requestFlags.join(","),
             resolve_names: resolveNamesEnabled() ? "true" : "false",
@@ -5324,23 +5547,39 @@ async function loadPackets(captureId, filter = "") {
         });
         const data = await api(`/api/captures/${captureId}/packets?${query}`);
         showDisplayFilterError("");
+        // The list ran it, so it compiled: the same verdict the as-you-type
+        // check gives, from the run itself.
+        if ($("display-filter").value === filter) setFilterState(filter.trim() ? "ok" : "", "");
+        packetPage = {
+            captureId, filter, loading: false,
+            matched: data.matched ?? data.packets.length, total: data.total || 0,
+        };
         if (!data.packets.length) {
             tbody.innerHTML = `<tr><td colspan="${span}" style="text-align:center;padding:20px;color:var(--text-muted)">No packets match</td></tr>`;
+            renderPacketCount();
             return;
         }
         // Kept so that moving, renaming or removing a column can redraw the
         // table without asking the server for packets it already has.
         currentPackets = data.packets;
-        tbody.innerHTML = data.packets.map((p) => packetRowHtml(p, cols)).join("");
+        tbody.innerHTML = data.packets.map((p) => packetRowHtml(p, cols)).join("") + packetMoreRowHtml(span);
+        renderPacketCount();
     } catch (e) {
         if (e.badDisplayFilter) {
             // The capture is fine and the previous list is still meaningful, so
             // put it back and show the complaint under the box that caused it.
+            // currentPackets goes back with it: the rows are on screen again,
+            // and the count above them and the next page both read from it.
             tbody.innerHTML = previousRows;
+            currentPackets = previousPackets;
             showDisplayFilterError(e.message);
+            if ($("display-filter").value === filter) setFilterState("bad", e.message);
             return;
         }
         tbody.innerHTML = `<tr><td colspan="${span}" style="color:var(--danger);padding:20px">${escHtml(e.message)}</td></tr>`;
+        // Nothing is listed, so there is nothing to count or to page through.
+        packetPage = { captureId: null, filter: "", matched: 0, total: 0, loading: false };
+        renderPacketCount();
     }
 }
 
@@ -5435,7 +5674,19 @@ function useFilterSuggestion(expr) {
 
 function applyDisplayFilter() {
     if (!viewingCaptureId) return;
-    loadPackets(viewingCaptureId, $("display-filter").value);
+    const box = $("display-filter");
+    const resolved = resolveFieldReferences(box.value);
+    if (resolved.error) {
+        showDisplayFilterError(resolved.error);
+        setFilterState("bad", resolved.error);
+        return;
+    }
+    // The box shows what ran: the value, not the reference it came from.
+    if (resolved.text !== box.value) box.value = resolved.text;
+    // A filter that arrived without a keystroke (a saved view, the right-click
+    // menu, a paste run at once) has had no verdict yet, and so no hint.
+    scheduleFilterCheck();
+    loadPackets(viewingCaptureId, box.value);
     // A Traffic Diagram open on this capture drops a host highlight the
     // packet list no longer matches (diagrams.js).
     if (typeof onViewerFilterApplied === "function") onViewerFilterApplied($("display-filter").value);
@@ -5751,29 +6002,90 @@ function normaliseValue(v) {
     return v;
 }
 
-// The display filter rejects these characters on the way into tshark
-// (packet_parser._FILTER_FORBIDDEN). Rather than relax that rule to suit
-// click-to-filter, a value carrying one falls back to testing that the field is
-// merely present -- a filter that is still useful and still passes validation.
-const FILTER_UNSAFE = /[;$`\\]/;
+// A value as a display-filter literal: bare when it is a number or an address,
+// quoted when it is text. Inside the quotes a backslash and a quote are
+// escaped, which is all the double-quoted form needs. null for a value with a
+// line break or another control character in it -- the filter box is one
+// line, and the server refuses those (models.py FILTER_FORBIDDEN).
+function filterLiteral(value) {
+    const v = normaliseValue(String(value));
+    if (/[\x00-\x1f\x7f]/.test(v)) return null;
+    if (isBareLiteral(v)) return v;
+    return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
 
+// A value that cannot be written as a literal falls back to testing that the
+// field is merely present -- a filter that is still useful and still runs.
 function buildFieldFilter(name, value, op = "==") {
     if (!name) return "";
     if (value === undefined || value === null || value === "") return name;
-    if (FILTER_UNSAFE.test(value)) return name;
-    const v = normaliseValue(value);
-    const literal = isBareLiteral(v) ? v : `"${v.replace(/"/g, '\\"')}"`;
-    if (FILTER_UNSAFE.test(literal)) return name;
+    const literal = filterLiteral(value);
+    if (literal === null) return name;
     return `${name} ${op} ${literal}`;
 }
 
-// Wireshark's Apply-as-Filter menu, with the same four combinators.
+// --- field references ---
+//
+// Wireshark's ${ip.src}: "whatever that field is in the packet I have
+// selected". tshark has no selected packet -- handed one of these it compiles
+// the filter and matches nothing, without a word -- so the reference is filled
+// in here, from the packet open in the detail pane, and what goes to the
+// server (and what the box then shows) is the filter with the value in it.
+// That is also what makes a saved view of it mean the same thing tomorrow.
+const FILTER_STRING_RE = /"(?:\\.|[^"\\])*"/g;
+const FIELD_REFERENCE_RE = /\$\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}/g;
+
+function findDetailValue(fields, name) {
+    for (const field of fields || []) {
+        if (field.name === name && field.value !== undefined && field.value !== "") return field.value;
+        const nested = findDetailValue(field.children || field.fields, name);
+        if (nested !== undefined) return nested;
+    }
+    return undefined;
+}
+
+// { text } with every reference replaced, or { error } saying which one could
+// not be and why. A reference inside a quoted string is text to search for,
+// and is left as it is.
+function resolveFieldReferences(text) {
+    let error = "";
+    const fill = (segment) => segment.replace(FIELD_REFERENCE_RE, (whole, name) => {
+        if (error) return whole;
+        if (!currentDetail) {
+            error = `${whole} stands for the ${name} field of the selected packet. `
+                + "Click a packet in the list first, then apply the filter again.";
+            return whole;
+        }
+        const value = findDetailValue(currentDetail.layers, name);
+        const literal = value === undefined ? null : filterLiteral(value);
+        if (literal === null) {
+            error = `${whole}: the selected packet has no ${name} field with a value to use. `
+                + "Select a packet that has one, or type the value in its place.";
+            return whole;
+        }
+        return literal;
+    });
+    let out = "", last = 0;
+    for (const m of text.matchAll(FILTER_STRING_RE)) {
+        out += fill(text.slice(last, m.index)) + m[0];
+        last = m.index + m[0].length;
+    }
+    out += fill(text.slice(last));
+    return error ? { error } : { text: out };
+}
+
+// Wireshark's Apply-as-Filter menu, with the same six entries: the expression
+// on its own or negated, and each of those joined to what the box already
+// holds with && or ||. With an empty box there is nothing to join to, so the
+// joined forms are the plain ones.
 function combineFilter(expr, mode) {
     const current = $("display-filter").value.trim();
-    if (mode === "selected") return expr;
-    if (mode === "not") return `!(${expr})`;
-    if (!current) return mode === "or" ? expr : expr;
-    return mode === "and" ? `(${current}) && (${expr})` : `(${current}) || (${expr})`;
+    const negated = mode === "not" || mode === "andnot" || mode === "ornot";
+    const term = negated ? `!(${expr})` : expr;
+    if (mode === "selected" || mode === "not" || !current) return term;
+    const joiner = mode === "or" || mode === "ornot" ? "||" : "&&";
+    // The negation carries its own brackets; a second pair is noise.
+    return `(${current}) ${joiner} ${negated ? term : `(${expr})`}`;
 }
 
 function applyBuiltFilter(expr, mode, run = true) {
@@ -5781,7 +6093,11 @@ function applyBuiltFilter(expr, mode, run = true) {
     const box = $("display-filter");
     box.value = combineFilter(expr, mode);
     if (run) applyDisplayFilter();
-    else box.focus();
+    else {
+        // Prepared, not run: the box changed without a keystroke, so ask.
+        scheduleFilterCheck();
+        box.focus();
+    }
 }
 
 // --- the right-click menu ---
@@ -5848,6 +6164,8 @@ function filterMenuItems(expr, label) {
         { label: "  Not selected", hint: "!( )", run: () => applyBuiltFilter(expr, "not") },
         { label: "  …and selected", hint: "&&", run: () => applyBuiltFilter(expr, "and") },
         { label: "  …or selected", hint: "||", run: () => applyBuiltFilter(expr, "or") },
+        { label: "  …and not selected", hint: "&& !( )", run: () => applyBuiltFilter(expr, "andnot") },
+        { label: "  …or not selected", hint: "|| !( )", run: () => applyBuiltFilter(expr, "ornot") },
         { separator: true },
         { label: "Prepare as filter", hint: "does not run", run: () => applyBuiltFilter(expr, "selected", false) },
         { label: "Copy value", run: () => navigator.clipboard?.writeText(label).catch(() => {}) },
@@ -5994,6 +6312,19 @@ function onPacketRowContextMenu(ev) {
         const conv = `${buildFieldFilter(sf, src)} && ${buildFieldFilter(sf, dst)}`;
         items.push({ separator: true });
         items.push({ label: "Conversation filter", hint: `${src} ↔ ${dst}`, run: () => applyBuiltFilter(conv, "selected") });
+    }
+    // Wireshark offers the conversation at each layer. The address pair above
+    // is every exchange between two hosts; these are the one connection this
+    // packet belongs to, by the index tshark gave it -- exact where a pair of
+    // ports is not, since a port pair is reused by the next connection.
+    for (const [proto, stream] of [["tcp", row.dataset.tcpStream], ["udp", row.dataset.udpStream]]) {
+        if (stream === undefined || stream === "") continue;
+        const expr = `${proto}.stream == ${Number(stream)}`;
+        if (!items.length || !items[items.length - 1].separator) items.push({ separator: true });
+        items.push({
+            label: `Conversation filter: this ${proto.toUpperCase()} stream`, hint: expr,
+            run: () => applyBuiltFilter(expr, "selected"),
+        });
     }
     pushFollowStreamItems(items, row.dataset.tcpStream, row.dataset.udpStream);
     openFilterMenu(ev.clientX, ev.clientY, items);
@@ -7172,6 +7503,7 @@ function initStaticHandlers() {
     $("btn-apply-filter")?.addEventListener("click", applyDisplayFilter);
     $("btn-save-view")?.addEventListener("click", saveCurrentView);
     $("display-filter")?.addEventListener("input", noteFilterEditedByHand);
+    $("display-filter")?.addEventListener("input", scheduleFilterCheck);
     $("display-filter")?.addEventListener("input",
         () => syncSaveButton("btn-save-display-filter", "display-filter"));
     $("btn-save-display-filter")?.addEventListener("click", saveCurrentDisplayFilter);
@@ -7320,6 +7652,10 @@ function initEventDelegation() {
         "purge-orphaned-hosts": () => purgeOrphanedHosts(),
     });
     $("packet-tbody")?.addEventListener("click", (e) => {
+        if (e.target.closest("#btn-more-packets")) {
+            loadMorePackets();
+            return;
+        }
         const row = e.target.closest("tr[data-frame]");
         if (row) selectPacket(Number(row.dataset.frame));
     });

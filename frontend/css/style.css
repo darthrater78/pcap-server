@@ -1554,6 +1554,8 @@ dialog:not([open]) {
 
 .packet-table tbody tr { cursor: pointer; }
 .packet-table tbody tr:hover { background: var(--bg-hover); }
+.packet-table tbody tr.packet-more-row,
+.packet-table tbody tr.packet-more-row:hover { cursor: default; background: none; }
 
 /* Wireshark-style protocol coloring. Selection must still win over these. */
 .pkt-bad,
@@ -2316,6 +2318,10 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
     .packet-toolbar { flex-wrap: wrap; }
     .packet-toolbar input { flex: 1 1 100%; }
+    /* The box sits in a wrapper, and it is the wrapper that is the flex item:
+       without this the box stays a few characters wide on a phone and its
+       suggestion list, sized to it, cuts every name short. */
+    .packet-toolbar .filter-input-wrap { flex: 1 1 100%; }
 
     /* Scroll the table sideways rather than crushing seven columns. */
     .packet-table { min-width: 720px; }
@@ -2921,6 +2927,33 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 .filter-input-wrap input { width: 100%; }
 
+/* Whether tshark accepts what is in the box. A shape and a word in the status
+   colour, and the same colour on the box's lower edge; never the colour
+   alone. It sits inside the right end of the box, which makes room for it
+   only while there is a verdict to show. */
+.filter-state {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0 4px;
+    background: var(--bg-surface);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.filter-state[data-state="ok"] { color: var(--ok); }
+.filter-state[data-state="bad"] { color: var(--danger); cursor: help; }
+.filter-state[data-state="hint"] { color: var(--warn); cursor: help; }
+
+.packet-toolbar input.filter-valid { padding-right: 4em; }
+.packet-toolbar input.filter-invalid { padding-right: 6.5em; }
+.packet-toolbar input.filter-hinted { padding-right: 5.5em; border-bottom-color: var(--warn); }
+.packet-toolbar input.filter-valid { border-bottom-color: var(--ok); }
+.packet-toolbar input.filter-invalid { border-bottom-color: var(--danger); }
+
 .filter-autocomplete {
     position: absolute;
     z-index: 60;
@@ -3027,6 +3060,15 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
+/* Advice about a filter that compiles: prose, so it wraps like prose. */
+.filter-hint {
+    font-size: 0.75rem;
+    color: var(--warn);
+    border-left: 2px solid var(--warn);
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
 /* --- stored SSH usernames, on the Servers tab -------------------------- */
 /* Collapsed by default: it belongs beside the form that offers these names,
    but the server list is what the tab is for. */
@@ -3127,6 +3169,29 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 .viewer-drawer .filter-suggestions { margin-top: 0; margin-bottom: 10px; }
 
+/* How many packets matched and how many are on screen. A count, so mono and
+   tabular. */
+.packet-count {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* The last row of a list that has more behind it. */
+.packet-more-row td {
+    padding: 8px 16px;
+    text-align: left;
+    border-top: 1px solid var(--border);
+}
+
+.packet-more-note {
+    margin-left: 12px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
 /* The legend rides along on the bar rather than claiming a row of its own. */
 .viewer-bar .packet-legend {
     padding: 0;
@@ -3136,7 +3201,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
     row-gap: 2px;
 }
 
-.filter-error { margin: 6px 16px; }
+.filter-error, .filter-hint { margin: 6px 16px; }
 
 @media (max-width: 900px) {
     /* The legend is the first thing to go when the bar cannot hold it. */

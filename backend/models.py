@@ -57,12 +57,23 @@ class DisplayFilterError(ValueError):
     """
 
 
-# Rejected on the way in. `&` and `|` are deliberately NOT here: the display
-# filter reaches tshark through create_subprocess_exec as a single argv element,
-# with no shell anywhere on the path, and Wireshark's syntax needs both -- `&&`
-# and `||` are the operators most people type, and `&` is bitwise matching such
-# as `tcp.flags & 0x02`. Rejecting them turned correct filter syntax into
-# "contains forbidden characters".
+# What a display filter may not contain, and why the list is this short.
+#
+# The filter reaches tshark through create_subprocess_exec as a single argv
+# element, with no shell anywhere on the path (a test runs a probe command and
+# inspects argv to hold that true). So nothing in it can become a command, and
+# every printable character is tshark's to accept or refuse as filter syntax.
+#
+# `;`, `$`, backtick and backslash used to be rejected here as well. That was a
+# shell rule applied to something no shell reads, and it cost the whole regular
+# expression half of the language: `matches "\\.com$"` needs the backslash and
+# the anchor, and so does the raw-string form r"\.com$". `&` and `|` were let
+# through earlier for the same reason.
+#
+# What is left is what argv itself cannot carry or a one-line filter never
+# needs: NUL (execve refuses it), and line breaks and the other control
+# characters, which only ever arrive by pasting and would put a second line
+# into the log entry a rejected filter writes.
 #
 # The capture filter is a different matter and keeps the stricter rule: it goes
 # to tcpdump inside a command string over SSH, where a shell does parse it.
@@ -70,21 +81,84 @@ class DisplayFilterError(ValueError):
 # Lives here rather than in packet_parser because a saved view stores a filter
 # long before any tool runs it, and the rule that decides what may be run has
 # to be the same one that decides what may be stored.
-FILTER_FORBIDDEN = frozenset(";$`\\")
+FILTER_FORBIDDEN = frozenset(chr(c) for c in (*range(32), 127))
 FILTER_MAX_LEN = 1024
+
+# A field reference, `${ip.src}`: Wireshark fills it in from the packet that is
+# selected. tshark has no selected packet, and says nothing about it -- the
+# filter compiles and matches no packet at all, which is the one outcome an
+# empty list here must never mean. The viewer fills references in before it
+# sends a filter; one that arrives unfilled is refused with the reason.
+#
+# Quoted strings are skipped first, so a filter hunting for the text itself
+# (`http.request.uri contains "${jndi:"`) is left alone. A macro call,
+# `${name:args}` or `$name(args)`, is not matched: tshark reports a macro it
+# does not have in its own words.
+#
+# Both are scanned by hand, one pass each. As regular expressions they were
+# `"(?:\\.|[^"\\])*"` and `\$\{\s*[^}:;]*\}`, and each backtracks on a filter built
+# for it: a quote that is never closed, a `${` that is never closed.
+
+
+def blank_quoted_strings(f: str) -> str:
+    """The filter with the inside of every "quoted string" removed.
+
+    A backslash takes the next character with it, so `"a\\"b"` is one string.
+    A quote with no partner is left where it is.
+    """
+    out: list[str] = []
+    i, n = 0, len(f)
+    while i < n:
+        if f[i] != '"':
+            out.append(f[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < n and f[j] != '"':
+            j += 2 if f[j] == "\\" else 1
+        if j >= n:
+            out.append(f[i:])
+            break
+        out.append('""')
+        i = j + 1
+    return "".join(out)
+
+
+def _field_reference(text: str) -> str | None:
+    """The first `${...}` in `text` that is a field reference and not a macro call."""
+    start = text.find("${")
+    while start != -1:
+        end = text.find("}", start)
+        if end == -1:
+            return None
+        inner = text[start + 2:end]
+        if ":" not in inner and ";" not in inner:
+            return text[start:end + 1]
+        start = text.find("${", start + 2)
+    return None
+
+
+def display_filter_problem(f: str) -> str:
+    """Why this text cannot be handed to tshark as a filter, or "" when it can."""
+    if len(f) > FILTER_MAX_LEN:
+        return f"display filter is too long (limit {FILTER_MAX_LEN} characters)"
+    if set(f) & FILTER_FORBIDDEN:
+        return "display filter cannot contain a line break, a tab or another control character"
+    reference = _field_reference(blank_quoted_strings(f))
+    if reference:
+        return (
+            f"{reference} is a field reference: it stands for that field in the "
+            "selected packet. Select a packet that has the field and apply the filter "
+            "again, or type the value in its place"
+        )
+    return ""
 
 
 def validate_display_filter(f: str) -> str:
     """Returns the filter, or raises DisplayFilterError."""
-    if len(f) > FILTER_MAX_LEN:
-        raise DisplayFilterError(
-            f"display filter is too long (limit {FILTER_MAX_LEN} characters)"
-        )
-    found = sorted(set(f) & FILTER_FORBIDDEN)
-    if found:
-        raise DisplayFilterError(
-            "display filter cannot contain " + " ".join(repr(c) for c in found)
-        )
+    problem = display_filter_problem(f)
+    if problem:
+        raise DisplayFilterError(problem)
     return f
 
 

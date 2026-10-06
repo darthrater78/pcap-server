@@ -34,7 +34,7 @@
 
 services:
   pcap-server:
-    image: ghcr.io/darthrater78/pcap-server:2.0.0
+    image: ghcr.io/darthrater78/pcap-server:2.1.0
     ports:
       - "8080:8080"
     volumes:

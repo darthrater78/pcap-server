@@ -483,6 +483,14 @@ jobs:
           context: .
           load: true
           tags: pcap-server-smoke:${{ steps.meta.outputs.version }}
+          # Rebuilds the Dockerfile's apt layer on every release instead of
+          # taking it from the cache: the cache is keyed on the instruction's
+          # text, so it would hand back the tshark of whichever day the layer
+          # was first built, and the scan below would then stop the release
+          # over a CVE Debian had already fixed. The run id is the same for
+          # both builds in this job, so the second still reuses the first.
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -597,6 +605,9 @@ jobs:
         with:
           context: .
           outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # The same value as the smoke build, so this is that image.
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}
           cache-from: type=gha
 
       # The gate: a HIGH or CRITICAL vulnerability that has a fix available

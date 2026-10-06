@@ -181,8 +181,10 @@ The two diagrams read their packets through a fourth,
 only up to the cap (`max_capture_packets`, or a lower `limit` the caller asks
 for). Over the cap it returns the count and no packets, so memory is bounded by
 the cap, not the capture. The packet list's own pages would not do here: their
-offset is a frame number, so every page is a full pass, and their `total` is
-the capture's size rather than the filter's matches.
+offset is a frame number, so every page is a full pass. The packet list
+returns `matched` (every packet the filter selected, counted in the same pass)
+beside `total` (the capture's size), which is what the viewer's count and its
+**Load the next 1,000** row read.
 
 **The hierarchy and the conversations are built in Python, not by parsing
 tshark's own `-z io,phs` / `-z conv,ip` reports.** Those are formatted for a
@@ -438,15 +440,37 @@ written before the column existed read as empty, and the UI treats empty as
 "says nothing" rather than as "no filter" — guessing unfiltered loses a label,
 guessing a filter would be a claim about what is inside the file.
 
-**Display filters** reject `;`, `$`, backtick and backslash, and are capped in
-length. `&` and `|` are deliberately allowed: a display filter reaches tshark
-through `create_subprocess_exec` as one argv element with no shell anywhere on
-the path, so shell operators in it are text for tshark to reject as bad filter
-syntax rather than commands — and Wireshark's own `&&`, `||` and bitwise
-matching need them. A test runs a probe command and inspects `argv` to assert
-that property rather than leaving it as a claim in a comment. The capture filter
-keeps the stricter rule, because that one does travel inside a command string
-over SSH where a shell parses it.
+**Display filters** reject control characters (NUL, line breaks, tabs) and are
+capped in length. Every printable character is allowed: a display filter
+reaches tshark through `create_subprocess_exec` as one argv element with no
+shell anywhere on the path, so `;`, `$`, a backtick or a backslash in it is
+text for tshark to accept or refuse as filter syntax, not a command. Regular
+expressions need the backslash and the `$` anchor, and `&&`, `||` and bitwise
+matching need `&` and `|`. A test runs a probe command and inspects `argv` to
+assert that property rather than leaving it as a claim in a comment. The
+capture filter keeps the stricter rule, because that one does travel inside a
+command string over SSH where a shell parses it.
+
+An unfilled field reference (`${ip.src}`) is also refused. tshark has no
+selected packet, compiles the filter and matches nothing without an error; the
+viewer substitutes the value from the selected packet before sending, and the
+validator rejects one that arrives unsubstituted so an empty list never means
+anything but "nothing matched".
+
+Two routes serve the filter box and read no capture.
+`/api/display-filter/check` (`display_filter_complaint`) compiles a filter with
+tshark against an empty pcap on stdin and returns `{ok, reason, hint}`. The
+hint (`display_filter_hint`) is set for a filter that compiles but negates a
+bare flag, `!dns.flags.response`: the names of tshark's boolean fields are read
+once from `tshark -G fields` and kept for the life of the process.
+`/api/display-filter/fields` (`complete_field_names`) runs
+`tshark -G fields,<prefix>` for a prefix matching `FIELD_PREFIX_RE` and returns
+up to 40 names, cached per prefix for the life of the process. A tshark that
+does not search by prefix (4.2 prints nothing for that form) is noticed on the
+first lookup, and the full `tshark -G fields` dump is filtered instead. Both sit behind
+`filter_assist_rate_limiter`, six times the packet-list budget, because they
+are driven by typing and each is a tshark that exits in about a tenth of a
+second.
 
 **PDML** is parsed only after the raw bytes are checked for a document type
 declaration. tshark never emits one, so its presence means the input is not

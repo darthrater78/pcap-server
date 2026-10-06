@@ -532,6 +532,10 @@
                                autocomplete="off" autocapitalize="off" spellcheck="false"
                                role="combobox" aria-expanded="false" aria-haspopup="listbox"
                                aria-autocomplete="list" aria-controls="display-filter-ac">
+                        <!-- Whether tshark accepts what is typed: a shape and
+                             a word, with its complaint as the tooltip. -->
+                        <span id="display-filter-state" class="filter-state" role="status"
+                              aria-live="polite" hidden></span>
                         <ul id="display-filter-ac" class="filter-autocomplete"
                             role="listbox" aria-label="Display filter suggestions" hidden></ul>
                     </div>
@@ -590,9 +594,16 @@
                 <div class="viewer-bar">
                     <button type="button" class="drawer-toggle" data-action="toggle-drawer" data-id="view-options">View options</button>
                     <button type="button" class="drawer-toggle" data-action="toggle-drawer" data-id="filter-help">Filter help</button>
+                    <!-- How many packets the filter matched, and how many of
+                         them are on screen: a full page reads as the whole
+                         answer unless something says otherwise. -->
+                    <span id="packet-count" class="packet-count" role="status" aria-live="polite"></span>
                     <div id="packet-legend" class="packet-legend"></div>
                 </div>
                 <div id="display-filter-error" class="filter-error" hidden></div>
+                <!-- A filter tshark accepts that probably means something
+                     else: a negated bare flag, so far. -->
+                <div id="display-filter-hint" class="filter-hint" role="status" aria-live="polite" hidden></div>
 
                 <div id="drawer-view-options" class="viewer-drawer" hidden>
                     <div class="flag-groups">
@@ -661,12 +672,26 @@
                                 <tr><td><code>tcp.analysis.retransmission</code></td><td>what Wireshark flagged as a retransmission</td></tr>
                                 <tr><td><code>frame.len &gt; 1000</code></td><td>numeric comparison on any field</td></tr>
                                 <tr><td><code>http.request.method == "GET"</code></td><td>string values go in quotes</td></tr>
-                                <tr><td><code>dns.qry.name contains "example"</code></td><td><code>contains</code> for substrings, <code>matches</code> for regex</td></tr>
+                                <tr><td><code>dns.qry.name contains "example"</code></td><td><code>contains</code> for substrings</td></tr>
+                                <tr><td><code>dns.qry.name matches r"\.(com|net)$"</code></td><td><code>matches</code> (or <code>~</code>) for a regular expression. Write it as <code>r"&hellip;"</code> and backslashes mean what they do in the regex; in plain quotes each one is doubled</td></tr>
+                                <tr><td><code>tcp.port in {80, 443, 8000..8100}</code></td><td>any of a set, ranges included</td></tr>
+                                <tr><td><code>tcp.flags &amp; 0x12 == 0x12</code></td><td>bitwise test</td></tr>
+                                <tr><td><code>frame[0:4] == 00:04:00:01</code></td><td>bytes by offset and length, on any field or the whole frame</td></tr>
+                                <tr><td><code>upper(http.host) contains "API"</code></td><td>functions: <code>upper</code>, <code>lower</code>, <code>len</code>, <code>count</code>, <code>string</code></td></tr>
+                                <tr><td><code>ip.addr == ${ip.src}</code></td><td><code>${field}</code> is that field in the packet you have selected. It is filled in when you apply, and the box then shows the value</td></tr>
                                 <tr><td><code>!(arp or icmp)</code></td><td><code>!</code> negates, brackets group</td></tr>
                             </table>
                             <p class="explainer-note">
                                 <code>&amp;&amp;</code>, <code>||</code> and <code>!</code> work as
-                                well as the word forms. A filter this tool cannot run is reported
+                                well as the word forms. The box completes protocol and field
+                                names from tshark's own list as you type, and marks what you
+                                have typed <strong>ok</strong> or <strong>invalid</strong>
+                                before you apply it (hover the mark for tshark's reason). <strong>check</strong>
+                                means it is valid but negates a bare flag: <code>!dns.flags.response</code>
+                                matches no DNS packet, and <code>dns.flags.response == 0</code> is
+                                the queries. The count above the list is how many
+                                packets matched; when that is more than are shown, the last
+                                row loads the next thousand. A filter this tool cannot run is reported
                                 back with tshark's own message and the position it objected to,
                                 rather than an empty packet list &mdash; an empty list here always
                                 means the filter was valid and nothing matched it.
