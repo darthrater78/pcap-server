@@ -465,7 +465,9 @@ bare flag, `!dns.flags.response`: the names of tshark's boolean fields are read
 once from `tshark -G fields` and kept for the life of the process.
 `/api/display-filter/fields` (`complete_field_names`) runs
 `tshark -G fields,<prefix>` for a prefix matching `FIELD_PREFIX_RE` and returns
-up to 40 names, cached per prefix for the life of the process. Both sit behind
+up to 40 names, cached per prefix for the life of the process. A tshark that
+does not search by prefix (4.2 prints nothing for that form) is noticed on the
+first lookup, and the full `tshark -G fields` dump is filtered instead. Both sit behind
 `filter_assist_rate_limiter`, six times the packet-list budget, because they
 are driven by typing and each is a tshark that exits in about a tenth of a
 second.

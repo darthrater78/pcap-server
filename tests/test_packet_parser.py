@@ -1458,3 +1458,26 @@ async def test_conversations_count_an_unchanged_repeat_once(name):
     )
     wan_frames = sum(1 for f in scenario.frames if f[4:8] == b"\x00\x00\x00\x03")
     assert sum(c.packets_a_to_b + c.packets_b_to_a for c in only_wan) == wan_frames
+
+
+@needs_tshark
+async def test_field_names_are_found_on_a_tshark_that_does_not_search_by_prefix(monkeypatch):
+    """tshark 4.2 prints nothing for `-G fields,<prefix>`; the full registry
+    still has the names, and gives the same answer."""
+    packet_parser._FIELD_COMPLETIONS.clear()
+    with_search = await packet_parser.complete_field_names("tcp.analysis.byt")
+    kerberos = await packet_parser.complete_field_names("kerbero")
+
+    real_dump = packet_parser._registry_dump
+
+    async def no_prefix_search(report):
+        return [] if report.startswith("fields,") else await real_dump(report)
+
+    monkeypatch.setattr(packet_parser, "_registry_dump", no_prefix_search)
+    monkeypatch.setattr(packet_parser, "_PREFIX_SEARCH_MISSING", False)
+    packet_parser._FIELD_COMPLETIONS.clear()
+    assert await packet_parser.complete_field_names("tcp.analysis.byt") == with_search
+    assert packet_parser._PREFIX_SEARCH_MISSING is True
+    assert await packet_parser.complete_field_names("kerbero") == kerberos
+    assert await packet_parser.complete_field_names("zzznotafield") == []
+    packet_parser._FIELD_COMPLETIONS.clear()

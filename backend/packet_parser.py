@@ -487,15 +487,8 @@ _BOOLEAN_FIELDS: frozenset[str] | None = None
 async def _boolean_fields() -> frozenset[str]:
     global _BOOLEAN_FIELDS
     if _BOOLEAN_FIELDS is None:
-        proc = await asyncio.create_subprocess_exec(
-            "tshark", "-G", "fields",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await proc.communicate()
         names = set()
-        for line in stdout.decode("utf-8", "replace").splitlines():
+        for line in await _registry_dump("fields"):
             cols = line.split("\t")
             if len(cols) > 3 and cols[0] == "F" and cols[3] == "FT_BOOLEAN":
                 names.add(cols[2])
@@ -566,21 +559,45 @@ async def complete_field_names(prefix: str) -> list[dict[str, str]]:
     return result
 
 
+# Set once a tshark is seen that does not do the prefix search itself: 4.2,
+# which Ubuntu 24.04 ships, prints nothing for `-G fields,<prefix>` where 4.4
+# prints the matches. From then on the whole registry is read and filtered here.
+_PREFIX_SEARCH_MISSING = False
+
+
 async def _registry_names_starting(prefix: str) -> dict[str, str]:
     """Name -> its label, for every registry entry starting with `prefix`."""
+    global _PREFIX_SEARCH_MISSING
+    if not _PREFIX_SEARCH_MISSING:
+        found: dict[str, str] = {}
+        for line in await _registry_dump(f"fields,{prefix}"):
+            name, _, label = line.partition("\t")
+            if name and name not in found:
+                found[name] = label.strip()
+        if found:
+            return found
+    # Nothing came back: either nothing starts like that, or this tshark never
+    # searched. The full dump answers both, at about a fifth of a second.
+    found = {}
+    for line in await _registry_dump("fields"):
+        # P <label> <name>   or   F <label> <name> <type> ...
+        cols = line.split("\t")
+        if len(cols) > 2 and cols[0] in ("P", "F") and cols[2].startswith(prefix):
+            found.setdefault(cols[2], cols[1].strip())
+    if found:
+        _PREFIX_SEARCH_MISSING = True
+    return found
+
+
+async def _registry_dump(report: str) -> list[str]:
     proc = await asyncio.create_subprocess_exec(
-        "tshark", "-G", f"fields,{prefix}",
+        "tshark", "-G", report,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
     stdout, _ = await proc.communicate()
-    found: dict[str, str] = {}
-    for line in stdout.decode("utf-8", "replace").splitlines():
-        name, _, label = line.partition("\t")
-        if name and name not in found:
-            found[name] = label.strip()
-    return found
+    return stdout.decode("utf-8", "replace").splitlines()
 
 
 def validate_column_fields(fields: list[str]) -> list[str]:
