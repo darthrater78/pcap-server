@@ -1554,6 +1554,8 @@ dialog:not([open]) {
 
 .packet-table tbody tr { cursor: pointer; }
 .packet-table tbody tr:hover { background: var(--bg-hover); }
+.packet-table tbody tr.packet-more-row,
+.packet-table tbody tr.packet-more-row:hover { cursor: default; background: none; }
 
 /* Wireshark-style protocol coloring. Selection must still win over these. */
 .pkt-bad,
@@ -2921,6 +2923,31 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 .filter-input-wrap input { width: 100%; }
 
+/* Whether tshark accepts what is in the box. A shape and a word in the status
+   colour, and the same colour on the box's lower edge; never the colour
+   alone. It sits inside the right end of the box, which makes room for it
+   only while there is a verdict to show. */
+.filter-state {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0 4px;
+    background: var(--bg-surface);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.filter-state[data-state="ok"] { color: var(--ok); }
+.filter-state[data-state="bad"] { color: var(--danger); cursor: help; }
+
+.packet-toolbar input.filter-valid { padding-right: 4em; }
+.packet-toolbar input.filter-invalid { padding-right: 6.5em; }
+.packet-toolbar input.filter-valid { border-bottom-color: var(--ok); }
+.packet-toolbar input.filter-invalid { border-bottom-color: var(--danger); }
+
 .filter-autocomplete {
     position: absolute;
     z-index: 60;
@@ -3126,6 +3153,29 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 }
 
 .viewer-drawer .filter-suggestions { margin-top: 0; margin-bottom: 10px; }
+
+/* How many packets matched and how many are on screen. A count, so mono and
+   tabular. */
+.packet-count {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* The last row of a list that has more behind it. */
+.packet-more-row td {
+    padding: 8px 16px;
+    text-align: left;
+    border-top: 1px solid var(--border);
+}
+
+.packet-more-note {
+    margin-left: 12px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
 
 /* The legend rides along on the bar rather than claiming a row of its own. */
 .viewer-bar .packet-legend {

@@ -39,10 +39,16 @@ def test_wireshark_operators_the_bpf_rule_would_refuse_are_allowed():
     assert req.expression.startswith("tcp.flags.syn")
 
 
-@pytest.mark.parametrize("expr", ["dns; rm -rf /", "$(id)", "`id`", "a\\b"])
+@pytest.mark.parametrize("expr", ["dns\nudp", "dns\x00", "ip.src == ${ip.dst}"])
 def test_the_display_filter_rule_is_applied(expr):
     with pytest.raises(ValidationError):
         DisplayFilterRequest(label="x", expression=expr)
+
+
+def test_a_regular_expression_can_be_saved():
+    """Backslash, `$` and `;` are filter syntax; no shell ever reads them."""
+    req = DisplayFilterRequest(label="x", expression=r'dns.qry.name matches r"\.(com|net)$"')
+    assert req.expression.endswith('$"')
 
 
 def test_an_over_long_expression_is_refused():

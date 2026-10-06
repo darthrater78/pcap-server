@@ -24,7 +24,7 @@ from backend.models import (
     ProtocolHierarchyNode,
     validate_display_filter,
 )
-from backend.pcapsource import PcapSource
+from backend.pcapsource import BytesSource, PcapSource
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +430,89 @@ async def _lookup_in_registry(wanted: set[str]) -> set[str]:
     return found
 
 
+# --- help for the filter box: is this filter valid, and what is that field called ---
+
+# A pcap with a header and no packets: enough for tshark to compile a display
+# filter against, which is all the check below wants from it.
+_EMPTY_PCAP = bytes.fromhex("d4c3b2a1" "0200" "0400" "00000000" "00000000" "00000400" "01000000")
+
+
+async def check_display_filter(display_filter: str) -> None:
+    """Raises DisplayFilterError if tshark would refuse this filter; else returns.
+
+    Wireshark colours its filter box as you type, from the same compiler. This
+    is that verdict without a capture behind it: tshark compiles the filter
+    before it reads a packet, so an empty file answers in the time it takes
+    tshark to start (about a tenth of a second) however large the capture the
+    filter is meant for.
+    """
+    validate_display_filter(display_filter)
+    if not display_filter.strip():
+        return
+    _stdout, stderr, rc = await _run_tool(
+        ["tshark", "-r", "-", "-Y", display_filter],
+        BytesSource(_EMPTY_PCAP, len(_EMPTY_PCAP)),
+    )
+    if rc != 0:
+        raise DisplayFilterError(_filter_rejection(stderr))
+
+
+# The start of a protocol or field name, as typed. Narrower than
+# PACKET_FIELD_RE because a prefix may end on the dot ("tcp.").
+FIELD_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+FIELD_COMPLETION_LIMIT = 40
+
+# Prefix -> its completions. tshark's registry only changes with the image, so
+# an answer is good for the life of the process; bounded because a signed-in
+# caller can ask about as many prefixes as it likes.
+_FIELD_COMPLETIONS: dict[str, list[dict[str, str]]] = {}
+_FIELD_COMPLETIONS_LIMIT = 2000
+
+
+async def complete_field_names(prefix: str) -> list[dict[str, str]]:
+    """Protocol and field names starting with `prefix`, from tshark's own registry.
+
+    The viewer's built-in list is about a hundred and thirty names; the
+    registry is over a quarter of a million. `tshark -G fields,<prefix>` does
+    the search itself and prints only the matches, so nothing that size is
+    ever held here. Shortest names first: `tcp.flags` before
+    `tcp.flags.syn`, the way the name is built up while typing it.
+    """
+    if not FIELD_PREFIX_RE.match(prefix):
+        raise ValueError(f"not the start of a tshark field name: {prefix!r}")
+    cached = _FIELD_COMPLETIONS.get(prefix)
+    if cached is not None:
+        return cached
+    found = await _registry_names_starting(prefix)
+    if not found and prefix != prefix.lower():
+        # tshark matches case as written, and nearly every name is lower case:
+        # "TCP.fl" finds nothing where "tcp.fl" finds the flags. Names that do
+        # carry capitals (kerberos.CNameString) are found by the first try.
+        found = await _registry_names_starting(prefix.lower())
+    names = sorted(found, key=lambda n: (len(n), n))[:FIELD_COMPLETION_LIMIT]
+    result = [{"name": n, "label": found[n]} for n in names]
+    if len(_FIELD_COMPLETIONS) < _FIELD_COMPLETIONS_LIMIT:
+        _FIELD_COMPLETIONS[prefix] = result
+    return result
+
+
+async def _registry_names_starting(prefix: str) -> dict[str, str]:
+    """Name -> its label, for every registry entry starting with `prefix`."""
+    proc = await asyncio.create_subprocess_exec(
+        "tshark", "-G", f"fields,{prefix}",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    found: dict[str, str] = {}
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        name, _, label = line.partition("\t")
+        if name and name not in found:
+            found[name] = label.strip()
+    return found
+
+
 def validate_column_fields(fields: list[str]) -> list[str]:
     """The pattern check and the per-request cap, deduplicated, order kept.
 
@@ -459,6 +542,35 @@ async def get_packet_list(
     extra_fields: list[str] | None = None,
     copies: InterfaceCopies | None = None,
 ) -> list[PacketSummary]:
+    """One page of the packet list. get_packet_page also says how many matched."""
+    packets, _matched = await get_packet_page(
+        source, offset=offset, limit=limit, display_filter=display_filter,
+        view_flags=view_flags, resolve_names=resolve_names,
+        interface_names=interface_names, extra_fields=extra_fields, copies=copies,
+    )
+    return packets
+
+
+async def get_packet_page(
+    source: PcapSource,
+    offset: int = 0,
+    limit: int = 200,
+    display_filter: str = "",
+    view_flags: list[str] | None = None,
+    resolve_names: bool = False,
+    interface_names: dict[int, str] | None = None,
+    extra_fields: list[str] | None = None,
+    copies: InterfaceCopies | None = None,
+) -> tuple[list[PacketSummary], int]:
+    """Up to `limit` packets after frame `offset`, and how many matched in all.
+
+    The count is of every packet the display filter selected, whichever page
+    was asked for: a list that stops at its limit without saying how much is
+    behind it reads as the whole answer, and Wireshark's own status bar
+    ("Displayed: 4213") is what an operator checks a filter against. tshark
+    has already printed a row for each match by the time the page is cut, so
+    counting them costs a line split, not a second pass.
+    """
     flags = set(view_flags or [])
     extra = validate_column_fields(list(extra_fields or []))
     time_field = "frame.time_relative"
@@ -532,9 +644,14 @@ async def get_packet_list(
 
     expected = _BASE_FIELD_COUNT + (3 if show_mac else 0) + len(extra)
     packets = []
+    matched = 0
     for line in stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
         if len(parts) < _BASE_FIELD_COUNT:
+            continue
+        matched += 1
+        if len(packets) >= limit:
+            # Past the page: counted, not built.
             continue
         # Taken from the END rather than by counting forward: the Info column is
         # free text in the middle of the row, and a tab inside it would shift
@@ -549,8 +666,6 @@ async def get_packet_list(
         num = int(parts[0])
         if num <= offset:
             continue
-        if len(packets) >= limit:
-            break
 
         protocol = parts[4].split(":")[-1] if parts[4] else "?"
         # Empty unless the capture is Linux cooked v2, which is "any".
@@ -586,7 +701,7 @@ async def get_packet_list(
             values=values,
         ))
 
-    return packets
+    return packets, matched
 
 
 # --- one packet, seen on more than one interface ------------------------------

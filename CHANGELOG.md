@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+The Viewer's display filter, brought closer to Wireshark's. The filter was
+already tshark's own; what was missing was around it.
+
+### Added
+
+- **The packet list says how many packets matched**, for example
+  `4,213 packets of 12,000 match · first 1,000 shown`, and its last row loads
+  the next thousand. Before, a list that stopped at 1,000 rows looked the same
+  as a filter that matched 1,000 packets.
+- **The filter box says whether what you typed is a filter** before you apply
+  it: **■ ok** or **✕ invalid**, from tshark's own compiler, with its reason on
+  hover.
+- **Field and protocol names are completed from tshark's whole registry**, not
+  only the built-in list of about 130. Built-in matches still appear at once;
+  registry names are added under them.
+- **`${field}` in a filter stands for that field in the selected packet**, as
+  in Wireshark: `ip.addr == ${ip.src}`. It is filled in when you apply.
+- **The right-click menu has Wireshark's six choices**: **…and not selected**
+  and **…or not selected** join the four that were there. A packet row also
+  offers **Conversation filter: this TCP stream** (or UDP).
+
+### Fixed
+
+- **Regular expressions work in a display filter.** `;`, `$`, a backtick and a
+  backslash were refused anywhere in one, so `matches "\\.com$"` and the
+  raw-string form `r"\.com$"` could not be written at all. Those characters
+  are filter syntax: the filter is handed to tshark as a single argument and no
+  shell reads it. Only line breaks, tabs and other control characters are
+  refused now.
+- **Right-clicking a value with a backslash or a quote in it builds a filter on
+  that value**, escaped, instead of falling back to "this field is present".
+
+### Security
+
+- **A rebuilt image takes Debian's current tshark.** Docker kept the image's
+  package layer from the day it was first built, so the 2.0.0 image carries
+  tshark 4.4.18, which has two high-severity dissector overflows
+  (CVE-2026-95387, CVE-2026-95389) fixed in 4.4.19. Release builds now rebuild
+  that layer every time, and this image has 4.4.19.
+
+### Development
+
+- The Dockerfile takes an `APT_REFRESH` build argument; a build that passes a
+  new value rebuilds the apt layer. `release.yml` passes the run id and
+  `scripts/preview.sh` the date.
+- `docs/design/wireshark-parity.md` lists the Wireshark filter features not
+  built yet (two-pass fields, Find Packet, colouring rules from filters, Decode
+  As, TLS decryption, macros) and what each would take.
+
 ## 2.0.0 — 2026-10-04
 
 A new look, and a rebuilt image. Captures are taken, stored and read exactly as

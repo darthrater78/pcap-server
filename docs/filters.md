@@ -24,6 +24,44 @@ operator — `ip.addr == 10.0.0.1`, `frame.len > 1000`,
 `http.request.method == "GET"` — or use a bare protocol name on its own, like
 `dns`. Combine with `and`, `or`, `not`, or with `&&`, `||`, `!`.
 
+The display filter is tshark's own, passed to it as written, so the rest of
+Wireshark's language works too:
+
+| Filter | What it does |
+| --- | --- |
+| `dns.qry.name matches r"\.(com\|net)$"` | a regular expression (`matches` or `~`). In `r"…"` a backslash means what it does in the regex; in plain quotes each one is doubled |
+| `tcp.port in {80, 443, 8000..8100}` | any of a set, ranges included |
+| `tcp.flags & 0x12 == 0x12` | a bitwise test |
+| `frame[0:4] == 00:04:00:01` | bytes by offset and length |
+| `upper(http.host) contains "API"` | functions: `upper`, `lower`, `len`, `count`, `string` |
+| `ip.addr == ${ip.src}` | `${field}` is that field in the packet you have selected |
+
+A **field reference** (`${ip.src}`) is filled in when you apply the filter,
+from the packet open in the detail pane, and the box then shows the value it
+ran with. With no packet selected, or one that has no such field, the filter
+is not run and the message says why. tshark has no selected packet of its own
+and would match nothing without saying so, so a reference is never sent to it
+unfilled, and a saved view always holds the value.
+
+Only line breaks, tabs and other control characters are refused, and a filter
+is capped at 1,024 characters. Display-filter macros (`$name(…)`) are not set
+up; save the filter under **Save filter** instead.
+
+## Help while you type
+
+- **Names.** The box completes protocol and field names. A short built-in list
+  answers at once and matches anywhere in a name (`syn` finds
+  `tcp.flags.syn`); under it come names from tshark's own registry, every
+  field it can dissect, that start with what you typed.
+- **Valid or not.** A moment after you stop typing, the box is marked
+  **■ ok** or **✕ invalid**, by tshark's own compiler. Hover the mark for its
+  reason. The full message, with the position it objected to, is printed
+  under the box when you apply.
+- **How much matched.** The line above the list reads, for example,
+  `4,213 packets of 12,000 match · first 1,000 shown`. The list loads a
+  thousand packets at a time; when more matched, the last row is
+  **Load the next 1,000**.
+
 The display filter offers clickable examples, and **Save filter** beside it keeps
 one of your own, listed at the top of **Filter help** for any capture. **Browse the capture filter library** sits
 under the BPF field on the Capture tab — a searchable list grouped by protocol,
@@ -127,16 +165,18 @@ viewer and the Wireshark menu appears:
 - **In the packet list** — the menu builds from the column under the cursor: an
   address, a protocol, a length, a frame number. It also offers a
   **Conversation filter**, which is both endpoints of that exchange and nothing
-  else.
+  else, and **Conversation filter: this TCP stream** (or UDP), which is the one
+  connection the packet belongs to (`tcp.stream == 4`).
 
-Each menu offers the same four combinators as Wireshark — apply the expression
-on its own, negate it, or join it to whatever is already in the box with `&&`
-or `||` — plus **Prepare as filter**, which fills the box without running it.
+Each menu offers the same six choices as Wireshark: apply the expression on its
+own or negated, and join either of those to whatever is already in the box with
+`&&` or `||` (**…and selected**, **…or selected**, **…and not selected**,
+**…or not selected**). **Prepare as filter** fills the box without running it.
 
 Addresses go into the filter bare and text values are quoted, because Wireshark
-treats `192.168.1.50` as an address literal and rejects it in quotes. A value
-containing a character the display filter does not accept falls back to testing
-that the field is simply present.
+treats `192.168.1.50` as an address literal and rejects it in quotes. A quote
+or a backslash inside a text value is escaped. A value with a line break in it
+falls back to testing that the field is simply present.
 
 ## Filters that capture nothing
 
