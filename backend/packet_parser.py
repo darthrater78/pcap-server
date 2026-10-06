@@ -22,6 +22,8 @@ from backend.models import (
     PacketDetail,
     PacketSummary,
     ProtocolHierarchyNode,
+    blank_quoted_strings,
+    display_filter_problem,
     validate_display_filter,
 )
 from backend.pcapsource import BytesSource, PcapSource
@@ -446,15 +448,26 @@ async def check_display_filter(display_filter: str) -> None:
     tshark to start (about a tenth of a second) however large the capture the
     filter is meant for.
     """
-    validate_display_filter(display_filter)
-    if not display_filter.strip():
-        return
+    complaint = await display_filter_complaint(display_filter)
+    if complaint:
+        raise DisplayFilterError(complaint)
+
+
+async def display_filter_complaint(display_filter: str) -> str:
+    """What is wrong with this filter, in words fit to show, or "" when nothing is.
+
+    The filter box asks this on every pause in typing, and a filter that does
+    not compile yet is its normal state: the answer is a string, not an
+    exception to be caught and turned into one.
+    """
+    problem = display_filter_problem(display_filter)
+    if problem or not display_filter.strip():
+        return problem
     _stdout, stderr, rc = await _run_tool(
         ["tshark", "-r", "-", "-Y", display_filter],
         BytesSource(_EMPTY_PCAP, len(_EMPTY_PCAP)),
     )
-    if rc != 0:
-        raise DisplayFilterError(_filter_rejection(stderr))
+    return _filter_rejection(stderr) if rc != 0 else ""
 
 
 # `!name` or `not name` with nothing compared after it. The lookahead is what
@@ -464,7 +477,6 @@ _NEGATED_BARE_NAME = re.compile(
     r"(?:!|\bnot\b)\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*(?=$|\)|&&|\|\||\b(?:and|or|xor)\b)",
     re.IGNORECASE,
 )
-_QUOTED_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
 
 # Every FT_BOOLEAN field tshark knows, about thirty thousand names. Read once,
 # on the first filter that negates a bare name: the registry only changes with
@@ -500,7 +512,7 @@ async def display_filter_hint(display_filter: str) -> str:
     no DNS response flag at all" -- which no DNS packet is. Only flags are
     reported; `!tcp.analysis.retransmission` and `!dns` mean what they say.
     """
-    bare = _QUOTED_STRING.sub('""', display_filter)
+    bare = blank_quoted_strings(display_filter)
     names = list(dict.fromkeys(m.group(1) for m in _NEGATED_BARE_NAME.finditer(bare) if "." in m.group(1)))
     if not names:
         return ""

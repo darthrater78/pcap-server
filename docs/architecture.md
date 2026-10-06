@@ -458,7 +458,7 @@ validator rejects one that arrives unsubstituted so an empty list never means
 anything but "nothing matched".
 
 Two routes serve the filter box and read no capture.
-`/api/display-filter/check` (`check_display_filter`) compiles a filter with
+`/api/display-filter/check` (`display_filter_complaint`) compiles a filter with
 tshark against an empty pcap on stdin and returns `{ok, reason, hint}`. The
 hint (`display_filter_hint`) is set for a filter that compiles but negates a
 bare flag, `!dns.flags.response`: the names of tshark's boolean fields are read

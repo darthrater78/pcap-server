@@ -94,27 +94,71 @@ FILTER_MAX_LEN = 1024
 # (`http.request.uri contains "${jndi:"`) is left alone. A macro call,
 # `${name:args}` or `$name(args)`, is not matched: tshark reports a macro it
 # does not have in its own words.
-_FILTER_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
-_FILTER_FIELD_REFERENCE = re.compile(r"\$\{\s*[^}:;]*\}")
+#
+# Both are scanned by hand, one pass each. As regular expressions they were
+# `"(?:\\.|[^"\\])*"` and `\$\{\s*[^}:;]*\}`, and each backtracks on a filter built
+# for it: a quote that is never closed, a `${` that is never closed.
+
+
+def blank_quoted_strings(f: str) -> str:
+    """The filter with the inside of every "quoted string" removed.
+
+    A backslash takes the next character with it, so `"a\\"b"` is one string.
+    A quote with no partner is left where it is.
+    """
+    out: list[str] = []
+    i, n = 0, len(f)
+    while i < n:
+        if f[i] != '"':
+            out.append(f[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < n and f[j] != '"':
+            j += 2 if f[j] == "\\" else 1
+        if j >= n:
+            out.append(f[i:])
+            break
+        out.append('""')
+        i = j + 1
+    return "".join(out)
+
+
+def _field_reference(text: str) -> str | None:
+    """The first `${...}` in `text` that is a field reference and not a macro call."""
+    start = text.find("${")
+    while start != -1:
+        end = text.find("}", start)
+        if end == -1:
+            return None
+        inner = text[start + 2:end]
+        if ":" not in inner and ";" not in inner:
+            return text[start:end + 1]
+        start = text.find("${", start + 2)
+    return None
+
+
+def display_filter_problem(f: str) -> str:
+    """Why this text cannot be handed to tshark as a filter, or "" when it can."""
+    if len(f) > FILTER_MAX_LEN:
+        return f"display filter is too long (limit {FILTER_MAX_LEN} characters)"
+    if set(f) & FILTER_FORBIDDEN:
+        return "display filter cannot contain a line break, a tab or another control character"
+    reference = _field_reference(blank_quoted_strings(f))
+    if reference:
+        return (
+            f"{reference} is a field reference: it stands for that field in the "
+            "selected packet. Select a packet that has the field and apply the filter "
+            "again, or type the value in its place"
+        )
+    return ""
 
 
 def validate_display_filter(f: str) -> str:
     """Returns the filter, or raises DisplayFilterError."""
-    if len(f) > FILTER_MAX_LEN:
-        raise DisplayFilterError(
-            f"display filter is too long (limit {FILTER_MAX_LEN} characters)"
-        )
-    if set(f) & FILTER_FORBIDDEN:
-        raise DisplayFilterError(
-            "display filter cannot contain a line break, a tab or another control character"
-        )
-    reference = _FILTER_FIELD_REFERENCE.search(_FILTER_STRING.sub('""', f))
-    if reference:
-        raise DisplayFilterError(
-            f"{reference.group(0)} is a field reference: it stands for that field in the "
-            "selected packet. Select a packet that has the field and apply the filter "
-            "again, or type the value in its place"
-        )
+    problem = display_filter_problem(f)
+    if problem:
+        raise DisplayFilterError(problem)
     return f
 
 

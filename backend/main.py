@@ -81,7 +81,7 @@ from backend.packet_parser import (
     DisplayFilterError,
     InterfaceCopies,
     MAX_EXTRA_COLUMNS,
-    check_display_filter,
+    display_filter_complaint,
     complete_field_names,
     display_filter_hint,
     find_interface_copies,
@@ -2097,12 +2097,12 @@ async def check_display_filter_route(
     if not filter_assist_rate_limiter.allow(user["id"]):
         raise HTTPException(429, "too many filter checks, slow down")
     try:
-        await check_display_filter(display_filter)
-    except DisplayFilterError as exc:
-        return {"ok": False, "reason": str(exc), "hint": ""}
+        reason = await display_filter_complaint(display_filter)
     except Exception:
         logger.exception("display filter check failed")
         raise HTTPException(500, "could not check that filter")
+    if reason:
+        return {"ok": False, "reason": reason, "hint": ""}
     try:
         hint = await display_filter_hint(display_filter)
     except Exception:
