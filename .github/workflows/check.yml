@@ -24,8 +24,10 @@ on:
   # does have a PR open, each push to it runs the suite twice again, as above.
   push:
     branches: [main, 'redesign/**']
-    # Nothing in this suite reads README.md, docs/**, or CHANGELOG.md --
-    # checked, not assumed -- and .claude/ is session scratch, so a push
+    # Nothing in this suite reads README.md, docs/**, CHANGELOG.md, DESIGN.md,
+    # CLAUDE.md or LICENSE -- checked, not assumed (exact names, not '*.md':
+    # release.yml's gate refuses a glob it cannot reason about) -- and
+    # .claude/ is session scratch, so a push
     # touching only those already gets no coverage whether or not this runs.
     # .github/workflows/** is excluded too, now that lint-workflows.yml gives
     # it a real, purpose-built check of its own (actionlint: YAML syntax,
@@ -38,6 +40,9 @@ on:
     paths-ignore:
       - 'README.md'
       - 'CHANGELOG.md'
+      - 'DESIGN.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
       - 'docs/**'
       - '.claude/**'
       - '.github/workflows/**'
@@ -59,6 +64,9 @@ on:
     paths-ignore:
       - 'README.md'
       - 'CHANGELOG.md'
+      - 'DESIGN.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
       - 'docs/**'
       - '.claude/**'
       - '.github/workflows/**'
