@@ -50,6 +50,7 @@ def _wait_for(check, proc, log: Path, timeout: float = 60.0):
 
 def _served_cert_der(port: int) -> bytes:
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     with socket.create_connection(("127.0.0.1", port), timeout=5) as raw, ctx.wrap_socket(raw) as s:
