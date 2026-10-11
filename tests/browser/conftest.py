@@ -414,9 +414,43 @@ def admin_session(api_client):
     return {"value": api_client.cookies["session"]}
 
 
-@pytest_asyncio.fixture(loop_scope="session")
-async def app_page(page, live_server, admin_session):
-    """A page signed in and sitting on the Servers tab."""
+async def _start_up_settled(page, reads: list) -> None:
+    """Wait until the page has applied every read it made while starting up.
+
+    enterApp() fires its loads (servers, captures, saved filters, the column
+    layout) and does not wait for them, and the app screen is visible before
+    any has answered. A test that then sets page state by hand -- `captures`,
+    `openCaptures`, `activeServers` -- races those answers: when the capture
+    list lands late, renderCaptures() replaces `captures` with the server's
+    and syncCaptureTabs() drops every tab the test had just drawn. That is how
+    test_closing_a_background_tab_leaves_the_open_one_alone timed out on a
+    slow runner, clicking a close button that had been removed under it.
+
+    Two steps. Each start-up read is awaited until its response has fully
+    arrived. Then one more small read is made from the page and awaited there:
+    the browser hands a page its responses in order, so by the time that last
+    one's answer is back in the page, the earlier ones have been applied.
+    """
+    done = 0
+    while done < len(reads):
+        response = await reads[done].response()
+        if response is not None:  # None: abandoned by the sign-in navigation
+            await response.finished()
+        done += 1
+    await page.evaluate(
+        "() => fetch('/api/auth/status', { credentials: 'same-origin' }).then((r) => r.text())"
+    )
+
+
+async def open_app(page, live_server, admin_session) -> None:
+    """Sign `page` in with the shared session and wait for the app to settle."""
+    reads: list = []
+    page.on(
+        "request",
+        lambda request: reads.append(request)
+        if request.method == "GET" and "/api/" in request.url
+        else None,
+    )
     await page.context.add_cookies(
         [{"name": "session", "value": admin_session["value"], "url": live_server.url}]
     )
@@ -430,6 +464,13 @@ async def app_page(page, live_server, admin_session):
         await sign_in(page, live_server)
         cookies = await page.context.cookies(live_server.url)
         admin_session["value"] = next(c["value"] for c in cookies if c["name"] == "session")
+    await _start_up_settled(page, reads)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def app_page(page, live_server, admin_session):
+    """A page signed in, sitting on the Servers tab, with start-up finished."""
+    await open_app(page, live_server, admin_session)
     return page
 
 

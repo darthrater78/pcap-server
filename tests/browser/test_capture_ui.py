@@ -13,9 +13,11 @@ library; it is a constant in app.js rendered into the page.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from tests.browser.conftest import BROWSER_LOOP, needs_browser
+from tests.browser.conftest import BROWSER_LOOP, needs_browser, open_app
 
 pytestmark = [needs_browser, BROWSER_LOOP]
 
@@ -886,6 +888,38 @@ async def test_closing_a_background_tab_leaves_the_open_one_alone(app_page):
     await app_page.wait_for_function("() => openCaptures.length === 1")
     assert await app_page.evaluate("viewingCaptureId") == "b"
     assert await app_page.is_visible("#panel-viewer")
+
+
+async def test_the_app_page_waits_for_a_slow_start_up_capture_list(page, live_server, admin_session):
+    """The race behind the test above failing on CI, reproduced on purpose.
+
+    The start-up capture list is held back for half a second. A page handed
+    over while that answer is still out would take a test's hand-set tabs and
+    then lose them when it lands. open_app must not return before it has."""
+    landed = []
+
+    async def slow(route):
+        response = await route.fetch()
+        await asyncio.sleep(0.5)
+        await route.fulfill(response=response)
+        landed.append(True)
+
+    await page.route("**/api/captures", slow)
+    await open_app(page, live_server, admin_session)
+    assert landed, "open_app returned while the start-up capture list was still in flight"
+
+    await page.evaluate(
+        """() => {
+            captures = [
+                { id: 'a', name: 'before', status: 'completed', server_id: 's', bpf_filter: '' },
+                { id: 'b', name: 'after', status: 'completed', server_id: 's', bpf_filter: '' },
+            ];
+            openCaptures = ['a', 'b'];
+            viewingCaptureId = 'b';
+            renderCaptureTabs();
+        }"""
+    )
+    assert await page.locator(".tab-capture").count() == 2
 
 
 async def test_a_capture_deleted_elsewhere_loses_its_tab(app_page):
