@@ -1,4 +1,4 @@
-fastapi==0.141.1
+fastapi==0.142.4
 # Pinned explicitly rather than left to fastapi's transitive resolution, because
 # the floor it allows carries known advisories. 0.50.0 was held here while
 # fastapi 0.125.0 capped starlette at <0.51.0; that cap is gone (0.141.1 asks
