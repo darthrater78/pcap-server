@@ -93,17 +93,20 @@ plain HTTP.
 
 ## What it does
 
-**Capture.** Add a host once and it stays on your list. Pick its interface from
-a list read off the machine itself, set a duration, a packet cap and a snap
-length, and give it a BPF filter — or pick one from a library grouped by what
-you are hunting (Kerberos, SMB, LDAP, DNS, database ports, TCP flags).
+**Capture.** Add a host once and it stays on your list. Pick its interface — or
+several — from a list read off the machine itself, set a duration, a packet cap
+and a snap length, and give it a BPF filter — or pick one from a library grouped
+by what you are hunting (Windows and Active Directory, name resolution,
+databases, mail, TCP behaviour).
 
 Or **upload a pcap** recorded somewhere else; it is stored encrypted and read
 exactly like one captured here.
 
 **Read it.** A Wireshark-style packet list with protocol colouring, a decoded
-protocol tree and a hex dump. Full display-filter syntax with autocomplete,
-right-click to filter, **Follow TCP/UDP Stream**, **Protocol Hierarchy**,
+protocol tree and a hex dump. Full display-filter syntax with autocomplete, a
+mark that says whether what you typed is a valid filter before you apply it, and
+a count of how many packets matched. Right-click to filter, **Follow TCP/UDP
+Stream**, **Protocol Hierarchy**,
 **Conversations**, a **Traffic Diagram** (with playback) and a **Sequence
 Diagram**, custom columns, and saved views you can download as their own pcap.
 
@@ -122,7 +125,7 @@ There is a dark theme on a green-black ground, a light one named Flashbang for r
 become clear at 2am, and a layout that works down to phone width.
 
 <img alt="Sign in" src="docs/screenshots/sign-in.png" />
-Sign in, with two-factor codes and a 30-day trusted device.
+Sign in. Over plain HTTP the page says so, and the app stays read-only until HTTPS is on.
 
 <img alt="Test connection and prerequisite check" src="docs/screenshots/prerequisite-check.png" />
 Validate SSH key with Test Connection and perform a prerequisite check
@@ -142,8 +145,8 @@ Wireshark like actions in the browser for quick analysis.
 <img alt="Encryption" src="docs/screenshots/encryption.png" />
 Robust encryption and security for data moving and at rest
 
-<img alt="ACME integration" src="docs/screenshots/https.png" />
-ACME/Certbot Integration
+<img alt="Built-in HTTPS" src="docs/screenshots/https.png" />
+Built-in HTTPS: a Let's Encrypt certificate, requested from the Admin panel.
 
 <img alt="Flashbang theme" src="docs/screenshots/flashbang-theme.png" />
 For those who hate eyes, a "Flashbang" theme.
@@ -192,7 +195,8 @@ to the server maximum an admin sets:
 
 | Field | tcpdump | Effect |
 | --- | --- | --- |
-| Interface | `-i` | which link to read from |
+| Interface | `-i` | which link to read from — **Pick several** captures on `any`, limited to the ones you tick |
+| Duration | `timeout` | stop after this many seconds |
 | Max packets | `-c` | stop after this many packets |
 | Snap length | `-s` | bytes kept per packet — lower it for headers only |
 | BPF filter | expression | which packets are captured at all |
@@ -216,6 +220,8 @@ download just those packets.
 **[docs/viewer.md](docs/viewer.md)** covers columns, the interface column on
 `any` captures, Follow Stream, Protocol Hierarchy, Conversations, the Traffic
 and Sequence diagrams, and saved views.
+**[docs/filters.md](docs/filters.md#help-while-you-type)** covers the display
+filter box: name completion, the valid/invalid mark, and the match count.
 
 ### Sanitizing a capture
 
@@ -281,6 +287,7 @@ Details in [docs/architecture.md](docs/architecture.md#roadmap).
 | --- | --- |
 | [Built-in HTTPS](docs/tls.md) | Let pcap-server get and renew its own Let's Encrypt certificate |
 | [Reverse proxy setup](docs/reverse-proxy.md) | Caddy, nginx or Nginx Proxy Manager, with a real or self-signed certificate |
+| [Nginx Proxy Manager](docs/nginx-proxy-manager.md) | The full NPM guide: forwarding, what it already does, and the Advanced-tab settings it needs |
 | [Preparing a target host](docs/target-hosts.md) | SSH access, adding a server, host key trust, capture privilege |
 | [Filters](docs/filters.md) | Capture and display filters, and the ways a filter records nothing |
 | [Reading a capture](docs/viewer.md) | The packet viewer: columns, streams, statistics, saved views |
@@ -292,4 +299,5 @@ Details in [docs/architecture.md](docs/architecture.md#roadmap).
 
 ## License
 
-See repository for license details.
+[MIT](LICENSE). The bundled IBM Plex fonts are under the SIL Open Font License;
+see [frontend/fonts/LICENSE.txt](frontend/fonts/LICENSE.txt).
