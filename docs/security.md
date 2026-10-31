@@ -35,7 +35,8 @@ does not set a mode, so a directory created at a default umask is world-readable
 to every account on the host. Create them closed:
 
 ```bash
-chmod 0700 ssh-keys data captures secrets
+chmod 0700 /opt/docker/pcapserver/{ssh-keys,data,captures}
+chmod 0700 secrets        # beside compose.yaml
 ```
 
 Existing installations were not created this way. Check with `ls -ld data` and

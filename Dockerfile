@@ -3,9 +3,9 @@
 # the binary reaches the final image. Moving LEGO_VERSION means regenerating
 # backend/tls/lego_providers.json (scripts/gen_lego_providers.py) as well.
 FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016 AS lego
-ARG LEGO_VERSION=5.5.2
-ARG LEGO_SHA256_AMD64=2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef
-ARG LEGO_SHA256_ARM64=15b14ec2ab14fde69cc8396eb0204c5ce4327e31a486953225a6059b26db3e8c
+ARG LEGO_VERSION=5.6.0
+ARG LEGO_SHA256_AMD64=f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a
+ARG LEGO_SHA256_ARM64=34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f
 ARG TARGETARCH
 COPY backend/tls/fetch_lego.py /tmp/fetch_lego.py
 RUN case "${TARGETARCH:-amd64}" in \
@@ -51,7 +51,10 @@ RUN useradd -r -s /bin/false -u 1000 -m appuser
 WORKDIR /app
 
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+# pip itself is removed once the requirements are in: nothing runs it after
+# the build, and the base image's copy carries advisories of its own.
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
+    && python -m pip uninstall -y pip
 
 COPY --from=lego /usr/local/bin/lego /usr/local/bin/lego
 

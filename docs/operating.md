@@ -42,8 +42,8 @@ things account for almost every failed start:
 | What you see | What it is |
 |---|---|
 | `bind: address already in use` | Something else already has port 8080. Change the **left** half of the `ports:` mapping in your `compose.yaml` — `"8081:8080"` publishes it on 8081 instead. The right half is the port inside the container and does not move |
-| The container restarts in a loop, logs mention the master key | `secrets/master.key` doesn't exist yet, or it's empty. It must exist and be non-empty *before* the first start — check with `wc -c secrets/master.key`, you want 45 bytes, not 0 |
-| `secrets/master.key` is a directory | The compose file was started before the data directory and the key existed, so Docker created the bind-mount path itself. Remove the empty directory, then generate the key properly |
+| The container restarts in a loop, logs mention the master key | `secrets/master.key`, beside `compose.yaml`, doesn't exist yet, or it's empty. It must exist and be non-empty *before* the first start — from the directory holding `compose.yaml`, check with `wc -c secrets/master.key`; you want 45 bytes, not 0 |
+| `secrets/master.key` is a directory | The stack was started before the key existed, so Docker created the path itself. Remove the empty directory, then generate the key properly |
 | A `secret ... not found` message right after `docker compose up -d` | Cosmetic — Compose can log this once while the secret file mount is still settling. Give it a few seconds and check `docker compose ps` / the logs again before troubleshooting further |
 
 If you started it before creating the directories, the quickest fix is
@@ -64,6 +64,9 @@ image tag, spelled the way `docker pull` / `docker-compose.yml` needs it.
 | `:latest` | A floating tag moved to each new stable release. `docker compose pull` will change the running version underneath you without the compose file changing at all |
 | `:dev` | A floating tag moved to each new `-dev` build only. It does not follow stable releases: it stays on the last dev build (0.1.0-dev.40) until another dev build is published. A dev build can come from a release branch that has not been merged to `main` yet, so `:dev` can be ahead of anything in a stable release — never run it in production |
 | `1.1.0-beta.1` (or any `-beta`/`-rc` version) | A prerelease with no floating tag at all — it is not what `:latest` or `:dev` point to, and pulling either will not get it. Pin the exact version (no `v`) if you want to try one |
+
+After 2.1.0, releases are numbered by date: `2026.10.31` is the release of
+31 October 2026. They sort above every 2.x release.
 
 Pin a release unless you specifically want to track. The
 [releases page](https://github.com/darthrater78/pcap-server/releases) lists what
@@ -89,11 +92,52 @@ Replace the contents of your `compose.yaml` with the block from
 docker compose pull && docker compose up -d
 ```
 
-`data/`, `captures/`, `ssh-keys/` and `secrets/` are bind mounts and are
-untouched by this — the database migrates itself on start. Replacing the block
-does discard any local edits you made to it, so if you have customised it (an
-absolute path, `TRUST_PROXY_HEADERS`, a different published port), diff before
-overwriting rather than after.
+`data/`, `captures/` and `ssh-keys/` are bind mounts, and `secrets/` sits
+beside `compose.yaml`; none of them is touched by this — the database migrates
+itself on start. Replacing the block does discard any local edits you made to
+it, so if you have customised it (an absolute path, `TRUST_PROXY_HEADERS`, a
+different published port), diff before overwriting rather than after.
+
+### Moving the key next to compose.yaml
+
+Quick starts from 2.1.0 and earlier put the key at
+`/opt/docker/pcapserver/secrets/master.key`. That keeps working, including
+under stack managers such as Dockge and Portainer: Docker resolves the key's
+path on the host, like the volumes. Moving it is optional. It puts the key
+with the stack's own files, which is where the current quick start keeps it.
+
+**Never generate a new key to do this.** Captures can only be opened by the key
+they were sealed with.
+
+From the directory holding `compose.yaml`:
+
+```bash
+docker compose logs pcap-server | grep -i 'key id'     # note the id
+mkdir -m 0700 secrets
+cp -p /opt/docker/pcapserver/secrets/master.key secrets/master.key
+cmp /opt/docker/pcapserver/secrets/master.key secrets/master.key && wc -c secrets/master.key
+```
+
+Use `sudo cp -p` if the old key is owned by root. `cmp` prints nothing when the
+copies match, and `wc -c` should say 45 bytes. Then change the secret in
+`compose.yaml` to `file: ./secrets/master.key` and recreate. **Plain
+`docker compose up -d` is not enough here**: Compose does not notice that a
+secret's file moved, leaves the container running, and it keeps reading the
+old path.
+
+```bash
+docker compose up -d --force-recreate
+docker compose logs pcap-server | grep -i 'key id' | tail -1
+docker inspect "$(docker compose ps -q pcap-server)" \
+    --format '{{range .Mounts}}{{if eq .Destination "/run/secrets/pcap_master_key"}}{{.Source}}{{end}}{{end}}'
+```
+
+The id must be the same as before, and the last command must print the new
+path, inside the directory holding `compose.yaml`. Only then remove the old
+`/opt/docker/pcapserver/secrets/` folder, and keep your off-machine backup of
+the key. Under Dockge or Portainer, take the stack **down** (removing its
+container, not just stopping or restarting it) and start it again, then run the
+same two checks.
 
 ## Environment variables
 
@@ -407,15 +451,20 @@ file included. Add `--apply` to commit it. Then put the new key where the old
 one was and start up again:
 
 ```bash
-cp /opt/docker/pcapserver/data/master.key.new /opt/docker/pcapserver/secrets/master.key
+# still in the directory holding compose.yaml
+cp -p secrets/master.key secrets/master.key.old
+install -m 0400 /opt/docker/pcapserver/data/master.key.new secrets/master.key
 docker compose start pcap-server
 docker compose logs pcap-server | grep -i encryption
 ```
 
 The log will report `encryption enabled (key id ...)` with the new id.
 
-**Keep the old key until that line appears and a capture opens in the viewer.**
-Until then it is the only thing that can read your captures.
+**Keep `master.key.old` until that line appears and a capture opens in the
+viewer.** Until then it is the only thing that can read your captures. Once it
+does, back the new key up off this machine, then delete
+`/opt/docker/pcapserver/data/master.key.new` (a key left in `data/` sits beside
+the data it protects) and `secrets/master.key.old`.
 
 Notes on how it behaves, which matter if something goes wrong mid-run:
 
