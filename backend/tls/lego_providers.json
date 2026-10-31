@@ -1,5 +1,5 @@
 {
- "lego_version": "5.5.2",
+ "lego_version": "5.6.0",
  "excluded": {
   "exec": "runs an arbitrary program with the challenge -- code execution by configuration",
   "manual": "waits for someone at a terminal to create the record by hand",
@@ -1572,6 +1572,51 @@
    ]
   },
   {
+   "code": "cloudpress",
+   "name": "CloudPress",
+   "url": "https://cloudpress.com/",
+   "docs": "https://go-acme.github.io/lego/dns/cloudpress/",
+   "credentials": [
+    {
+     "name": "CLOUDPRESS_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    },
+    {
+     "name": "CLOUDPRESS_BASE_URL",
+     "description": "API URL",
+     "kind": "text"
+    }
+   ],
+   "additional": [
+    {
+     "name": "CLOUDPRESS_PACCOUNT_ID",
+     "description": "Account ID",
+     "kind": "text"
+    },
+    {
+     "name": "CLOUDPRESS_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 10)",
+     "kind": "text"
+    },
+    {
+     "name": "CLOUDPRESS_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 300)",
+     "kind": "text"
+    },
+    {
+     "name": "CLOUDPRESS_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "CLOUDPRESS_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
    "code": "connbyte",
    "name": "Connbyte",
    "url": "https://connbyte.com/",
@@ -1848,8 +1893,13 @@
    "docs": "https://go-acme.github.io/lego/dns/curanet/",
    "credentials": [
     {
-     "name": "CURANET_API_KEY",
-     "description": "API key",
+     "name": "CURANET_CLIENT_ID",
+     "description": "Client ID",
+     "kind": "text"
+    },
+    {
+     "name": "CURANET_CLIENT_SECRET",
+     "description": "Client secret",
      "kind": "secret"
     }
    ],
@@ -1918,8 +1968,13 @@
    "docs": "https://go-acme.github.io/lego/dns/dandomain/",
    "credentials": [
     {
-     "name": "DANDOMAIN_API_KEY",
-     "description": "API key",
+     "name": "DANDOMAIN_CLIENT_ID",
+     "description": "Client ID",
+     "kind": "text"
+    },
+    {
+     "name": "DANDOMAIN_CLIENT_SECRET",
+     "description": "Client secret",
      "kind": "secret"
     }
    ],
@@ -3778,7 +3833,7 @@
   },
   {
    "code": "godaddy",
-   "name": "Go Daddy",
+   "name": "Go Daddy (DEPRECATED)",
    "url": "https://godaddy.com",
    "docs": "https://go-acme.github.io/lego/dns/godaddy/",
    "credentials": [
@@ -3811,6 +3866,41 @@
     },
     {
      "name": "GODADDY_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "godaddyv3",
+   "name": "Go Daddy (v3)",
+   "url": "https://godaddy.com",
+   "docs": "https://go-acme.github.io/lego/dns/godaddyv3/",
+   "credentials": [
+    {
+     "name": "GODADDYV3_PERSONAL_ACCESS_TOKEN",
+     "description": "Personal Access Token (PAT)",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "GODADDYV3_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 2)",
+     "kind": "text"
+    },
+    {
+     "name": "GODADDYV3_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "GODADDYV3_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 600)",
+     "kind": "text"
+    },
+    {
+     "name": "GODADDYV3_HTTP_TIMEOUT",
      "description": "API request timeout in seconds (Default: 30)",
      "kind": "text"
     }
@@ -5882,7 +5972,7 @@
   },
   {
    "code": "netcup",
-   "name": "Netcup",
+   "name": "Netcup (Legacy API)",
    "url": "https://www.netcup.eu/",
    "docs": "https://go-acme.github.io/lego/dns/netcup/",
    "credentials": [
@@ -5916,6 +6006,36 @@
     {
      "name": "NETCUP_HTTP_TIMEOUT",
      "description": "API request timeout in seconds (Default: 10)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "netcupv1",
+   "name": "Netcup v1",
+   "url": "https://www.netcup.eu/",
+   "docs": "https://go-acme.github.io/lego/dns/netcupv1/",
+   "credentials": [
+    {
+     "name": "NETCUPV1_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "NETCUPV1_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 30)",
+     "kind": "text"
+    },
+    {
+     "name": "NETCUPV1_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 900)",
+     "kind": "text"
+    },
+    {
+     "name": "NETCUPV1_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
      "kind": "text"
     }
    ]
@@ -6230,6 +6350,46 @@
     },
     {
      "name": "NODION_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "nordname",
+   "name": "NordName",
+   "url": "https://nordname.com/",
+   "docs": "https://go-acme.github.io/lego/dns/nordname/",
+   "credentials": [
+    {
+     "name": "NORDNAME_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "NORDNAME_CUSTOMER_UUID",
+     "description": "UUID of the customer to access.",
+     "kind": "text"
+    },
+    {
+     "name": "NORDNAME_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 10)",
+     "kind": "text"
+    },
+    {
+     "name": "NORDNAME_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 300)",
+     "kind": "text"
+    },
+    {
+     "name": "NORDNAME_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 3600)",
+     "kind": "text"
+    },
+    {
+     "name": "NORDNAME_HTTP_TIMEOUT",
      "description": "API request timeout in seconds (Default: 30)",
      "kind": "text"
     }
@@ -6876,6 +7036,36 @@
    ]
   },
   {
+   "code": "primedns",
+   "name": "PrimeDNS",
+   "url": "https://primedns.net/",
+   "docs": "https://go-acme.github.io/lego/dns/primedns/",
+   "credentials": [
+    {
+     "name": "PRIMEDNS_API_KEY",
+     "description": "API key",
+     "kind": "secret"
+    }
+   ],
+   "additional": [
+    {
+     "name": "PRIMEDNS_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 2)",
+     "kind": "text"
+    },
+    {
+     "name": "PRIMEDNS_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 180)",
+     "kind": "text"
+    },
+    {
+     "name": "PRIMEDNS_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
    "code": "rackspace",
    "name": "Rackspace",
    "url": "https://www.rackspace.com/",
@@ -7282,8 +7472,13 @@
    "docs": "https://go-acme.github.io/lego/dns/scannet/",
    "credentials": [
     {
-     "name": "SCANNET_API_KEY",
-     "description": "API key",
+     "name": "SCANNET_CLIENT_ID",
+     "description": "Client ID",
+     "kind": "text"
+    },
+    {
+     "name": "SCANNET_CLIENT_SECRET",
+     "description": "Client secret",
      "kind": "secret"
     }
    ],
@@ -7416,8 +7611,48 @@
    ]
   },
   {
-   "code": "selfhostde",
+   "code": "selfhostdev2",
    "name": "SelfHost.(de|eu)",
+   "url": "https://www.selfhost.de",
+   "docs": "https://go-acme.github.io/lego/dns/selfhostdev2/",
+   "credentials": [
+    {
+     "name": "SELFHOSTDEV2_API_KEYS",
+     "description": "API keys mapping with domains (ex: example.com:xx.yy,example.org:ww.zz).",
+     "kind": "secret"
+    },
+    {
+     "name": "SELFHOSTDEV2_RECORDS_MAPPING",
+     "description": "Record IDs mapping with domains (ex: example.com:123:456,example.org:789,foo.example.com:147).",
+     "kind": "text"
+    }
+   ],
+   "additional": [
+    {
+     "name": "SELFHOSTDEV2_POLLING_INTERVAL",
+     "description": "Time between DNS propagation check in seconds (Default: 30)",
+     "kind": "text"
+    },
+    {
+     "name": "SELFHOSTDEV2_PROPAGATION_TIMEOUT",
+     "description": "Maximum waiting time for DNS propagation in seconds (Default: 240)",
+     "kind": "text"
+    },
+    {
+     "name": "SELFHOSTDEV2_TTL",
+     "description": "The TTL of the TXT record used for the DNS challenge in seconds (Default: 120)",
+     "kind": "text"
+    },
+    {
+     "name": "SELFHOSTDEV2_HTTP_TIMEOUT",
+     "description": "API request timeout in seconds (Default: 30)",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "code": "selfhostde",
+   "name": "SelfHost.(de|eu) (DEPRECATED)",
    "url": "https://www.selfhost.de",
    "docs": "https://go-acme.github.io/lego/dns/selfhostde/",
    "credentials": [
@@ -7546,11 +7781,6 @@
    "url": "https://www.simply.com/en/domains/",
    "docs": "https://go-acme.github.io/lego/dns/simply/",
    "credentials": [
-    {
-     "name": "SIMPLY_ACCOUNT_NAME",
-     "description": "Account name",
-     "kind": "text"
-    },
     {
      "name": "SIMPLY_API_KEY",
      "description": "API key",
@@ -8642,8 +8872,13 @@
    "docs": "https://go-acme.github.io/lego/dns/wannafind/",
    "credentials": [
     {
-     "name": "WANNAFIND_API_KEY",
-     "description": "API key",
+     "name": "WANNAFIND_CLIENT_ID",
+     "description": "Client ID",
+     "kind": "text"
+    },
+    {
+     "name": "WANNAFIND_CLIENT_SECRET",
+     "description": "Client secret",
      "kind": "secret"
     }
    ],

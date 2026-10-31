@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026.10.31 — 2026-10-31
+
+The quickstart keeps the master key next to `compose.yaml`, the Nginx Proxy
+Manager guide covers built-in HTTPS, and the image picks up security fixes.
+
+**Breaking, for five DNS providers only.** lego 5.6.0 changed the settings of
+**Curanet, DanDomain, Scannet and Wannafind** (an API key becomes a client ID
+and client secret) and dropped **Simply**'s account name. If built-in HTTPS
+uses one of them, re-enter its credentials in **Admin → HTTPS** after
+upgrading: until then a renewal stops with the stored DNS credentials named as
+the reason, and the current certificate keeps working until it expires.
+
+**Versions are now dates.** This release follows 2.1.0. From here a version is
+the release date, `YEAR.MONTH.DAY`. It still sorts above 2.1.0, and `:latest`
+moves to it as usual.
+
+### Changed
+
+- **The quickstart keeps the master key beside `compose.yaml`**, at
+  `./secrets/master.key`, instead of `/opt/docker/pcapserver/secrets/`.
+  The key lives with the stack's own files, so a stack manager such as Dockge
+  or Portainer keeps it in the folder it already manages. The data, captures
+  and SSH-key volumes stay under `/opt/docker/pcapserver/`. The key is still
+  kept out of `data/` and `captures/`.
+- **Existing installs need not change anything.** An absolute key path keeps
+  working, under a stack manager too. To move the key anyway, follow the new
+  [Moving the key next to compose.yaml](docs/operating.md#moving-the-key-next-to-composeyaml)
+  in the operating guide. It copies the key and checks the key id is unchanged.
+  Never generate a new key to do it.
+
+### Security
+
+- **lego 5.6.0**, from 5.5.2, for built-in HTTPS. 5.5.2 was built with Go
+  1.27.1 and older `go-jose` and `x/net`, carrying six HIGH advisories
+  (CVE-2026-111943, CVE-2026-97031, CVE-2026-78667, CVE-2026-78669,
+  CVE-2026-116587), so the release scan would have refused this image. The DNS
+  provider list is regenerated to match: six new providers (CloudPress,
+  GoDaddy v3, Netcup v1, NordName, PrimeDNS, Selfhost v2) and the five changes
+  above.
+- **pip is removed from the image** once the requirements are installed.
+  Nothing runs it afterwards, and the base image's pip 25.0.1 carried six
+  Medium and Low advisories.
+
+### Fixed
+
+- **The Nginx Proxy Manager guide said Scheme `http` in every case.** With
+  [built-in HTTPS](docs/tls.md) turned on, the app serves only HTTPS on its
+  port, so an `http` proxy host returns 502 (`upstream prematurely closed
+  connection`). The guide now says to use `https` then, and how to tell which
+  one the app is serving.
+- **Rotating the master key: the copy step failed.** Its `cp` could not write
+  over a key that is `0400`, as the quickstart makes it, and had it worked it
+  would have overwritten the old key the next paragraph said to keep. The steps
+  now save `secrets/master.key.old`, put the new key in place with
+  `install -m 0400`, and say to delete `data/master.key.new` afterwards rather
+  than leave a key beside the data.
+
 ## 2.1.0 — 2026-10-06
 
 The Viewer's display filter, brought closer to Wireshark's. The filter was

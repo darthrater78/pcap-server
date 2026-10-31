@@ -2,19 +2,25 @@
 # FIRST-TIME SETUP
 # ============================================================================
 #
-# 1. Create the data directory and the master key, on the Docker host:
+# 1. Create the data directories, on the Docker host:
 #
 #     sudo mkdir -p /opt/docker/pcapserver && sudo chown "$USER" /opt/docker/pcapserver
-#     mkdir -p /opt/docker/pcapserver/{ssh-keys,data,captures,secrets}
-#     chmod 0700 /opt/docker/pcapserver/{ssh-keys,data,captures,secrets}
-#     openssl rand -base64 32 > /opt/docker/pcapserver/secrets/master.key
-#     chmod 0400 /opt/docker/pcapserver/secrets/master.key
+#     mkdir -p /opt/docker/pcapserver/{ssh-keys,data,captures}
+#     chmod 0700 /opt/docker/pcapserver/{ssh-keys,data,captures}
 #
-# 2. PASTE THE BLOCK BELOW INTO A FILE NAMED compose.yaml -- everything from
-#    `services:` down to the END OF compose.yaml line. Put that file in
-#    whatever directory you keep compose files in.
+# 2. Pick the directory this stack's compose.yaml will live in -- your Dockge
+#    or Portainer stack folder, or any directory you keep compose files in --
+#    and create the master key there:
 #
-# 3. From the directory holding compose.yaml, start it and check it:
+#     mkdir -m 0700 secrets
+#     openssl rand -base64 32 > secrets/master.key
+#     chmod 0400 secrets/master.key
+#
+# 3. PASTE THE BLOCK BELOW INTO A FILE NAMED compose.yaml in that same
+#    directory -- everything from `services:` down to the END OF compose.yaml
+#    line. Its `file: ./secrets/master.key` is read relative to compose.yaml.
+#
+# 4. From the directory holding compose.yaml, start it and check it:
 #
 #     docker compose up -d
 #     docker compose ps
@@ -25,16 +31,17 @@
 #    http://<host>:8080 and create the admin account. Have an authenticator
 #    app to hand: TOTP enrolment is part of creating it.
 #
-# 4. Back up secrets/master.key somewhere other than this machine.
+# 5. Back up secrets/master.key somewhere other than this machine.
 #
 # Using a different data directory than /opt/docker/pcapserver? Change it in
-# step 1, and in the four `source:` lines and the `file:` line of the block.
+# step 1 and in the three `source:` lines of the block. The key's `file:` line
+# stays as it is.
 #
 # ============================ PASTE FROM HERE ===============================
 
 services:
   pcap-server:
-    image: ghcr.io/darthrater78/pcap-server:2.1.0
+    image: ghcr.io/darthrater78/pcap-server:2026.10.31
     ports:
       - "8080:8080"
     volumes:
@@ -74,7 +81,7 @@ services:
 
 secrets:
   pcap_master_key:
-    file: /opt/docker/pcapserver/secrets/master.key
+    file: ./secrets/master.key
 
 # ============================ END OF compose.yaml ===========================
 #
@@ -84,7 +91,8 @@ secrets:
 # ----------------------------------------------------------------------------
 # WHAT EACH SETUP LINE IS FOR
 #
-#   mkdir       The four directories the block bind-mounts. All four must exist
+#   mkdir       The three directories the block bind-mounts, and secrets/
+#               beside compose.yaml. All of them, and the key, must exist
 #               BEFORE the first start, or Docker creates them itself as
 #               root-owned -- or creates a directory where you meant a file.
 #
@@ -104,13 +112,17 @@ secrets:
 # ----------------------------------------------------------------------------
 # WHERE THE PATHS RESOLVE
 #
-# The volumes and the secret's `file:` are absolute paths, not `./` paths, so
-# they don't care where compose.yaml sits. Only the `docker compose` commands
-# need to run from its directory; the data directory can be anywhere.
+# The volumes are absolute paths. Docker resolves a bind mount's `source:` on
+# the host, so the data directory can be anywhere.
 #
-# Pick the data directory deliberately: it holds your captures and the key that
-# decrypts them. Moving it means changing each `source:` and the secret's
-# `file:`, keeping every `target:` exactly as it is:
+# The key is the one `./` path: `file: ./secrets/master.key` is read relative
+# to compose.yaml. That is deliberate: the key lives with the stack's own
+# files, not on any of the container's volumes, and a stack manager such as
+# Dockge or Portainer keeps it in the stack folder it already manages. An
+# absolute path works too -- Docker resolves it on the host, like the volumes.
+#
+# Pick the data directory deliberately: it holds your captures. Moving it means
+# changing each `source:`, keeping every `target:` exactly as it is:
 #
 #        source: /opt/docker/pcapserver/captures
 #        target: /app/captures          # unchanged -- this is inside the container
@@ -121,7 +133,14 @@ secrets:
 # Captures are encrypted with secrets/master.key and there is no recovery path:
 # lose the key and every stored capture is gone. Keep a copy somewhere else, and
 # keep it OUT of data/ and captures/ -- a key stored beside the data it protects
-# protects nothing.
+# protects nothing. Beside compose.yaml satisfies that: the stack folder is not
+# one of the container's volumes. If you keep your stack folder in git, add
+# `secrets/` to its .gitignore.
+#
+# Installed from 2.1.0 or earlier, with the key at
+# /opt/docker/pcapserver/secrets/? That keeps working, and moving it is
+# optional: see "Moving the key next to compose.yaml" in docs/operating.md.
+# Never generate a new key to get there.
 #
 # It is passed as a file (MASTER_KEY_FILE, mounted as a Compose secret), not a
 # variable: an environment variable is readable via `docker inspect` and
@@ -143,8 +162,9 @@ secrets:
 # container's non-root user (appuser, UID 1000), because a bind mount arrives
 # with whatever the host gave it. No manual chown needed -- but if your host
 # account is NOT UID 1000, those three stop belonging to you after the first
-# start and need sudo to inspect. secrets/ is left alone: the Docker daemon
-# reads the key as root before the container exists.
+# start and need sudo to inspect. secrets/ is not a volume and is never
+# chowned: it stays yours, beside compose.yaml, and Compose hands the key to the
+# container as a read-only file at /run/secrets/pcap_master_key.
 #
 # ----------------------------------------------------------------------------
 # WHAT EACH SETTING IN THE BLOCK IS FOR

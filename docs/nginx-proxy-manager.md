@@ -24,7 +24,7 @@ one up. So the question is only how NPM reaches it.
 | Field | Value |
 | --- | --- |
 | Domain Names | `pcap.example.com` |
-| Scheme | `http` — TLS terminates at NPM |
+| Scheme | `http` — TLS terminates at NPM. **`https` if [built-in HTTPS](tls.md) is turned on** (below) |
 | Forward Hostname / IP | the host pcap-server runs on |
 | Forward Port | `8080` |
 | Cache Assets | off |
@@ -34,6 +34,15 @@ one up. So the question is only how NPM reaches it.
 Then **SSL → Request a new SSL Certificate**, Force SSL on. NPM handles
 Let's Encrypt itself, including DNS challenges for hosts with no inbound
 port 80.
+
+### If built-in HTTPS is also on
+
+Once [built-in HTTPS](tls.md) has a certificate, the app serves **only HTTPS**
+on its port, from the next start on. An NPM host still set to Scheme `http`
+then fails: NPM returns **502**, and its error log shows `upstream prematurely
+closed connection` with an `http://` upstream. Set Scheme to `https` and save.
+`docker compose logs pcap-server` says which one the app is serving: `serving
+HTTPS for <domain>` at startup.
 
 ### What to put in "Forward Hostname / IP"
 
