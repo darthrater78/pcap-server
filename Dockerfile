@@ -2,7 +2,7 @@
 # fetched by pinned version and checksum in a stage of its own so nothing but
 # the binary reaches the final image. Moving LEGO_VERSION means regenerating
 # backend/tls/lego_providers.json (scripts/gen_lego_providers.py) as well.
-FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016 AS lego
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS lego
 ARG LEGO_VERSION=5.6.0
 ARG LEGO_SHA256_AMD64=f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a
 ARG LEGO_SHA256_ARM64=34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f
@@ -21,7 +21,7 @@ RUN case "${TARGETARCH:-amd64}" in \
 # Debian and CPython patch, so the tag alone builds a different image each week.
 # The digest is the multi-arch index (amd64 and arm64). .github/dependabot.yml
 # proposes the new digest when the tag moves, so the pin does not go stale.
-FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 # upgrade first: the digest above fixes what the base image held on the day it
 # was pinned, and Debian ships security fixes faster than python:3.12-slim is
